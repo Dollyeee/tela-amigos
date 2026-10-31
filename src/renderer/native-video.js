@@ -73,7 +73,7 @@ window.NativeVideo = (() => {
   let worker = null;
   let generator = null, writer = null;
   let previewGen = null, previewWriter = null;
-  let decoder = null, decoderReady = false, previewOn = true;
+  let decoder = null, decoderReady = false, previewOn = true, inject = false;
   let running = false;
   let lastTs = -1;
   let frameNo = 0;
@@ -104,8 +104,8 @@ window.NativeVideo = (() => {
 
   function makePreviewDecoder() {
     decoder = new VideoDecoder({
-      output: (f) => { if (previewWriter && previewOn) previewWriter.write(f).catch(() => f.close()); else f.close(); },
-      error: (e) => { console.warn('prévia', e); decoderReady = false; },
+      output: (f) => { if (previewWriter && (previewOn || !inject)) previewWriter.write(f).catch(() => f.close()); else f.close(); },
+      error: (e) => { console.warn('decodificação', e); decoderReady = false; window.native.videoKey(); },
     });
     decoderReady = false;
   }
@@ -116,8 +116,9 @@ window.NativeVideo = (() => {
     const ts = Number(new DataView(buf.buffer, buf.byteOffset + 1, 8).getBigInt64(0, true));
     const data = buf.buffer.slice(buf.byteOffset + 9, buf.byteOffset + buf.byteLength);
 
-    // prévia local (decodifica nosso próprio stream)
-    if (previewOn) {
+    // decodifica nosso próprio stream: vira a prévia local e, no modo adaptativo,
+    // também a trilha que o WebRTC recodifica para cada amigo (então nunca pode parar)
+    if (previewOn || !inject) {
       if (!decoder || decoder.state === 'closed') makePreviewDecoder();
       if (!decoderReady && key) {
         const codec = codecFromSps(new Uint8Array(data));
@@ -132,6 +133,8 @@ window.NativeVideo = (() => {
       }
     }
 
+    if (!inject) return; // modo adaptativo: o WebRTC recodifica a trilha decodificada
+
     worker.postMessage({ type: 'frame', key, data }, [data]);
 
     // quadro vazio no mesmo ritmo: cada um "carrega" um quadro nosso
@@ -143,25 +146,38 @@ window.NativeVideo = (() => {
     writer.write(vf).catch(() => vf.close());
   }
 
+  // opts.inject = true: envio direto do H.264 nativo (só rede perfeita)
+  // opts.inject = false: o WebRTC recodifica a trilha decodificada (adaptativo, padrão)
   async function start(opts) {
     await stop();
     ensureWorker();
     worker.postMessage({ type: 'reset' });
-    generator = new MediaStreamTrackGenerator({ kind: 'video' });
-    generator.contentHint = 'motion';
-    writer = generator.writable.getWriter();
+    inject = !!opts.inject;
+    generator = null;
+    writer = null;
+    if (inject) {
+      generator = new MediaStreamTrackGenerator({ kind: 'video' });
+      generator.contentHint = 'motion';
+      writer = generator.writable.getWriter();
+    }
     previewGen = new MediaStreamTrackGenerator({ kind: 'video' });
     previewWriter = previewGen.writable.getWriter();
     makePreviewDecoder();
     lastTs = -1;
     running = true;
     window.native.onVideoFrame(onFrame);
-    const res = await window.native.videoStart(opts);
+    const { inject: _i, ...helperOpts } = opts;
+    const res = await window.native.videoStart(helperOpts);
     if (res.type !== 'video-started') {
       await stop();
       throw new Error(res.message || 'falha ao iniciar a captura nativa');
     }
-    return { track: generator, preview: new MediaStream([previewGen]), width: res.width, height: res.height, encoder: res.encoder };
+    if (!inject) previewGen.contentHint = 'motion';
+    return {
+      track: inject ? generator : previewGen,
+      preview: new MediaStream([previewGen]),
+      width: res.width, height: res.height, encoder: res.encoder,
+    };
   }
 
   async function stop() {

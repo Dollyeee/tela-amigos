@@ -193,13 +193,13 @@ function createPeer(id, name) {
     sendEncodings: [{ maxBitrate: s.bitrate * 1e6, maxFramerate: Number(s.fps) }],
   });
   peer.aT = pc.addTransceiver('audio', { direction: 'sendonly' });
-  setCodec(peer, state.share && state.share.native ? 'native' : s.codec);
+  setCodec(peer, state.share && state.share.direct ? 'native' : s.codec);
   // transform ligado desde o início (antes de negociar); fica em "deixa passar" até o modo nativo
   window.NativeVideo.attach(peer.vT.sender, id);
 
   pc.onnegotiationneeded = () => negotiate(peer);
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate && !isIPv6Candidate(candidate)) sendRelay(id, { kind: 'ice', candidate });
+    if (candidate && !isIPv6Candidate(candidate)) sendRelay(id, { kind: 'ice', candidate: demoteVpnCandidate(candidate.toJSON()) });
   };
   pc.ontrack = (e) => {
     const st = peer.remoteStream;
@@ -234,7 +234,7 @@ async function negotiate(peer) {
     peer.makingOffer = true;
     const offer = await pc.createOffer();
     if (pc.signalingState !== 'stable') return;
-    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.native) });
+    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.direct) });
     await pc.setLocalDescription(offer);
     sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
   } catch (e) {
@@ -255,12 +255,12 @@ async function handleDescription(peer, description) {
       type: description.type,
       sdp: window.Sdp.munge(description.sdp, {
         videoKbps: state.settings.bitrate * 1000,
-        native: !!(state.share && state.share.native),
+        native: !!(state.share && state.share.direct),
       }),
     });
     if (description.type === 'offer') {
       const answer = await pc.createAnswer();
-      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.native) });
+      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.direct) });
       await pc.setLocalDescription(answer);
       sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
     }
@@ -276,10 +276,21 @@ function isIPv6Candidate(c) {
   return addr.includes(':');
 }
 
+// VPN (Radmin 26.x, Hamachi 25.x) com prioridade mínima: o ICE prefere a conexão direta pela
+// internet (STUN) e só usa a VPN se a direta não fechar. Aplicado nos candidatos enviados e
+// recebidos, então funciona mesmo se o amigo estiver numa versão antiga.
+function demoteVpnCandidate(c) {
+  if (!c || !c.candidate) return c;
+  const parts = String(c.candidate).split(' ');
+  if (!/^(26|25)\./.test(parts[4] || '')) return c;
+  parts[3] = String(Math.max(1, Math.floor(Number(parts[3]) / 65536)));
+  return { candidate: parts.join(' '), sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex, usernameFragment: c.usernameFragment };
+}
+
 async function handleCandidate(peer, candidate) {
   if (candidate && candidate.candidate && isIPv6Candidate(candidate)) return; // amigo com versão antiga
   try {
-    await peer.pc.addIceCandidate(candidate);
+    await peer.pc.addIceCandidate(demoteVpnCandidate(candidate));
   } catch (e) {
     if (!peer.ignoreOffer) console.warn('ice', e);
   }
@@ -328,7 +339,7 @@ async function doApplySendParams(peer) {
   const wantAudio = share && level !== 'off' ? share.audio || null : null;
 
   // modo nativo: o vídeo precisa sair em H.264 e passar pelo transform que injeta nossos quadros
-  const native = !!(share && share.native);
+  const native = !!(share && share.direct); // envio direto do H.264 nativo
   const codecMode = native ? 'native' : state.settings.codec;
   if (peer.codecMode !== codecMode) {
     setCodec(peer, codecMode);
@@ -341,7 +352,7 @@ async function doApplySendParams(peer) {
   if (!share) return;
 
   const s = share.settings;
-  const height = native ? share.height : share.video.getSettings().height || 1080;
+  const height = share.height || share.video.getSettings().height || 1080;
   try {
     const params = vSender.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
@@ -496,16 +507,20 @@ async function startShare() {
   const old = state.share;
   if (old && old.native) await window.NativeVideo.stop();
 
+  // native        = captura nativa 60 fps + WebRTC recodifica e se adapta à rede (padrão)
+  // native-direct = envia o H.264 nativo direto (máxima qualidade, só para rede perfeita)
+  const direct = settings.engine === 'native-direct';
   let stream, video, preview, nativeInfo = null;
-  if (settings.engine === 'native' && (await window.native.audioAvailable())) {
+  if (settings.engine.startsWith('native') && (await window.native.audioAvailable())) {
     try {
-      // começa no máximo escolhido; adaptNativeBitrate só reduz se a rede reclamar
+      // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
+      // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
       state.nativeKbps = settings.bitrate * 1000;
       baseRtt = Infinity;
       lastCut = 0;
       nativeInfo = await window.NativeVideo.start({
-        sourceId: src.id, displayId: src.displayId,
-        fps: settings.fps, kbps: state.nativeKbps, maxWidth: maxW, maxHeight: maxH,
+        sourceId: src.id, displayId: src.displayId, inject: direct,
+        fps: settings.fps, kbps: direct ? state.nativeKbps : 50000, maxWidth: maxW, maxHeight: maxH,
       });
       video = nativeInfo.track;
       preview = nativeInfo.preview;
@@ -556,7 +571,8 @@ async function startShare() {
   state.share = {
     stream, video, audio, settings, preview,
     sourceName: src.name,
-    native: !!nativeInfo,
+    native: !!nativeInfo,                // captura feita pelo helper
+    direct: !!nativeInfo && direct,      // H.264 do helper vai direto para a rede
     width: nativeInfo ? nativeInfo.width : 0,
     height: nativeInfo ? nativeInfo.height : 0,
     encoder: nativeInfo ? nativeInfo.encoder : '',
@@ -588,7 +604,7 @@ state.netInfo = { avail: null, loss: 0, rtt: null, nack: 0, pli: 0 };
 let lastCut = 0, baseRtt = Infinity;
 async function adaptNativeBitrate() {
   const share = state.share;
-  if (!share || !share.native || !state.nativeKbps) return;
+  if (!share || !share.direct || !state.nativeKbps) return;
   const max = share.settings.bitrate * 1000;
   let avail = Infinity, loss = 0, rtt = 0, nack = 0, pli = 0, any = false;
   for (const peer of state.peers.values()) {
@@ -629,7 +645,7 @@ setInterval(adaptNativeBitrate, 1000);
 
 // Pedidos de keyframe reais (PLI/FIR) vindos de quem assiste: lidos das estatísticas do envio.
 async function watchKeyRequests() {
-  if (!state.share || !state.share.native) return;
+  if (!state.share || !state.share.direct) return;
   for (const peer of state.peers.values()) {
     const sender = peer.vT.sender;
     if (!sender.track) continue;
@@ -1057,7 +1073,8 @@ async function collectStats() {
     }
     peer.statsPrev = { t: now, inBytes: inV ? inV.bytesReceived : null, outBytes: outV ? outV.bytesSent : null, ...(peer.jb || {}) };
   }
-  if (meTile && state.share && state.share.native) {
+  const routes = [...state.peers.values()].filter((p) => p.route).map((p) => `\nrota ${p.name}: ${p.route}`).join('');
+  if (meTile && state.share && state.share.direct) {
     const n = state.nativeStats;
     meTile.stats.textContent = n
       ? `Nativo · ${n.width}x${n.height} · captura ${n.captureFps}fps · enviado ${n.fps}fps · ${fmtMbps(n.kbps * 1000)} ` +
@@ -1065,16 +1082,17 @@ async function collectStats() {
         `p/ ${out.count} amigo(s), total ${fmtMbps(out.bytes)}\n` +
         `alvo ${fmtMbps((state.nativeKbps || 0) * 1000)} · banda estimada ${state.netInfo.avail ? fmtMbps(state.netInfo.avail * 1000) : '?'} · ` +
         `perda ${(state.netInfo.loss * 100).toFixed(1)}% · rtt ${state.netInfo.rtt ? Math.round(state.netInfo.rtt * 1000) : '?'}ms · ` +
-        `NACK ${state.netInfo.nack} · PLI ${state.netInfo.pli} · keyframes ${n.keys}` +
-        [...state.peers.values()].filter((p) => p.route).map((p) => `\nrota ${p.name}: ${p.route}`).join('')
+        `NACK ${state.netInfo.nack} · PLI ${state.netInfo.pli} · keyframes ${n.keys}` + routes
       : 'Iniciando captura nativa...';
   } else if (meTile && state.share) {
     const LIMIT = { bandwidth: 'internet', cpu: 'processador', other: 'outro' };
-    meTile.stats.textContent = out.count
+    const n = state.share.native && state.nativeStats;
+    const cap = n ? `Captura nativa ${n.width}x${n.height} @ ${n.captureFps}fps (enviado ao WebRTC ${n.fps}fps)\n` : '';
+    meTile.stats.textContent = cap + (out.count
       ? `Enviando p/ ${out.count} · ${out.w}x${out.h} @ ${Math.round(out.fps)}fps · total ${fmtMbps(out.bytes)} · ` +
         `limitação: ${out.limit ? LIMIT[out.limit] || out.limit : 'nenhuma'} · ` +
-        `encoder ${out.enc || '?'}${out.hw === true ? ' (placa de vídeo)' : out.hw === false ? ' (CPU)' : ''}`
-      : 'Ninguém recebendo sua tela no momento';
+        `encoder ${out.enc || '?'}${out.hw === true ? ' (placa de vídeo)' : out.hw === false ? ' (CPU)' : ''}` + routes
+      : 'Ninguém recebendo sua tela no momento');
   }
 }
 setInterval(updateStats, 1000);
