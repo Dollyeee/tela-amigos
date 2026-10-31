@@ -198,7 +198,9 @@ function createPeer(id, name) {
   window.NativeVideo.attach(peer.vT.sender, id);
 
   pc.onnegotiationneeded = () => negotiate(peer);
-  pc.onicecandidate = ({ candidate }) => { if (candidate) sendRelay(id, { kind: 'ice', candidate }); };
+  pc.onicecandidate = ({ candidate }) => {
+    if (candidate && !isIPv6Candidate(candidate)) sendRelay(id, { kind: 'ice', candidate });
+  };
   pc.ontrack = (e) => {
     const st = peer.remoteStream;
     for (const t of st.getTracks()) if (t.kind === e.track.kind) st.removeTrack(t);
@@ -267,7 +269,15 @@ async function handleDescription(peer, description) {
   }
 }
 
+// Só IPv4: pelo IPv6 do Radmin (fdfd::) os pacotes grandes de vídeo são descartados
+// (túnel com MTU menor e IPv6 não fragmenta no caminho) -> milhares de perdas, vídeo a 0 fps.
+function isIPv6Candidate(c) {
+  const addr = c.address || (String(c.candidate || '').split(' ')[4] || '');
+  return addr.includes(':');
+}
+
 async function handleCandidate(peer, candidate) {
+  if (candidate && candidate.candidate && isIPv6Candidate(candidate)) return; // amigo com versão antiga
   try {
     await peer.pc.addIceCandidate(candidate);
   } catch (e) {
