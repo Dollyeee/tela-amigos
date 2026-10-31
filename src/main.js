@@ -166,16 +166,47 @@ ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)
 
 // ---- atualização automática (GitHub Releases) ----
 function setupAutoUpdate() {
-  if (!app.isPackaged) return; // rodando pelo "npm start": sem atualização
+  if (!app.isPackaged) {
+    // rodando pelo "npm start": sem atualização
+    ipcMain.handle('update:check', () => { toRenderer('update:status', { state: 'dev' }); });
+    return;
+  }
   const { autoUpdater } = require('electron-updater');
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true; // se não reiniciar, instala ao fechar
+
+  let ready = null;      // versão já baixada
+  let lastCheck = 0;
+  let manual = false;    // o usuário clicou em "procurar": mostra também "já está atualizado"
+  autoUpdater.on('checking-for-update', () => { if (manual) toRenderer('update:status', { state: 'checking' }); });
+  autoUpdater.on('update-available', (info) => toRenderer('update:status', { state: 'downloading', percent: 0, version: info.version }));
+  autoUpdater.on('update-not-available', () => {
+    if (manual) toRenderer('update:status', { state: 'latest', version: app.getVersion() });
+    manual = false;
+  });
   autoUpdater.on('download-progress', (p) => toRenderer('update:status', { state: 'downloading', percent: Math.round(p.percent) }));
-  autoUpdater.on('update-downloaded', (info) => toRenderer('update:status', { state: 'ready', version: info.version }));
-  autoUpdater.on('error', (e) => console.warn('update', e && e.message));
-  const check = () => autoUpdater.checkForUpdates().catch(() => {});
-  setTimeout(check, 5000);
-  setInterval(check, 30 * 60 * 1000);
+  autoUpdater.on('update-downloaded', (info) => {
+    ready = info.version;
+    manual = false;
+    toRenderer('update:status', { state: 'ready', version: info.version });
+  });
+  autoUpdater.on('error', (e) => {
+    if (manual) toRenderer('update:status', { state: 'error', message: (e && e.message) || 'erro' });
+    manual = false;
+  });
+
+  const check = (isManual = false) => {
+    if (ready) { toRenderer('update:status', { state: 'ready', version: ready }); return; }
+    if (isManual) manual = true;
+    lastCheck = Date.now();
+    autoUpdater.checkForUpdates().catch(() => {});
+  };
+  setTimeout(check, 1000);                     // logo ao abrir
+  setInterval(check, 5 * 60 * 1000);           // a cada 5 min
+  app.on('browser-window-focus', () => {       // ao voltar para o app (no máx. a cada 2 min)
+    if (Date.now() - lastCheck > 2 * 60 * 1000) check();
+  });
+  ipcMain.handle('update:check', () => check(true));
   ipcMain.handle('update:install', () => autoUpdater.quitAndInstall(true, true));
 }
 

@@ -1023,16 +1023,30 @@ function initRoomUi() {
 // ------------------------------------------------------------------ atualização automática
 function initUpdates() {
   window.native.appVersion().then((v) => { $('#app-version').textContent = `v${v}`; });
-  window.native.onUpdateStatus((s) => {
-    const bar = $('#update-bar');
+  const bar = $('#update-bar');
+  const checkBtn = $('#btn-check-update');
+  let hideTimer = null;
+  const show = (text, { button = false, autoHide = 0 } = {}) => {
+    clearTimeout(hideTimer);
     bar.classList.remove('hidden');
-    if (s.state === 'downloading') {
-      $('#update-text').textContent = `Baixando atualização... ${s.percent}%`;
-    } else if (s.state === 'ready') {
-      $('#update-text').textContent = `Versão ${s.version} pronta. Instala sozinha ao fechar o app.`;
-      $('#btn-update').classList.remove('hidden');
-    }
+    $('#update-text').textContent = text;
+    $('#btn-update').classList.toggle('hidden', !button);
+    if (autoHide) hideTimer = setTimeout(() => bar.classList.add('hidden'), autoHide);
+  };
+  window.native.onUpdateStatus((s) => {
+    checkBtn.disabled = s.state === 'checking' || s.state === 'downloading';
+    if (s.state === 'checking') show('Procurando atualização...');
+    else if (s.state === 'latest') show(`Você já está na versão mais recente (v${s.version}).`, { autoHide: 4000 });
+    else if (s.state === 'downloading') show(`Baixando atualização${s.version ? ` v${s.version}` : ''}... ${s.percent}%`);
+    else if (s.state === 'ready') {
+      show(`Versão ${s.version} pronta. Instala sozinha ao fechar o app.`, { button: true });
+      checkBtn.textContent = 'Reiniciar e atualizar';
+      checkBtn.onclick = () => $('#btn-update').click();
+    } else if (s.state === 'error') show(`Não deu para procurar atualização: ${s.message}`, { autoHide: 8000 });
+    else if (s.state === 'dev') show('Modo desenvolvimento: atualização desativada.', { autoHide: 3000 });
   });
+  checkBtn.onclick = () => window.native.checkUpdate();
+  $('#btn-update-close').onclick = () => bar.classList.add('hidden');
   $('#btn-update').onclick = async () => {
     if (state.share) await stopShare();
     window.native.installUpdate();

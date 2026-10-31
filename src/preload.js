@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('native', {
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
   appVersion: () => ipcRenderer.invoke('app:version'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
   onUpdateStatus: (cb) => ipcRenderer.on('update:status', (_e, s) => cb(s)),
 
   audioAvailable: () => ipcRenderer.invoke('audio:available'),
