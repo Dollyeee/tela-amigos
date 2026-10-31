@@ -5,7 +5,8 @@
 // Quem assiste recebe H.264 normal; nada muda do lado de lá.
 window.NativeVideo = (() => {
   const WORKER = `
-  const peers = new Map(); // id -> { q, waitingKey, active, sentAny }
+  // native=false: deixa os quadros do Chromium passarem como estão (captura Chromium / sem compartilhar)
+  const peers = new Map(); // id -> { q, waitingKey, active, native, sentAny }
   let lastKeyReq = 0;
   function reqKey() {
     const now = Date.now();
@@ -13,7 +14,7 @@ window.NativeVideo = (() => {
   }
   function get(id) {
     let p = peers.get(id);
-    if (!p) { p = { q: [], waitingKey: true, active: false, sentAny: false }; peers.set(id, p); }
+    if (!p) { p = { q: [], waitingKey: true, active: false, native: false, sentAny: false }; peers.set(id, p); }
     return p;
   }
   onmessage = (e) => {
@@ -26,10 +27,12 @@ window.NativeVideo = (() => {
         // o encoder do Chromium ficou para trás: descarta e recomeça num keyframe
         if (p.q.length > 4) { p.q.length = 0; p.waitingKey = true; reqKey(); }
       });
-    } else if (m.type === 'active') {
+    } else if (m.type === 'mode') {
       const p = get(m.id);
-      if (m.active && !p.active) { p.q.length = 0; p.waitingKey = true; reqKey(); }
-      p.active = m.active;
+      const active = m.native && m.active;
+      if (active && !p.active) { p.q.length = 0; p.waitingKey = true; p.sentAny = false; reqKey(); }
+      p.native = m.native;
+      p.active = active;
     } else if (m.type === 'reset') {
       for (const p of peers.values()) { p.q.length = 0; p.waitingKey = true; }
     } else if (m.type === 'remove') {
@@ -42,6 +45,7 @@ window.NativeVideo = (() => {
     p.q.length = 0; p.waitingKey = true;
     t.readable.pipeThrough(new TransformStream({
       transform(frame, ctl) {
+        if (!p.native) { ctl.enqueue(frame); return; } // modo Chromium: não mexe
         // keyframe da trilha vazia depois do início = alguém pediu (perda de pacotes / novo receptor)
         if (frame.type === 'key' && p.sentAny) reqKey();
         const data = p.q.shift();
@@ -158,19 +162,21 @@ window.NativeVideo = (() => {
     if (worker) worker.postMessage({ type: 'reset' });
   }
 
+  // Precisa ser chamado ANTES da primeira negociação da conexão: o Chromium ignora
+  // um transform ligado depois que o envio já foi configurado.
   function attach(sender, peerId) {
     ensureWorker();
-    if (sender.__nativeTransform === peerId) return;
     sender.transform = new RTCRtpScriptTransform(worker, { id: peerId });
-    sender.__nativeTransform = peerId;
   }
 
-  function setActive(peerId, active) { if (worker) worker.postMessage({ type: 'active', id: peerId, active }); }
+  function setMode(peerId, native, active) {
+    if (worker) worker.postMessage({ type: 'mode', id: peerId, native, active });
+  }
   function remove(peerId) { if (worker) worker.postMessage({ type: 'remove', id: peerId }); }
   function setPreview(on) {
     if (on && !previewOn) { decoderReady = false; window.native.videoKey(); }
     previewOn = on;
   }
 
-  return { start, stop, attach, setActive, remove, setPreview, isRunning: () => running };
+  return { start, stop, attach, setMode, remove, setPreview, isRunning: () => running };
 })();

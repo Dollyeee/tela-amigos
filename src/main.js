@@ -4,7 +4,7 @@ const os = require('os');
 const { createSignalingServer } = require('./signaling');
 const { AudioBridge } = require('./audio-bridge');
 
-const SIGNAL_PORT = 47800;
+const SIGNAL_PORT = Number(process.env.TELA_PORT) || 47800;
 
 // Sem isso o WebRTC esconde o IP local atrás de nomes ".local" (mDNS), que não
 // resolvem pela VPN do Radmin -> a conexão direta falharia.
@@ -65,7 +65,11 @@ function createWindow() {
   });
   // Teste automatizado (só com variável de ambiente): roda um script na página e mostra o console
   if (process.env.TELA_TEST_SCRIPT) {
-    win.webContents.on('console-message', (e) => console.log(`[page] ${e.message}`));
+    win.webContents.on('console-message', (e) => {
+      console.log(`[page] ${e.message}`);
+      const m = /^SHOT (.+)$/.exec(e.message); // o script de teste pede uma captura da janela
+      if (m) win.webContents.capturePage().then((img) => require('fs').writeFileSync(m[1], img.toPNG()));
+    });
     if (process.env.TELA_TEST_ONTOP) {
       win.setAlwaysOnTop(true, 'screen-saver');
       if (process.env.TELA_TEST_SIZE) { const [w, h] = process.env.TELA_TEST_SIZE.split('x').map(Number); win.setContentSize(w, h); win.setPosition(0, 0); }

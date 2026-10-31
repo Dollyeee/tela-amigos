@@ -5,7 +5,8 @@
  * sem renegociar.
  */
 const $ = (s) => document.querySelector(s);
-const SIGNAL_PORT = 47800;
+let SIGNAL_PORT = 47800;
+window.native.netInfo().then((i) => { SIGNAL_PORT = i.port; });
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 const state = {
@@ -193,6 +194,8 @@ function createPeer(id, name) {
   });
   peer.aT = pc.addTransceiver('audio', { direction: 'sendonly' });
   setCodec(peer, state.share && state.share.native ? 'native' : s.codec);
+  // transform ligado desde o início (antes de negociar); fica em "deixa passar" até o modo nativo
+  window.NativeVideo.attach(peer.vT.sender, id);
 
   pc.onnegotiationneeded = () => negotiate(peer);
   pc.onicecandidate = ({ candidate }) => { if (candidate) sendRelay(id, { kind: 'ice', candidate }); };
@@ -321,11 +324,10 @@ async function doApplySendParams(peer) {
     setCodec(peer, codecMode);
     negotiate(peer);
   }
-  if (native) window.NativeVideo.attach(vSender, peer.id);
-
+  // antes de trocar a trilha: assim o primeiro quadro já é tratado no modo certo
+  window.NativeVideo.setMode(peer.id, native, !!wantVideo && peer.pc.connectionState === 'connected');
   if (vSender.track !== wantVideo) await vSender.replaceTrack(wantVideo).catch(() => {});
   if (aSender.track !== wantAudio) await aSender.replaceTrack(wantAudio).catch(() => {});
-  window.NativeVideo.setActive(peer.id, native && !!wantVideo && peer.pc.connectionState === 'connected');
   if (!share) return;
 
   const s = share.settings;
@@ -908,8 +910,11 @@ function renderPeople() {
 
 // ------------------------------------------------------------------ estatísticas
 let statsBusy = false;
+let statsLast = 0;
 async function updateStats() {
-  if (!state.showStats || statsBusy) return;
+  // chamadas muito próximas dariam deltas sem sentido (bitrate 0, buffer ?)
+  if (!state.showStats || statsBusy || performance.now() - statsLast < 700) return;
+  statsLast = performance.now();
   statsBusy = true;
   try { await collectStats(); } finally { statsBusy = false; }
 }
@@ -930,7 +935,6 @@ async function collectStats() {
     });
     const prev = peer.statsPrev || {};
     const dt = prev.t ? (now - prev.t) / 1000 : 0;
-    if (prev.t && dt < 0.5) return; // chamada muito próxima da anterior: deltas não fazem sentido
     // recebendo
     if (inV && peer.tile) {
       const bps = dt && prev.inBytes != null ? ((inV.bytesReceived - prev.inBytes) * 8) / dt : 0;
