@@ -1,0 +1,77 @@
+// Ajustes no SDP para qualidade alta:
+//  - Opus estéreo com bitrate de música (o padrão é mono ~32 kbps, feito para voz)
+//  - Bitrate inicial alto no vídeo (o WebRTC começa baixo e demora a subir)
+window.Sdp = (() => {
+  function munge(sdp, { videoKbps, native }) {
+    const lines = sdp.split('\r\n');
+    const opus = new Set();
+    const video = new Set();
+    for (const l of lines) {
+      let m = l.match(/^a=rtpmap:(\d+) opus\/48000/i);
+      if (m) opus.add(m[1]);
+      m = l.match(/^a=rtpmap:(\d+) (H264|VP8|VP9|AV1)\/90000/i);
+      if (m) video.add(m[1]);
+    }
+    const hasFmtp = new Set(lines.map((l) => (l.match(/^a=fmtp:(\d+) /) || [])[1]).filter(Boolean));
+
+    // No modo nativo o bitrate real é decidido pelo nosso encoder (CBR); a estimativa do WebRTC
+    // precisa ficar perto dele, senão o "pacer" segura os pacotes e o vídeo engasga.
+    const videoParams = native
+      ? [
+          `x-google-start-bitrate=${Math.round(videoKbps)}`,
+          `x-google-min-bitrate=${Math.round(videoKbps * 0.6)}`,
+          `x-google-max-bitrate=${Math.round(videoKbps * 1.5)}`,
+        ]
+      : [
+          `x-google-start-bitrate=${Math.round(videoKbps * 0.7)}`,
+          `x-google-min-bitrate=${Math.min(1500, Math.round(videoKbps * 0.2))}`,
+          `x-google-max-bitrate=${Math.round(videoKbps * 1.25)}`,
+        ];
+    const opusParams = ['stereo=1', 'sprop-stereo=1', 'maxaveragebitrate=256000', 'useinbandfec=1'];
+
+    const merge = (existing, add) => {
+      const keys = new Set(add.map((p) => p.split('=')[0]));
+      const kept = existing.split(';').filter((p) => p && !keys.has(p.split('=')[0]));
+      return [...kept, ...add].join(';');
+    };
+
+    const out = [];
+    for (const l of lines) {
+      const f = l.match(/^a=fmtp:(\d+) (.*)$/);
+      if (f && opus.has(f[1])) { out.push(`a=fmtp:${f[1]} ${merge(f[2], opusParams)}`); continue; }
+      if (f && video.has(f[1])) { out.push(`a=fmtp:${f[1]} ${merge(f[2], videoParams)}`); continue; }
+      out.push(l);
+      // codecs sem linha fmtp (ex.: VP8): cria uma logo após o rtpmap
+      const r = l.match(/^a=rtpmap:(\d+) /);
+      if (r && !hasFmtp.has(r[1])) {
+        if (video.has(r[1])) out.push(`a=fmtp:${r[1]} ${videoParams.join(';')}`);
+        if (opus.has(r[1])) out.push(`a=fmtp:${r[1]} ${opusParams.join(';')}`);
+      }
+    }
+    return out.join('\r\n');
+  }
+
+  function codecPreferences(preferred) {
+    const caps = RTCRtpReceiver.getCapabilities('video');
+    if (!caps) return null;
+    const want = `video/${preferred}`.toLowerCase();
+    const first = caps.codecs.filter((c) => c.mimeType.toLowerCase() === want);
+    if (!first.length) return null;
+    return [...first, ...caps.codecs.filter((c) => c.mimeType.toLowerCase() !== want)];
+  }
+
+  // Só H.264 com packetization-mode=1 (permite fragmentar quadros grandes), baseline primeiro,
+  // mais os auxiliares (rtx/red/ulpfec). Usado no modo de vídeo nativo.
+  function h264OnlyPreferences() {
+    const caps = RTCRtpReceiver.getCapabilities('video');
+    if (!caps) return null;
+    const isH264 = (c) => /h264/i.test(c.mimeType);
+    const pm1 = (c) => /packetization-mode=1/.test(c.sdpFmtpLine || '');
+    const h264 = caps.codecs.filter((c) => isH264(c) && pm1(c));
+    h264.sort((a, b) => /42e01f/i.test(b.sdpFmtpLine) - /42e01f/i.test(a.sdpFmtpLine));
+    const extras = caps.codecs.filter((c) => /rtx|red|ulpfec|flexfec/i.test(c.mimeType));
+    return h264.length ? [...h264, ...extras] : null;
+  }
+
+  return { munge, codecPreferences, h264OnlyPreferences };
+})();

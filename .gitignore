@@ -1,0 +1,7 @@
+node_modules/
+dist/
+helper-bin/
+audio-helper/bin/
+audio-helper/obj/
+cert/
+*.log

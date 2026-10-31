@@ -1,0 +1,62 @@
+{
+  "name": "tela-amigos",
+  "productName": "Tela Amigos",
+  "version": "1.0.0",
+  "description": "Compartilhamento de tela entre amigos em alta qualidade",
+  "main": "src/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dollyeee/tela-amigos.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "build:helper": "dotnet publish audio-helper/AudioHelper.csproj -c Release -o helper-bin",
+    "build": "npm run build:helper && electron-builder --win nsis --publish never",
+    "release": "node scripts/release.js"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.telaamigos.app",
+    "productName": "Tela Amigos",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "helper-bin/AudioHelper.exe",
+        "to": "AudioHelper.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "TelaAmigos-Setup-${version}.${ext}",
+      "createDesktopShortcut": true,
+      "shortcutName": "Tela Amigos"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Dollyeee",
+        "repo": "tela-amigos",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

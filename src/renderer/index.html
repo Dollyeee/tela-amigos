@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ws: wss:; media-src 'self' blob: mediastream:">
+  <title>Tela Amigos</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ============ LOBBY ============ -->
+  <section id="lobby" class="screen">
+    <div class="lobby-card">
+      <h1>Tela Amigos</h1>
+      <p class="muted">Compartilhamento de tela entre amigos, direto de PC para PC.</p>
+
+      <label class="field">
+        <span>Seu nome</span>
+        <input id="name" maxlength="30" placeholder="Como os amigos vão te ver">
+      </label>
+
+      <div class="lobby-actions">
+        <div class="lobby-box">
+          <h2>Hospedar</h2>
+          <p class="muted">Seu PC vira a sala. Os amigos entram com o seu IP do Radmin.</p>
+          <button id="btn-host" class="primary">Hospedar sala</button>
+        </div>
+        <div class="lobby-box">
+          <h2>Entrar</h2>
+          <label class="field">
+            <span>IP de quem está hospedando</span>
+            <input id="host-ip" placeholder="ex.: 26.123.45.67">
+          </label>
+          <button id="btn-join" class="primary">Entrar</button>
+        </div>
+      </div>
+      <p id="lobby-error" class="error"></p>
+    </div>
+  </section>
+
+  <!-- ============ SALA ============ -->
+  <section id="room" class="screen hidden">
+    <header class="topbar">
+      <div class="room-info">
+        <strong>Tela Amigos</strong>
+        <button id="btn-copy-ip" class="chip" title="Copiar IP da sala"></button>
+      </div>
+
+      <div class="layout-switch" role="group" aria-label="Layout">
+        <button data-layout="grid" class="seg active" title="Grade (G)">Grade</button>
+        <button data-layout="focus" class="seg" title="Foco com miniaturas (F)">Foco</button>
+      </div>
+
+      <div class="top-actions">
+        <button id="btn-stats" class="ghost" title="Mostrar estatísticas (S)">Estatísticas</button>
+        <button id="btn-share" class="primary">Compartilhar tela</button>
+        <button id="btn-stop" class="danger hidden">Parar</button>
+        <button id="btn-leave" class="ghost">Sair</button>
+      </div>
+    </header>
+
+    <div class="room-body">
+      <aside class="sidebar">
+        <h3>Na sala</h3>
+        <ul id="people"></ul>
+        <p class="hint muted">Arraste as telas pela barra de nome para reorganizar. Duplo clique foca uma tela.</p>
+      </aside>
+
+      <main id="stage" class="stage grid">
+        <div id="stage-main" class="stage-main"></div>
+        <div id="stage-strip" class="stage-strip"></div>
+        <div id="empty" class="empty">
+          <p>Ninguém está compartilhando ainda.</p>
+          <p class="muted">Clique em <b>Compartilhar tela</b> para começar.</p>
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <!-- ============ MODAL COMPARTILHAR ============ -->
+  <div id="share-modal" class="modal hidden">
+    <div class="modal-card">
+      <header class="modal-head">
+        <h2>O que compartilhar</h2>
+        <div class="tabs">
+          <button data-tab="screen" class="seg active">Telas</button>
+          <button data-tab="window" class="seg">Janelas</button>
+        </div>
+        <button id="modal-close" class="ghost">Fechar</button>
+      </header>
+
+      <div id="sources" class="sources"></div>
+
+      <div class="settings">
+        <label class="field field-wide">
+          <span>Captura</span>
+          <select id="opt-engine">
+            <option value="native" selected>Nativa: 60 fps estáveis (placa de vídeo)</option>
+            <option value="chromium">Chromium (compatibilidade)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Resolução</span>
+          <select id="opt-res">
+            <option value="native">Nativa do monitor</option>
+            <option value="1440">1440p</option>
+            <option value="1080" selected>1080p</option>
+            <option value="720">720p</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>FPS</span>
+          <select id="opt-fps">
+            <option value="60" selected>60</option>
+            <option value="30">30</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Prioridade</span>
+          <select id="opt-mode">
+            <option value="motion" selected>Fluidez (jogos, vídeos)</option>
+            <option value="detail">Nitidez (texto, código)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Codec</span>
+          <select id="opt-codec">
+            <option value="H264" selected>H.264 (placa de vídeo)</option>
+            <option value="VP9">VP9</option>
+            <option value="AV1">AV1</option>
+            <option value="VP8">VP8</option>
+          </select>
+        </label>
+        <label class="field field-wide">
+          <span>Qualidade: <b id="opt-bitrate-label">20 Mbps</b> <span class="muted">(upload ≈ bitrate × nº de amigos assistindo)</span></span>
+          <input id="opt-bitrate" type="range" min="4" max="80" step="1" value="20">
+        </label>
+        <label class="field field-wide">
+          <span>Áudio</span>
+          <select id="opt-audio">
+            <option value="none">Sem áudio</option>
+            <option value="all-except" selected>Todo o som do PC, exceto Discord</option>
+          </select>
+        </label>
+      </div>
+
+      <footer class="modal-foot">
+        <span id="share-note" class="muted"></span>
+        <button id="btn-start-share" class="primary" disabled>Compartilhar</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <div id="update-bar" class="update-bar hidden">
+    <span id="update-text"></span>
+    <button id="btn-update" class="primary hidden">Reiniciar e atualizar</button>
+  </div>
+  <span id="app-version" class="app-version"></span>
+
+  <script src="sdp.js"></script>
+  <script src="audio.js"></script>
+  <script src="native-video.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
