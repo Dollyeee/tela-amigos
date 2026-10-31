@@ -28,24 +28,33 @@ run(`git tag -f v${pkg.version}`);
 run('git push origin HEAD');
 run(`git push -f origin v${pkg.version}`);
 
-const token = out('gh auth token');
+const tag = `v${pkg.version}`;
 run('npm run build:helper');
-try {
-  run('npx electron-builder --win nsis --publish always', { GH_TOKEN: token });
-} catch (e) {
-  console.warn('electron-builder reportou erro no envio; conferindo os arquivos da release...');
+// só compila; o envio é feito pelo gh (o envio do electron-builder falhava/corria em paralelo)
+run('npx electron-builder --win nsis --publish never');
+
+// o latest.yml é o que o atualizador lê: gerado aqui a partir do instalador desta versão
+const { writeLatestYml } = require('./latest-yml');
+writeLatestYml(root, pkg.version);
+const files = ['latest.yml', `TelaAmigos-Setup-${pkg.version}.exe`, `TelaAmigos-Setup-${pkg.version}.exe.blockmap`];
+
+let exists = true;
+try { out(`gh release view ${tag} --json name`); } catch { exists = false; }
+if (!exists) run(`gh release create ${tag} --title ${pkg.version} --notes "Tela Amigos ${pkg.version}" --latest`);
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    run(`gh release upload ${tag} ${files.map((n) => `"dist/${n}"`).join(' ')} --clobber`);
+    break;
+  } catch (e) {
+    if (attempt === 3) throw e;
+    console.warn(`Falha no envio (tentativa ${attempt}), tentando de novo...`);
+  }
 }
 
-// o upload do instalador (~150 MB) às vezes falha em silêncio: confere e reenvia o que faltar
-const tag = `v${pkg.version}`;
-const need = ['latest.yml', `TelaAmigos-Setup-${pkg.version}.exe`, `TelaAmigos-Setup-${pkg.version}.exe.blockmap`];
+// confere: arquivos presentes e latest.yml apontando para esta versão
 const have = out(`gh release view ${tag} --json assets --jq "[.assets[].name] | join(\\",\\")"`).split(',');
-const missing = need.filter((n) => !have.includes(n));
-if (missing.length) {
-  console.log(`Reenviando: ${missing.join(', ')}`);
-  run(`gh release upload ${tag} ${missing.map((n) => `"dist/${n}"`).join(' ')} --clobber`);
-}
-const final = out(`gh release view ${tag} --json assets --jq "[.assets[].name] | join(\\",\\")"`).split(',');
-const still = need.filter((n) => !final.includes(n));
-if (still.length) throw new Error(`Release incompleta, faltando: ${still.join(', ')}`);
+const missing = files.filter((n) => !have.includes(n));
+if (missing.length) throw new Error(`Release incompleta, faltando: ${missing.join(', ')}`);
+const remoteYml = out(`gh release download ${tag} -p latest.yml -O -`);
+if (!remoteYml.startsWith(`version: ${pkg.version}`)) throw new Error(`latest.yml no GitHub não é da ${pkg.version}`);
 console.log(`\nPronto! v${pkg.version} publicada. Os amigos recebem a atualização ao abrir o app.\n`);
