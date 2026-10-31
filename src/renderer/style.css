@@ -117,7 +117,8 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .vol input { width: 80px; }
 
 .tile-stats { position: absolute; top: 8px; left: 8px; right: 8px; font: 11px/1.4 Consolas, monospace; color: #d6ffe9;
-  background: rgba(0, 0, 0, .6); padding: 4px 8px; border-radius: 6px; display: none; z-index: 2; width: fit-content; }
+  background: rgba(0, 0, 0, .6); padding: 4px 8px; border-radius: 6px; display: none; z-index: 2; width: fit-content;
+  white-space: pre-line; user-select: text; }
 .stage.stats-on .tile-stats:not(:empty) { display: block; }
 .tile.thumb .tile-stats { display: none !important; }
 

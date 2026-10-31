@@ -14,13 +14,14 @@ window.Sdp = (() => {
     }
     const hasFmtp = new Set(lines.map((l) => (l.match(/^a=fmtp:(\d+) /) || [])[1]).filter(Boolean));
 
-    // No modo nativo o bitrate real é decidido pelo nosso encoder (CBR); a estimativa do WebRTC
-    // precisa ficar perto dele, senão o "pacer" segura os pacotes e o vídeo engasga.
+    // Modo nativo: o nosso encoder SEGUE a estimativa de banda do WebRTC (ver adaptNativeBitrate);
+    // aqui só damos um começo razoável e o teto escolhido pelo usuário.
+    const cap = window.__testCapKbps; // teste: simula uma rede limitada
     const videoParams = native
       ? [
           `x-google-start-bitrate=${Math.round(videoKbps)}`,
-          `x-google-min-bitrate=${Math.round(videoKbps * 0.6)}`,
-          `x-google-max-bitrate=${Math.round(videoKbps * 1.5)}`,
+          `x-google-min-bitrate=${Math.round(videoKbps * 0.3)}`,
+          `x-google-max-bitrate=${Math.round(cap || videoKbps * 1.3)}`,
         ]
       : [
           `x-google-start-bitrate=${Math.round(videoKbps * 0.7)}`,

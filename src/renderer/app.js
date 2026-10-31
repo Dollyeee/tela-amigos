@@ -489,9 +489,13 @@ async function startShare() {
   let stream, video, preview, nativeInfo = null;
   if (settings.engine === 'native' && (await window.native.audioAvailable())) {
     try {
+      // começa no máximo escolhido; adaptNativeBitrate só reduz se a rede reclamar
+      state.nativeKbps = settings.bitrate * 1000;
+      baseRtt = Infinity;
+      lastCut = 0;
       nativeInfo = await window.NativeVideo.start({
         sourceId: src.id, displayId: src.displayId,
-        fps: settings.fps, kbps: settings.bitrate * 1000, maxWidth: maxW, maxHeight: maxH,
+        fps: settings.fps, kbps: state.nativeKbps, maxWidth: maxW, maxHeight: maxH,
       });
       video = nativeInfo.track;
       preview = nativeInfo.preview;
@@ -563,6 +567,73 @@ async function startShare() {
   }
   render();
 }
+
+// ------------------------------------------------------------------ bitrate adaptativo (modo nativo)
+// O encoder nativo é um só para todos os amigos: segue o pior caminho.
+// Começa no máximo escolhido; só reduz quando a rede reclama:
+//  - perda de pacotes > 2% ou atraso (RTT) 80 ms acima do normal: corta 25% (no máx. a cada 2 s)
+//  - rede limpa: volta a subir ~6% por segundo até o máximo
+// (A estimativa de banda do WebRTC é conservadora demais pelo Radmin: só serve de informação.)
+state.netInfo = { avail: null, loss: 0, rtt: null, nack: 0, pli: 0 };
+let lastCut = 0, baseRtt = Infinity;
+async function adaptNativeBitrate() {
+  const share = state.share;
+  if (!share || !share.native || !state.nativeKbps) return;
+  const max = share.settings.bitrate * 1000;
+  let avail = Infinity, loss = 0, rtt = 0, nack = 0, pli = 0, any = false;
+  for (const peer of state.peers.values()) {
+    if (!peer.vT.sender.track || peer.pc.connectionState !== 'connected') continue;
+    let report;
+    try { report = await peer.pc.getStats(); } catch { continue; }
+    any = true;
+    report.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) {
+        avail = Math.min(avail, r.availableOutgoingBitrate / 1000);
+      }
+      if (r.type === 'remote-inbound-rtp' && r.kind === 'video') {
+        loss = Math.max(loss, r.fractionLost || 0);
+        rtt = Math.max(rtt, r.roundTripTime || 0);
+      }
+      if (r.type === 'outbound-rtp' && r.kind === 'video') { nack += r.nackCount || 0; pli += r.pliCount || 0; }
+    });
+  }
+  if (!any) return;
+  state.netInfo = { avail: isFinite(avail) ? avail : null, loss, rtt, nack, pli };
+
+  if (rtt > 0) baseRtt = Math.min(baseRtt, rtt);
+  const congested = loss > 0.02 || (rtt > 0 && isFinite(baseRtt) && rtt > baseRtt + 0.08);
+  let target = state.nativeKbps;
+  const now = performance.now();
+  if (congested) {
+    if (now - lastCut > 2000) { target = state.nativeKbps * 0.75; lastCut = now; }
+  } else if (loss < 0.005 && now - lastCut > 3000) {
+    target = state.nativeKbps * 1.06 + 200;
+  }
+  target = Math.round(Math.max(1500, Math.min(max, target)));
+  if (target !== state.nativeKbps && (Math.abs(target - state.nativeKbps) / state.nativeKbps > 0.05 || target === max)) {
+    state.nativeKbps = target;
+    window.native.videoBitrate(target);
+  }
+}
+setInterval(adaptNativeBitrate, 1000);
+
+// Pedidos de keyframe reais (PLI/FIR) vindos de quem assiste: lidos das estatísticas do envio.
+async function watchKeyRequests() {
+  if (!state.share || !state.share.native) return;
+  for (const peer of state.peers.values()) {
+    const sender = peer.vT.sender;
+    if (!sender.track) continue;
+    let report;
+    try { report = await sender.getStats(); } catch { continue; }
+    report.forEach((r) => {
+      if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
+      const n = (r.pliCount || 0) + (r.firCount || 0);
+      if (peer.keyReqs != null && n > peer.keyReqs) window.native.videoKey();
+      peer.keyReqs = n;
+    });
+  }
+}
+setInterval(watchKeyRequests, 250);
 
 // eventos do AudioHelper (estatísticas e fim da captura nativa)
 function onHelperEvent(msg) {
@@ -925,14 +996,23 @@ async function collectStats() {
     let report;
     try { report = await peer.pc.getStats(); } catch { continue; }
     const now = performance.now();
-    let inV = null, outV = null, rtt = null;
+    let inV = null, outV = null, rtt = null, pair = null;
     const codecs = new Map();
+    const cands = new Map();
     report.forEach((r) => {
       if (r.type === 'inbound-rtp' && r.kind === 'video') inV = r;
       if (r.type === 'outbound-rtp' && r.kind === 'video') outV = r;
-      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') { rtt = r.currentRoundTripTime; pair = r; }
+      if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands.set(r.id, r);
       if (r.type === 'codec') codecs.set(r.id, r.mimeType.split('/')[1]);
     });
+    // rota usada: IP local -> IP remoto (tipo). Pelo Radmin deve ser 26.x -> 26.x (host)
+    let route = '?';
+    if (pair) {
+      const l = cands.get(pair.localCandidateId), r = cands.get(pair.remoteCandidateId);
+      if (l && r) route = `${l.address || '?'}→${r.address || '?'} ${r.candidateType}/${l.protocol}`;
+    }
+    peer.route = route;
     const prev = peer.statsPrev || {};
     const dt = prev.t ? (now - prev.t) / 1000 : 0;
     // recebendo
@@ -945,7 +1025,9 @@ async function collectStats() {
       peer.tile.stats.textContent =
         `${inV.frameWidth || 0}x${inV.frameHeight || 0} @ ${Math.round(inV.framesPerSecond || 0)}fps · ` +
         `${fmtMbps(bps)} · ${codecs.get(inV.codecId) || '?'} · ping ${rtt != null ? Math.round(rtt * 1000) : '?'}ms · ` +
-        `buffer ${jb != null ? Math.round(jb) : '?'}ms · travadas ${inV.freezeCount || 0} · perdidos ${lost}` +
+        `buffer ${jb != null ? Math.round(jb) : '?'}ms · travadas ${inV.freezeCount || 0} · perdidos ${lost} · ` +
+        `NACK ${inV.nackCount || 0} · PLI ${inV.pliCount || 0} · keyframes ${inV.keyFramesDecoded || 0} · ` +
+        `descartados ${inV.framesDropped || 0}\nrota ${route}` +
         (inV.decoderImplementation ? ` · dec ${inV.decoderImplementation}` : '');
       peer.jb = { jbDelay: inV.jitterBufferDelay, jbEmitted: inV.jitterBufferEmittedCount };
     }
@@ -970,7 +1052,11 @@ async function collectStats() {
     meTile.stats.textContent = n
       ? `Nativo · ${n.width}x${n.height} · captura ${n.captureFps}fps · enviado ${n.fps}fps · ${fmtMbps(n.kbps * 1000)} ` +
         `· encode ${n.encodeMs}ms · descartados ${n.dropped} · ${state.share.encoder} · ` +
-        `p/ ${out.count} amigo(s), total ${fmtMbps(out.bytes)}`
+        `p/ ${out.count} amigo(s), total ${fmtMbps(out.bytes)}\n` +
+        `alvo ${fmtMbps((state.nativeKbps || 0) * 1000)} · banda estimada ${state.netInfo.avail ? fmtMbps(state.netInfo.avail * 1000) : '?'} · ` +
+        `perda ${(state.netInfo.loss * 100).toFixed(1)}% · rtt ${state.netInfo.rtt ? Math.round(state.netInfo.rtt * 1000) : '?'}ms · ` +
+        `NACK ${state.netInfo.nack} · PLI ${state.netInfo.pli} · keyframes ${n.keys}` +
+        [...state.peers.values()].filter((p) => p.route).map((p) => `\nrota ${p.name}: ${p.route}`).join('')
       : 'Iniciando captura nativa...';
   } else if (meTile && state.share) {
     const LIMIT = { bandwidth: 'internet', cpu: 'processador', other: 'outro' };

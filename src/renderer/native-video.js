@@ -7,11 +7,23 @@ window.NativeVideo = (() => {
   const WORKER = `
   // native=false: deixa os quadros do Chromium passarem como estão (captura Chromium / sem compartilhar)
   const peers = new Map(); // id -> { q, waitingKey, active, native, sentAny }
-  let lastKeyReq = 0;
+  let lastKeyReq = 0, keyTimer = null;
+  // no máximo 1 pedido a cada 500 ms; pedidos dentro da janela são adiados (não perdidos)
   function reqKey() {
-    const now = Date.now();
-    if (now - lastKeyReq > 250) { lastKeyReq = now; postMessage({ type: 'key' }); }
+    const wait = 500 - (Date.now() - lastKeyReq);
+    if (wait <= 0) { lastKeyReq = Date.now(); postMessage({ type: 'key' }); return; }
+    if (!keyTimer) keyTimer = setTimeout(() => { keyTimer = null; reqKey(); }, wait);
   }
+  // enquanto alguém estiver esperando o primeiro keyframe, insiste a cada segundo
+  // (o encoder quase não gera keyframes sozinho; um pedido perdido deixaria a tela preta)
+  setInterval(() => {
+    for (const p of peers.values()) if (p.active && p.waitingKey) { reqKey(); break; }
+    // diagnóstico: quantos quadros foram enviados/pulados/descartados por amigo
+    const s = {};
+    for (const [id, p] of peers) { s[id] = { sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, q: p.q.length }; p.sent = p.empty = p.flush = 0; }
+    postMessage({ type: 'stats', peers: s });
+  }, 1000);
+
   function get(id) {
     let p = peers.get(id);
     if (!p) { p = { q: [], waitingKey: true, active: false, native: false, sentAny: false }; peers.set(id, p); }
@@ -25,7 +37,7 @@ window.NativeVideo = (() => {
         if (p.waitingKey) { if (!m.key) return; p.waitingKey = false; }
         p.q.push(i === list.length - 1 ? m.data : m.data.slice(0));
         // o encoder do Chromium ficou para trás: descarta e recomeça num keyframe
-        if (p.q.length > 4) { p.q.length = 0; p.waitingKey = true; reqKey(); }
+        if (p.q.length > 4) { p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1; reqKey(); }
       });
     } else if (m.type === 'mode') {
       const p = get(m.id);
@@ -46,12 +58,13 @@ window.NativeVideo = (() => {
     t.readable.pipeThrough(new TransformStream({
       transform(frame, ctl) {
         if (!p.native) { ctl.enqueue(frame); return; } // modo Chromium: não mexe
-        // keyframe da trilha vazia depois do início = alguém pediu (perda de pacotes / novo receptor)
-        if (frame.type === 'key' && p.sentAny) reqKey();
+        // (keyframes da trilha vazia NÃO são usados como pedido: o Chromium gera vários quando a
+        //  estimativa de banda muda. Os pedidos reais (PLI/FIR) são lidos das estatísticas no app.)
         const data = p.q.shift();
-        if (!data) return; // ainda sem quadro nosso: não envia nada
+        if (!data) { p.empty = (p.empty || 0) + 1; return; } // ainda sem quadro nosso: não envia nada
         frame.data = data;
         p.sentAny = true;
+        p.sent = (p.sent || 0) + 1;
         ctl.enqueue(frame);
       },
     })).pipeTo(t.writable).catch(() => {});
@@ -72,7 +85,10 @@ window.NativeVideo = (() => {
     if (worker) return worker;
     const url = URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' }));
     worker = new Worker(url);
-    worker.onmessage = (e) => { if (e.data.type === 'key') window.native.videoKey(); };
+    worker.onmessage = (e) => {
+      if (e.data.type === 'key') window.native.videoKey();
+      else if (e.data.type === 'stats') window.NativeVideo.lastStats = e.data.peers;
+    };
     return worker;
   }
 

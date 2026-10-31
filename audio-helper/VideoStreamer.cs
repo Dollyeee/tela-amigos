@@ -383,7 +383,9 @@ sealed unsafe class VideoStreamer : IDisposable
 
     public void SetBitrate(int kbps)
     {
+        if (kbps == bitrateKbps) return;
         bitrateKbps = kbps;
+        // só o bitrate médio: mudar o buffer (VBV) faz o encoder reiniciar e gerar um keyframe
         SetCodec(CODECAPI_MeanBitRate, (uint)kbps * 1000);
     }
 
