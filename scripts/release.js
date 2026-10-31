@@ -30,5 +30,22 @@ run(`git push -f origin v${pkg.version}`);
 
 const token = out('gh auth token');
 run('npm run build:helper');
-run('npx electron-builder --win nsis --publish always', { GH_TOKEN: token });
+try {
+  run('npx electron-builder --win nsis --publish always', { GH_TOKEN: token });
+} catch (e) {
+  console.warn('electron-builder reportou erro no envio; conferindo os arquivos da release...');
+}
+
+// o upload do instalador (~150 MB) às vezes falha em silêncio: confere e reenvia o que faltar
+const tag = `v${pkg.version}`;
+const need = ['latest.yml', `TelaAmigos-Setup-${pkg.version}.exe`, `TelaAmigos-Setup-${pkg.version}.exe.blockmap`];
+const have = out(`gh release view ${tag} --json assets --jq "[.assets[].name] | join(\\",\\")"`).split(',');
+const missing = need.filter((n) => !have.includes(n));
+if (missing.length) {
+  console.log(`Reenviando: ${missing.join(', ')}`);
+  run(`gh release upload ${tag} ${missing.map((n) => `"dist/${n}"`).join(' ')} --clobber`);
+}
+const final = out(`gh release view ${tag} --json assets --jq "[.assets[].name] | join(\\",\\")"`).split(',');
+const still = need.filter((n) => !final.includes(n));
+if (still.length) throw new Error(`Release incompleta, faltando: ${still.join(', ')}`);
 console.log(`\nPronto! v${pkg.version} publicada. Os amigos recebem a atualização ao abrir o app.\n`);
