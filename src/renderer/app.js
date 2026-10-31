@@ -276,14 +276,15 @@ function isIPv6Candidate(c) {
   return addr.includes(':');
 }
 
-// VPN (Radmin 26.x, Hamachi 25.x) com prioridade mínima: o ICE prefere a conexão direta pela
-// internet (STUN) e só usa a VPN se a direta não fechar. Aplicado nos candidatos enviados e
-// recebidos, então funciona mesmo se o amigo estiver numa versão antiga.
+// A v1.0.5 rebaixava os candidatos da VPN (Radmin/Hamachi) para preferir a internet direta,
+// mas na prática as conexões pararam de fechar. Agora a VPN volta a ser o caminho preferido;
+// e candidatos rebaixados vindos de quem ainda está na 1.0.5 são restaurados aqui.
 function demoteVpnCandidate(c) {
   if (!c || !c.candidate) return c;
   const parts = String(c.candidate).split(' ');
-  if (!/^(26|25)\./.test(parts[4] || '')) return c;
-  parts[3] = String(Math.max(1, Math.floor(Number(parts[3]) / 65536)));
+  if (!/^(26|25)\./.test(parts[4] || '') || parts[7] !== 'host') return c;
+  if (Number(parts[3]) >= 1e9) return c; // prioridade normal: nada a fazer
+  parts[3] = '2122260223'; // prioridade típica de candidato "host" do Chromium
   return { candidate: parts.join(' '), sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex, usernameFragment: c.usernameFragment };
 }
 

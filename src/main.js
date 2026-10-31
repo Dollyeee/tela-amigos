@@ -207,7 +207,10 @@ function setupAutoUpdate() {
     if (Date.now() - lastCheck > 2 * 60 * 1000) check();
   });
   ipcMain.handle('update:check', () => check(true));
-  ipcMain.handle('update:install', () => autoUpdater.quitAndInstall(true, true));
+  ipcMain.handle('update:install', () => {
+    audio.kill(); // para a captura com calma antes de o instalador substituir os arquivos
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 1500);
+  });
 }
 
 ipcMain.handle('app:version', () => app.getVersion());

@@ -87,7 +87,17 @@ class AudioBridge {
     if (!this.proc) return { type: 'stopped' };
     return this.request({ cmd: 'stop' }, 'stopped');
   }
-  kill() { if (this.proc) this.proc.kill(); }
+  // NUNCA encerrar à força com a captura de áudio ligada: matar o helper no meio de uma captura
+  // "process loopback" derruba o serviço de áudio do Windows (som e microfone somem).
+  // Pede para parar e fecha o stdin: o helper encerra sozinho.
+  kill() {
+    if (!this.proc) return;
+    try {
+      this.proc.stdin.write(JSON.stringify({ cmd: 'video-stop' }) + '\n');
+      this.proc.stdin.write(JSON.stringify({ cmd: 'stop' }) + '\n');
+      this.proc.stdin.end();
+    } catch {}
+  }
 }
 
 module.exports = { AudioBridge };
