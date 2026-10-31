@@ -21,12 +21,14 @@ if (!skipBump) {
 }
 console.log(`\n=== Publicando Tela Amigos v${pkg.version} ===\n`);
 
-const token = out('gh auth token');
-run('npm run build:helper');
-run('npx electron-builder --win nsis --publish always', { GH_TOKEN: token });
-
+// o GitHub exige que a tag exista antes de publicar a release
 run('git add -A');
 run(`git commit -m "v${pkg.version}" --allow-empty`);
 run(`git tag -f v${pkg.version}`);
-run('git push --follow-tags origin HEAD');
+run('git push origin HEAD');
+run(`git push -f origin v${pkg.version}`);
+
+const token = out('gh auth token');
+run('npm run build:helper');
+run('npx electron-builder --win nsis --publish always', { GH_TOKEN: token });
 console.log(`\nPronto! v${pkg.version} publicada. Os amigos recebem a atualização ao abrir o app.\n`);
