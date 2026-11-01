@@ -70,7 +70,13 @@ const scriptA = common + `
     const expected = perPeerMbps(80, pB) * 1e6;
     if (enc.maxBitrate !== expected || expected > 80e6) throw new Error('orçamento de upload não aplicado: maxBitrate=' + enc.maxBitrate + ' esperado=' + expected);
     log('orçamento ok (' + enc.maxBitrate / 1e6 + ' Mb/s para 1 amigo; orçamento ' + uploadBudgetMbps() + ')');
-    // responde "Pronto!" quando o B perguntar e avisa quando chegar pedido de play/pausa
+    // estatísticas da minha tela: resolução/fps reais da tela principal (não a câmera/2ª tela vazias)
+    state.showStats = true;
+    await sleep(1200); await collectStats(); await sleep(1200); await collectStats();
+    if (!/1280x720 @ [1-9]/.test(meTile.stats.textContent)) throw new Error('estatísticas da minha tela erradas: ' + meTile.stats.textContent);
+    log('estatísticas ok: ' + meTile.stats.textContent.split(String.fromCharCode(10))[0]);
+    state.showStats = false;
+        // responde "Pronto!" quando o B perguntar e avisa quando chegar pedido de play/pausa
     setInterval(() => { if (readyCheck && !readyCheck.ready.has(String(state.myId))) { markReady(); log('respondi pronto'); } }, 300);
     // "Nativa direta" em H.265: quadros HEVC (WebCodecs, placa) injetados pelo mesmo caminho do helper
     async function startSyntheticDirect() {
@@ -187,7 +193,7 @@ const scriptB = common + `
     if (h265 && !/h265/i.test(codec)) throw new Error('esperava H.265 no automático, veio ' + codec);
     log('codec ' + codec);
     // medição automática do upload (feita sozinha ao conectar)
-    await until(() => peer().upMbps > 5, 25000, 'medição automática do upload');
+    await until(() => peer().upMbps > 5, 45000, 'medição automática do upload');
     log('upload medido sozinho: ' + peer().upMbps + ' Mb/s; orçamento ' + state.settings.uploadMbps + '; teto ' + perPeerMbps(80, peer()));
     await until(() => peer().tile.video.videoWidth > 0, 10000, 'mostrar o vídeo na tela');
     // selo de status (fps/ping)

@@ -1015,7 +1015,8 @@ let measureChain = Promise.resolve();
 function scheduleAutoMeasure(peer) {
   if (localStorage.getItem('autoMeasure') === '0') return;
   // um lado mede antes do outro (não disputam o mesmo caminho ao mesmo tempo)
-  const delay = (peer.polite ? 2000 : 9000) + Math.random() * 1500;
+  // (espera a conexão assentar: logo no começo o vídeo está subindo e a medida sai baixa)
+  const delay = (peer.polite ? 6000 : 16000) + Math.random() * 1500;
   setTimeout(() => { measureChain = measureChain.then(() => autoMeasure(peer)).catch(() => {}); }, delay);
 }
 async function outboundBytes(peer) {
@@ -1031,16 +1032,22 @@ async function autoMeasure(peer) {
   if (prev && Date.now() - prev.at < 30 * 60 * 1000) { peer.upMbps = prev.up; updateAutoBudget(); return; }
   state.autoMeasuring = true;
   try {
-    const before = await outboundBytes(peer);
-    const t0 = performance.now();
-    const res = dcWait(peer, 'st-res', 12000);
-    await stBlast(peer, 3000);
-    const up = await res;
-    const sec = (performance.now() - t0) / 1000;
-    // o vídeo/áudio que já estava indo para ele também usa o upload: soma
-    const media = (((await outboundBytes(peer)) - before) * 8) / sec;
-    if (!up) return;
-    peer.upMbps = Math.round(((up + media) / 1e6) * 10) / 10;
+    // duas medidas curtas; vale a maior (a 1ª às vezes pega a conexão ainda acelerando)
+    let best = 0;
+    for (let i = 0; i < 2; i++) {
+      const before = await outboundBytes(peer);
+      const t0 = performance.now();
+      const res = dcWait(peer, 'st-res', 12000);
+      await stBlast(peer, 2000);
+      const up = await res;
+      const sec = (performance.now() - t0) / 1000;
+      // o vídeo/áudio que já estava indo para ele também usa o upload: soma
+      const media = (((await outboundBytes(peer)) - before) * 8) / sec;
+      if (up) best = Math.max(best, up + media);
+      if (!state.peers.has(peer.id)) return;
+    }
+    if (!best) return;
+    peer.upMbps = Math.round((best / 1e6) * 10) / 10;
     autoMeasured.set(peer.name, { up: peer.upMbps, at: Date.now() });
     console.log(`upload medido até ${peer.name}: ${peer.upMbps} Mb/s`);
     updateAutoBudget();
@@ -1413,7 +1420,8 @@ function dcSend(peer, obj) {
 function dcWait(peer, key, ms) {
   return new Promise((resolve, reject) => {
     const k = `${peer.id}:${key}`;
-    const timer = setTimeout(() => { stWait.delete(k); reject(new Error('sem resposta (o amigo precisa estar na versão nova)')); }, ms);
+    const step = { pong: 'ping', 'st-res': 'seu envio', 'st-in': 'envio dele' }[key] || key;
+    const timer = setTimeout(() => { stWait.delete(k); reject(new Error(`sem resposta no teste de ${step} (rede muito ocupada? tente de novo)`)); }, ms);
     stWait.set(k, (v) => { clearTimeout(timer); stWait.delete(k); resolve(v); });
   });
 }
@@ -1423,12 +1431,20 @@ function dcResolve(peer, key, v) { const f = stWait.get(`${peer.id}:${key}`); if
 async function stBlast(peer, ms = ST_MS) {
   const chunk = new ArrayBuffer(ST_CHUNK);
   const dc = peer.dc;
-  dc.bufferedAmountLowThreshold = 1 << 20;
+  // fila curta: com até 8 MB parados na fila, num Radmin com ~5 Mb/s livres as respostas (pong,
+  // fim do teste) ficavam presas atrás dela por mais de 12 s e o teste dava "sem resposta".
+  // Com fila pequena, o que sai é o que a rede de fato entrega.
+  dc.bufferedAmountLowThreshold = 256 << 10;
   dcSend(peer, { t: 'st-go' });
   const end = performance.now() + ms;
   while (performance.now() < end && dc.readyState === 'open') {
-    if (dc.bufferedAmount > (8 << 20)) {
-      await new Promise((r) => { dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; setTimeout(r, 200); });
+    if (dc.bufferedAmount > (1 << 20)) {
+      // espera a fila baixar (evento) ou no máximo 10 ms (o evento não vem se ela já baixou)
+      await new Promise((r) => {
+        const done = () => { dc.removeEventListener('bufferedamountlow', done); clearTimeout(t); r(); };
+        const t = setTimeout(done, 10);
+        dc.addEventListener('bufferedamountlow', done);
+      });
       continue;
     }
     dc.send(chunk);
@@ -1469,7 +1485,7 @@ async function testPeer(peer, onStep) {
   // ping pelo canal de dados (10 vezes): média e variação
   const pings = [];
   for (let i = 0; i < 10; i++) {
-    const wait = dcWait(peer, 'pong', 3000);
+    const wait = dcWait(peer, 'pong', 6000);
     dcSend(peer, { t: 'ping', ts: performance.now() });
     pings.push(await wait);
     await new Promise((res) => setTimeout(res, 60));
@@ -1589,16 +1605,19 @@ async function adaptNativeBitrate() {
     let report;
     try { report = await peer.pc.getStats(); } catch { continue; }
     any = true;
+    // só a trilha da tela principal (câmera/2ª tela têm pouco tráfego e distorciam perda/ping)
+    let mainOut = null;
+    report.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video' && (peer.vT.mid == null || String(r.mid) === String(peer.vT.mid))) mainOut = r; });
     report.forEach((r) => {
       if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) {
         avail = Math.min(avail, r.availableOutgoingBitrate / 1000);
       }
-      if (r.type === 'remote-inbound-rtp' && r.kind === 'video') {
+      if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && (!mainOut || r.localId === mainOut.id)) {
         loss = Math.max(loss, r.fractionLost || 0);
         rtt = Math.max(rtt, r.roundTripTime || 0);
       }
-      if (r.type === 'outbound-rtp' && r.kind === 'video') { nack += r.nackCount || 0; pli += r.pliCount || 0; }
     });
+    if (mainOut) { nack += mainOut.nackCount || 0; pli += mainOut.pliCount || 0; }
   }
   if (!any) return;
   state.netInfo = { avail: isFinite(avail) ? avail : null, loss, rtt, nack, pli };
@@ -3828,11 +3847,21 @@ async function collectStats() {
     try { report = await peer.pc.getStats(); } catch { continue; }
     const now = performance.now();
     let inV = null, outV = null, rtt = null, pair = null;
+    const mainTrack = peer.remoteStream.getVideoTracks()[0];
+    const mainId = mainTrack ? mainTrack.id : null;
     const codecs = new Map();
     const cands = new Map();
     report.forEach((r) => {
-      if (r.type === 'inbound-rtp' && r.kind === 'video') inV = r;
-      if (r.type === 'outbound-rtp' && r.kind === 'video') outV = r;
+      // com tela + câmera + 2ª tela há várias trilhas de vídeo: usa só a da tela principal
+      // (antes pegava a última da lista, que podia ser a 2ª tela vazia -> "0x0 @ 0fps")
+      if (r.type === 'inbound-rtp' && r.kind === 'video') {
+        if (mainId && r.trackIdentifier) { if (r.trackIdentifier === mainId) inV = r; }
+        else if (!inV || (r.bytesReceived || 0) > (inV.bytesReceived || 0)) inV = r;
+      }
+      if (r.type === 'outbound-rtp' && r.kind === 'video') {
+        if (peer.vT.mid != null && r.mid != null) { if (String(r.mid) === String(peer.vT.mid)) outV = r; }
+        else if (!outV || (r.bytesSent || 0) > (outV.bytesSent || 0)) outV = r;
+      }
       if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') { rtt = r.currentRoundTripTime; pair = r; }
       if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands.set(r.id, r);
       if (r.type === 'codec') codecs.set(r.id, r.mimeType.split('/')[1]);
