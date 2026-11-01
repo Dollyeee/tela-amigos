@@ -1,17 +1,18 @@
-﻿// AudioHelper: captura áudio de apps específicos usando o "process loopback" do Windows (Win10 2004+).
+﻿// AudioHelper: captura de áudio por app (process loopback, Win10 2004+) e de vídeo (WGC + H.264 por hardware).
 //
 // Protocolo:
-//   stdin  -> uma linha JSON por comando:
-//             {"cmd":"list","selfPid":123}
-//             {"cmd":"start","mode":"all-except","selfPid":123}   (tudo exceto Discord e o próprio app)
-//             {"cmd":"start","mode":"app","pid":456,"selfPid":123} (só um app e seus filhos)
-//             {"cmd":"stop"}
+//   stdin  -> uma linha JSON por comando; "id" (opcional) volta na resposta:
+//             {"id":1,"cmd":"list","selfPid":123}
+//             {"id":2,"cmd":"start","mode":"all-except","selfPid":123}   (tudo exceto Discord e o próprio app)
+//             {"id":3,"cmd":"start","mode":"app","pid":456,"selfPid":123} (só um app e seus filhos)
+//             {"id":4,"cmd":"stop"}
+//             {"id":5,"cmd":"video-start", ...} / video-stop / video-key / video-bitrate
 //   stdout -> pacotes [tipo:1 byte][tamanho:uint32 LE][dados]
-//             tipo 1 = JSON (respostas/eventos), tipo 2 = PCM s16le estéreo 48 kHz
+//             1 = JSON, 2 = PCM s16le estéreo 48 kHz, 3 = quadro H.264 ([flags][int64 µs][Annex B])
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -20,58 +21,75 @@ static class Program
 {
     public const int SampleRate = 48000;
     public const int Channels = 2;
-    static readonly Stream Out = Console.OpenStandardOutput();
-    static readonly object OutLock = new();
     static Mixer? mixer;
     static VideoStreamer? video;
 
+    // ---- saída: fila com escritor próprio; quem captura nunca fica preso esperando o app ler ----
+    static readonly BlockingCollection<byte[]> outQueue = new(new ConcurrentQueue<byte[]>(), 400);
+    static readonly Stream stdout = Console.OpenStandardOutput();
+
+    /// Chamado quando um quadro de vídeo teve que ser descartado (app não está lendo rápido o bastante).
+    public static Action? OnVideoDropped;
+
+    static void StartWriter()
+    {
+        new Thread(() =>
+        {
+            try
+            {
+                foreach (var p in outQueue.GetConsumingEnumerable()) stdout.Write(p);
+            }
+            catch { Environment.Exit(0); } // o app fechou o pipe
+        }) { IsBackground = true, Name = "stdout" }.Start();
+    }
+
     public static void Send(byte type, ReadOnlySpan<byte> data)
     {
-        Span<byte> header = stackalloc byte[5];
-        header[0] = type;
-        BitConverter.TryWriteBytes(header[1..], (uint)data.Length);
-        lock (OutLock)
-        {
-            Out.Write(header);
-            Out.Write(data);
-            Out.Flush();
-        }
+        var p = new byte[5 + data.Length];
+        p[0] = type;
+        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(1), (uint)data.Length);
+        data.CopyTo(p.AsSpan(5));
+        if (type == 1) { outQueue.Add(p); return; }       // mensagens nunca são descartadas
+        if (!outQueue.TryAdd(p) && type == 3) OnVideoDropped?.Invoke();
     }
 
     public static void SendJson(object obj) => Send(1, JsonSerializer.SerializeToUtf8Bytes(obj));
 
     static async Task Main()
     {
+        StartWriter();
         SendJson(new { type = "ready" });
         string? line;
         while ((line = await Console.In.ReadLineAsync()) != null)
         {
+            int? id = null;
             try
             {
                 using var doc = JsonDocument.Parse(line);
                 var root = doc.RootElement;
+                if (root.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number) id = idEl.GetInt32();
                 var cmd = root.GetProperty("cmd").GetString();
                 int selfPid = root.TryGetProperty("selfPid", out var sp) ? sp.GetInt32() : 0;
                 switch (cmd)
                 {
                     case "list":
-                        SendJson(new { type = "list", apps = AudioApps.List(selfPid) });
+                        SendJson(new { id, type = "list", apps = AudioApps.List(selfPid) });
                         break;
                     case "start":
                         mixer?.Dispose();
+                        mixer = null;
                         var mode = root.GetProperty("mode").GetString();
                         int pid = root.TryGetProperty("pid", out var p) ? p.GetInt32() : 0;
                         mixer = new Mixer(mode == "app" ? pid : 0, selfPid);
                         mixer.Start();
-                        SendJson(new { type = "started" });
+                        SendJson(new { id, type = "started" });
                         break;
                     case "stop":
                         mixer?.Dispose();
                         mixer = null;
-                        SendJson(new { type = "stopped" });
+                        SendJson(new { id, type = "stopped" });
                         break;
 
-                    // ---- vídeo ----
                     case "video-start":
                     {
                         video?.Dispose();
@@ -93,16 +111,16 @@ static class Program
                             throw;
                         }
                         video = v;
-                        SendJson(new { type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName });
+                        SendJson(new { id, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName });
                         break;
                     }
                     case "video-stop":
                         video?.Dispose();
                         video = null;
-                        SendJson(new { type = "video-stopped" });
+                        SendJson(new { id, type = "video-stopped" });
                         break;
                     case "video-diag":
-                        SendJson(new { type = "video-diag", info = VideoStreamer.Diagnose() });
+                        SendJson(new { id, type = "video-diag", info = VideoStreamer.Diagnose() });
                         break;
                     case "video-key":
                         video?.RequestKeyFrame();
@@ -114,10 +132,11 @@ static class Program
             }
             catch (Exception ex)
             {
-                SendJson(new { type = "error", message = ex.Message });
+                SendJson(new { id, type = "error", message = ex.Message });
             }
         }
-        mixer?.Dispose(); // stdin fechou: o app principal saiu
+        // stdin fechou: o app principal saiu
+        mixer?.Dispose();
         video?.Dispose();
     }
 }
@@ -190,6 +209,8 @@ static class ProcTree
 static class AudioApps
 {
     /// Raízes (pid) de todos os processos com sessão de áudio em qualquer saída ativa.
+    /// Remove raízes que estão dentro da árvore de outra (ex.: jogo aberto pela Steam), senão o
+    /// mesmo áudio seria capturado duas vezes.
     public static List<int> SessionRoots(Dictionary<int, ProcTree.Info> map)
     {
         var roots = new HashSet<int>();
@@ -212,7 +233,42 @@ static class AudioApps
             }
             catch { /* dispositivo pode sumir durante a enumeração */ }
         }
-        return roots.ToList();
+        return roots.Where(r => !ProcTree.Ancestry(r, map).Skip(1).Any(roots.Contains)).ToList();
+    }
+
+    /// Árvores que podem ser capturadas no modo "tudo exceto Discord":
+    /// nunca uma árvore que contenha o Discord ou este app (ex.: explorer.exe com sessão de áudio
+    /// tem quase tudo como filho). Depois remove as que estão dentro de outra já capturada.
+    public static HashSet<int> CaptureRoots(Dictionary<int, ProcTree.Info> map, int selfPid)
+    {
+        var roots = new HashSet<int>();
+        using (var en = new MMDeviceEnumerator())
+        {
+            foreach (var dev in en.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            {
+                try
+                {
+                    var mgr = dev.AudioSessionManager;
+                    mgr.RefreshSessions();
+                    var sessions = mgr.Sessions;
+                    for (int i = 0; i < sessions.Count; i++)
+                    {
+                        var s = sessions[i];
+                        if (s.IsSystemSoundsSession) continue;
+                        int pid = (int)s.GetProcessID;
+                        if (pid != 0 && map.ContainsKey(pid)) roots.Add(ProcTree.Root(pid, map));
+                    }
+                }
+                catch { }
+            }
+        }
+        // processos proibidos: Discord e este app (e todos os filhos deles)
+        var forbidden = map.Keys.Where(p => ProcTree.IsDiscord(p, map) || ProcTree.IsSelf(p, selfPid, map)).ToList();
+        var safe = roots.Where(r =>
+                !ProcTree.IsDiscord(r, map) && !ProcTree.IsSelf(r, selfPid, map) &&
+                !forbidden.Any(f => ProcTree.Ancestry(f, map).Contains(r)))
+            .ToHashSet();
+        return safe.Where(r => !ProcTree.Ancestry(r, map).Skip(1).Any(safe.Contains)).ToHashSet();
     }
 
     public static List<AudioApp> List(int selfPid)
@@ -252,7 +308,8 @@ sealed class ProcessCapture : IDisposable
     volatile bool running = true;
     Thread? thread;
     public bool Primed;
-    public bool Dead;
+    public int EmptyBlocks;
+    public volatile bool Dead;
 
     public int Buffered => Volatile.Read(ref buffered);
 
@@ -271,14 +328,12 @@ sealed class ProcessCapture : IDisposable
         client.Start();
         thread = new Thread(() =>
         {
-            int frameBytes = fmt.BlockAlign;
             try
             {
                 while (running)
                 {
                     ev.WaitOne(100);
-                    int packet;
-                    while (running && (packet = cap.GetNextPacketSize()) > 0)
+                    while (running && cap.GetNextPacketSize() > 0)
                     {
                         var ptr = cap.GetBuffer(out int frames, out var flags);
                         var data = new short[frames * Program.Channels];
@@ -302,7 +357,7 @@ sealed class ProcessCapture : IDisposable
     }
 
     /// Soma até `count` amostras no buffer de mixagem. Retorna quantas foram lidas.
-    public int MixInto(int[] mix, int count)
+    public int MixInto(int[] mix, int count, int offset = 0)
     {
         int done = 0;
         while (done < count)
@@ -313,7 +368,7 @@ sealed class ProcessCapture : IDisposable
                 partialPos = 0;
             }
             int n = Math.Min(count - done, partial.Length - partialPos);
-            for (int i = 0; i < n; i++) mix[done + i] += partial[partialPos + i];
+            for (int i = 0; i < n; i++) mix[offset + done + i] += partial[partialPos + i];
             partialPos += n;
             done += n;
         }
@@ -335,12 +390,15 @@ sealed class ProcessCapture : IDisposable
 }
 
 /// Mistura várias capturas e envia PCM em blocos de 10 ms.
+/// Correção de relógio suave: quando sobra áudio, descarta 1 quadro a cada bloco (inaudível);
+/// quando falta, toca o que tem e só "re-acumula" se ficar vazio por vários blocos seguidos.
 sealed class Mixer : IDisposable
 {
-    const int BlockFrames = Program.SampleRate / 100; // 10 ms
+    const int BlockFrames = Program.SampleRate / 100;          // 10 ms
     const int BlockSamples = BlockFrames * Program.Channels;
-    const int PrimeSamples = BlockSamples * 3;       // começa a tocar com 30 ms em buffer
-    const int MaxSamples = BlockSamples * 12;        // acima de 120 ms descarta (corrige drift)
+    const int PrimeSamples = BlockSamples * 3;                 // começa com 30 ms em buffer
+    const int HighSamples = BlockSamples * 6;                  // > 60 ms: acelera devagar
+    const int MaxSamples = BlockSamples * 15;                  // > 150 ms: corta de uma vez (travada do PC)
 
     readonly int appPid;   // 0 = modo "tudo exceto Discord"
     readonly int selfPid;
@@ -366,13 +424,12 @@ sealed class Mixer : IDisposable
         try
         {
             var map = ProcTree.Snapshot();
-            var wanted = AudioApps.SessionRoots(map)
-                .Where(pid => !ProcTree.IsDiscord(pid, map) && !ProcTree.IsSelf(pid, selfPid, map))
-                .ToHashSet();
+            var wanted = AudioApps.CaptureRoots(map, selfPid);
             lock (capLock)
             {
+                // sai quem morreu ou passou a fazer parte da árvore de outro capturado
                 foreach (var pid in captures.Keys.ToList())
-                    if (!map.ContainsKey(pid) || captures[pid].Dead)
+                    if (!map.ContainsKey(pid) || captures[pid].Dead || !wanted.Contains(pid))
                     {
                         captures[pid].Dispose();
                         captures.Remove(pid);
@@ -385,7 +442,7 @@ sealed class Mixer : IDisposable
                 if (!has) _ = AddCapture(pid);
             }
         }
-        catch (Exception ex) { Program.SendJson(new { type = "warn", message = ex.Message }); }
+        catch (Exception ex) { try { Program.SendJson(new { type = "warn", message = ex.Message }); } catch { } }
     }
 
     async Task AddCapture(int pid)
@@ -393,12 +450,15 @@ sealed class Mixer : IDisposable
         var cap = new ProcessCapture(pid);
         lock (capLock)
         {
-            if (captures.ContainsKey(pid)) return;
+            if (!running || captures.ContainsKey(pid)) return;
             captures[pid] = cap;
         }
         try
         {
             await cap.StartAsync(ProcessLoopbackMode.IncludeTargetProcessTree);
+            bool stillWanted;
+            lock (capLock) stillWanted = running && captures.TryGetValue(pid, out var c) && c == cap;
+            if (!stillWanted) cap.Dispose(); // o mixer foi encerrado enquanto iniciava
         }
         catch (Exception ex)
         {
@@ -409,44 +469,59 @@ sealed class Mixer : IDisposable
 
     void MixLoop()
     {
-        var mix = new int[BlockSamples];
+        var mix = new int[BlockSamples + Program.Channels];
         var outBytes = new byte[BlockSamples * 2];
         var sw = Stopwatch.StartNew();
         long blocksSent = 0;
-        while (running)
+        try
         {
-            // Quantos blocos já deveriam ter saído pelo relógio
-            long due = sw.ElapsedTicks * 100 / Stopwatch.Frequency;
-            if (blocksSent >= due) { Thread.Sleep(1); continue; }
-            if (due - blocksSent > 10) blocksSent = due - 1; // atrasou demais (PC travou): pula
+            while (running)
+            {
+                long due = sw.ElapsedTicks * 100 / Stopwatch.Frequency;
+                if (blocksSent >= due) { Thread.Sleep(1); continue; }
+                if (due - blocksSent > 10) blocksSent = due - 1; // atrasou demais (PC travou): pula
 
-            Array.Clear(mix);
-            ProcessCapture[] list;
-            lock (capLock) list = captures.Values.ToArray();
-            foreach (var c in list)
-            {
-                int buf = c.Buffered;
-                if (!c.Primed && buf >= PrimeSamples) c.Primed = true;
-                if (!c.Primed) continue;
-                if (buf > MaxSamples) c.Drop(buf - PrimeSamples);
-                int got = c.MixInto(mix, BlockSamples);
-                if (got < BlockSamples) c.Primed = false; // faltou: re-acumula
+                Array.Clear(mix);
+                ProcessCapture[] list;
+                lock (capLock) list = captures.Values.ToArray();
+                foreach (var c in list)
+                {
+                    int buf = c.Buffered;
+                    if (!c.Primed)
+                    {
+                        if (buf < PrimeSamples) continue;
+                        c.Primed = true;
+                    }
+                    if (buf > MaxSamples) c.Drop(buf - PrimeSamples);
+                    else if (buf > HighSamples) c.Drop(Program.Channels); // descarta 1 quadro (~0,2%)
+                    int got = c.MixInto(mix, BlockSamples);
+                    if (got == 0)
+                    {
+                        if (++c.EmptyBlocks >= 3) { c.Primed = false; c.EmptyBlocks = 0; } // parou de tocar
+                    }
+                    else c.EmptyBlocks = 0;
+                }
+                for (int i = 0; i < BlockSamples; i++)
+                {
+                    int v = Math.Clamp(mix[i], short.MinValue, short.MaxValue);
+                    outBytes[i * 2] = (byte)v;
+                    outBytes[i * 2 + 1] = (byte)(v >> 8);
+                }
+                Program.Send(2, outBytes);
+                blocksSent++;
             }
-            for (int i = 0; i < BlockSamples; i++)
-            {
-                int v = Math.Clamp(mix[i], short.MinValue, short.MaxValue);
-                outBytes[i * 2] = (byte)v;
-                outBytes[i * 2 + 1] = (byte)(v >> 8);
-            }
-            Program.Send(2, outBytes);
-            blocksSent++;
         }
+        catch { /* encerrando */ }
     }
 
     public void Dispose()
     {
         running = false;
-        scanTimer?.Dispose();
+        if (scanTimer != null)
+        {
+            using var done = new ManualResetEvent(false);
+            if (scanTimer.Dispose(done)) done.WaitOne(3000); // espera um Scan em andamento terminar
+        }
         mixThread?.Join(500);
         lock (capLock)
         {

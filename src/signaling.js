@@ -23,9 +23,12 @@ function isLocal(addr) {
   return a === '::1' || a.startsWith('127.');
 }
 
+const GRACE_MS = 20000; // quem cai tem 20 s para voltar sem os outros perceberem
+
 function createSignalingServer(port, { onShutdown } = {}) {
-  const members = new Map(); // id -> { ws, name }
+  const members = new Map(); // id -> { ws, name, token, grace }
   let nextId = 1;
+  const crypto = require('crypto');
   const startedAt = Date.now();
 
   const send = (ws, msg) => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); };
@@ -68,14 +71,29 @@ function createSignalingServer(port, { onShutdown } = {}) {
         if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
 
         if (msg.type === 'ping') { send(ws, { type: 'pong' }); return; }
+        if (msg.type === 'leave') { ws.leaving = true; ws.close(); return; }
 
         if (msg.type === 'join' && !id) {
+          const peersOf = (me) => [...members].filter(([pid]) => pid !== me).map(([pid, m]) => ({ id: pid, name: m.name }));
+          // voltando depois de uma queda: retoma o mesmo lugar (os outros não veem sair/entrar)
+          const r = msg.resume;
+          const old = r && members.get(String(r.id));
+          if (old && old.token === r.token) {
+            id = String(r.id);
+            clearTimeout(old.grace);
+            old.grace = null;
+            if (old.ws !== ws) { try { old.ws.terminate(); } catch {} }
+            old.ws = ws;
+            send(ws, { type: 'welcome', id, token: old.token, resumed: true, peers: peersOf(id) });
+            return;
+          }
           if (members.size >= MAX_MEMBERS) { send(ws, { type: 'error', message: 'Sala cheia' }); ws.close(); return; }
           id = String(nextId++);
           const name = String(msg.name || 'Anônimo').slice(0, 30);
-          send(ws, { type: 'welcome', id, peers: [...members].map(([pid, m]) => ({ id: pid, name: m.name })) });
+          const token = crypto.randomBytes(12).toString('hex');
+          send(ws, { type: 'welcome', id, token, peers: peersOf(id) });
           for (const [, m] of members) send(m.ws, { type: 'peer-joined', id, name });
-          members.set(id, { ws, name });
+          members.set(id, { ws, name, token, grace: null });
           return;
         }
         if (!id) return;
@@ -96,10 +114,21 @@ function createSignalingServer(port, { onShutdown } = {}) {
 
     ws.on('close', () => {
       if (!id) return;
-      members.delete(id);
-      for (const [, m] of members) send(m.ws, { type: 'peer-left', id });
+      const m = members.get(id);
+      if (!m || m.ws !== ws) return; // já foi substituída por uma reconexão
+      if (ws.leaving) return removeMember(id); // saiu de propósito ("Sair")
+      // caiu: segura o lugar por um tempo antes de avisar os outros
+      m.grace = setTimeout(() => removeMember(id), GRACE_MS);
     });
   });
+
+  function removeMember(id) {
+    const m = members.get(id);
+    if (!m) return;
+    clearTimeout(m.grace);
+    members.delete(id);
+    for (const [, o] of members) send(o.ws, { type: 'peer-left', id });
+  }
 
   const ping = setInterval(() => {
     for (const ws of wss.clients) {

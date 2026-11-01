@@ -174,33 +174,70 @@ function checkName() {
 function showLobbyError(msg) { $('#lobby-error').textContent = msg || ''; }
 
 // ------------------------------------------------------------------ sinalização
+// Conexão com a sala. Se cair depois de entrar, reconecta sozinho retomando o mesmo lugar
+// (o vídeo, que vai direto entre os PCs, continua enquanto isso).
 function connect(ip, isHost) {
   showLobbyError('');
   $('#btn-join').disabled = $('#btn-host').disabled = true;
+  state.resume = null;
+  openSocket(ip, false);
+}
+
+let heartbeat = null;
+function openSocket(ip, reconnecting) {
   const ws = new WebSocket(`ws://${ip}:${SIGNAL_PORT}`);
   state.ws = ws;
   let opened = false;
+  let lastMsg = Date.now();
   const timeout = setTimeout(() => { if (!opened) ws.close(); }, 6000);
 
   ws.onopen = () => {
     opened = true;
     clearTimeout(timeout);
-    ws.send(JSON.stringify({ type: 'join', name: state.myName }));
+    ws.send(JSON.stringify({ type: 'join', name: state.myName, resume: state.resume }));
+    // sinal de vida: se a sala ficar 15 s sem responder (PC de quem hospeda caiu, Radmin travou),
+    // considera a conexão perdida e reconecta
+    clearInterval(heartbeat);
+    heartbeat = setInterval(() => {
+      if (ws !== state.ws) return;
+      if (Date.now() - lastMsg > 15000) { ws.close(); return; }
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+    }, 5000);
   };
-  ws.onmessage = (e) => onSignal(JSON.parse(e.data));
+  ws.onmessage = (e) => {
+    lastMsg = Date.now();
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    onSignal(msg);
+  };
   ws.onclose = () => {
     clearTimeout(timeout);
-    $('#btn-join').disabled = $('#btn-host').disabled = false;
     if (ws !== state.ws) return; // conexão antiga (saiu e entrou de novo)
-    if (!opened) {
+    if (!opened && !reconnecting) {
+      $('#btn-join').disabled = $('#btn-host').disabled = false;
       showLobbyError(`Não consegui conectar em ${ip}. Confira se o IP está certo, se a pessoa clicou em "Hospedar" e se o Radmin está conectado.`);
       return;
     }
-    if (!state.leaving) {
-      toast('Conexão com a sala perdida.', 'error');
-      leaveRoom();
-    }
+    if (state.leaving) return;
+    scheduleReconnect(ip);
   };
+}
+
+let reconnectTry = 0;
+function scheduleReconnect(ip) {
+  clearInterval(heartbeat);
+  reconnectTry++;
+  setReconnectBanner(true);
+  const wait = Math.min(5000, 500 * 2 ** Math.min(reconnectTry, 4));
+  setTimeout(() => {
+    if (state.leaving || $('#room').classList.contains('hidden')) return;
+    openSocket(ip, true);
+  }, wait);
+}
+
+function setReconnectBanner(on) {
+  $('#reconnect-banner').classList.toggle('hidden', !on);
+  if (!on) reconnectTry = 0;
 }
 
 function sendRelay(to, data) {
@@ -210,6 +247,24 @@ function sendRelay(to, data) {
 function onSignal(msg) {
   switch (msg.type) {
     case 'welcome': {
+      const wasInRoom = !$('#room').classList.contains('hidden');
+      setReconnectBanner(false);
+      state.resume = { id: msg.id, token: msg.token };
+      if (wasInRoom) {
+        if (!msg.resumed || msg.id !== state.myId) {
+          // a sala reiniciou (ou o lugar expirou): recomeça as conexões com todo mundo
+          for (const id of [...state.peers.keys()]) removePeer(id);
+          state.myId = msg.id;
+        } else {
+          // retomou o mesmo lugar: tira quem saiu enquanto estávamos fora
+          const ids = new Set(msg.peers.map((p) => p.id));
+          for (const id of [...state.peers.keys()]) if (!ids.has(id)) removePeer(id);
+        }
+        for (const p of msg.peers) createPeer(p.id, p.name);
+        for (const peer of state.peers.values()) sendState(peer.id);
+        toast('Reconectado à sala.');
+        break;
+      }
       state.myId = msg.id;
       if (!state.isHost) {
         const d = discovered.find((r) => r.ip === state.hostIp);
@@ -247,8 +302,9 @@ function onRelay(from, data) {
   const peer = state.peers.get(from);
   if (!peer) return;
   switch (data.kind) {
-    case 'sdp': handleDescription(peer, data.description); break;
-    case 'ice': handleCandidate(peer, data.candidate); break;
+    // em fila por amigo: uma descrição/candidato nunca é processado no meio de outro
+    case 'sdp': peer.sigChain = peer.sigChain.then(() => handleDescription(peer, data.description)); break;
+    case 'ice': peer.sigChain = peer.sigChain.then(() => handleCandidate(peer, data.candidate)); break;
     case 'state':
       {
         const was = peer.sharing;
@@ -299,7 +355,15 @@ function createPeer(id, name) {
   // transform ligado desde o início (antes de negociar); fica em "deixa passar" até o modo nativo
   window.NativeVideo.attach(peer.vT.sender, id);
 
+  peer.sigChain = Promise.resolve();
   pc.onnegotiationneeded = () => negotiate(peer);
+  // renegociação pedida no meio de outra: faz assim que a conexão voltar a ficar estável
+  pc.onsignalingstatechange = () => {
+    if (pc.signalingState === 'stable' && peer.pendingNegotiation) {
+      peer.pendingNegotiation = false;
+      negotiate(peer);
+    }
+  };
   pc.onicecandidate = ({ candidate }) => {
     if (candidate && !isIPv6Candidate(candidate)) sendRelay(id, { kind: 'ice', candidate: demoteVpnCandidate(candidate.toJSON()) });
   };
@@ -332,34 +396,58 @@ function setCodec(peer, codec) {
 
 async function negotiate(peer) {
   const pc = peer.pc;
+  if (pc.signalingState === 'closed') return;
+  if (pc.signalingState !== 'stable' || peer.makingOffer) {
+    peer.pendingNegotiation = true; // refaz quando ficar estável (onsignalingstatechange)
+    return;
+  }
   try {
     peer.makingOffer = true;
     const offer = await pc.createOffer();
-    if (pc.signalingState !== 'stable') return;
+    if (pc.signalingState !== 'stable') { peer.pendingNegotiation = true; return; }
     offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.direct) });
     await pc.setLocalDescription(offer);
     sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
   } catch (e) {
     console.error('negotiate', e);
+    peer.pendingNegotiation = true;
   } finally {
     peer.makingOffer = false;
+  }
+  // falhou com a conexão já estável: nenhuma mudança de estado vai disparar de novo, então tenta já
+  if (peer.pendingNegotiation && pc.signalingState === 'stable') {
+    setTimeout(() => {
+      if (peer.pendingNegotiation && pc.signalingState === 'stable') { peer.pendingNegotiation = false; negotiate(peer); }
+    }, 300 + Math.random() * 400);
   }
 }
 
 async function handleDescription(peer, description) {
   const pc = peer.pc;
   try {
-    const collision = description.type === 'offer' && (peer.makingOffer || pc.signalingState !== 'stable');
+    // padrão "perfect negotiation" completo: uma resposta sendo aplicada não conta como colisão
+    const readyForOffer = !peer.makingOffer && (pc.signalingState === 'stable' || peer.settingAnswer);
+    const collision = description.type === 'offer' && !readyForOffer;
     peer.ignoreOffer = !peer.polite && collision;
     if (peer.ignoreOffer) return;
-    // os limites de bitrate/est�reo que EU uso para enviar v�m da descri��o remota
-    await pc.setRemoteDescription({
-      type: description.type,
-      sdp: window.Sdp.munge(description.sdp, {
-        videoKbps: state.settings.bitrate * 1000,
-        native: !!(state.share && state.share.direct),
-      }),
-    });
+    // os limites de bitrate/estéreo que EU uso para enviar vêm da descrição remota
+    peer.settingAnswer = description.type === 'answer';
+    try {
+      await pc.setRemoteDescription({
+        type: description.type,
+        sdp: window.Sdp.munge(description.sdp, {
+          videoKbps: state.settings.bitrate * 1000,
+          native: !!(state.share && state.share.direct),
+        }),
+      });
+    } finally {
+      peer.settingAnswer = false;
+    }
+    // candidatos que chegaram cedo demais
+    if (peer.pendingCands && peer.pendingCands.length) {
+      const list = peer.pendingCands.splice(0);
+      for (const c of list) await handleCandidate(peer, c);
+    }
     if (description.type === 'offer') {
       const answer = await pc.createAnswer();
       answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.direct) });
@@ -392,6 +480,12 @@ function demoteVpnCandidate(c) {
 
 async function handleCandidate(peer, candidate) {
   if (candidate && candidate.candidate && isIPv6Candidate(candidate)) return; // amigo com versão antiga
+  // chegou antes de existir uma descrição remota (ex.: a oferta dele foi descartada numa
+  // colisão): guarda e aplica depois. Antes eram jogados fora e a conexão às vezes nunca fechava.
+  if (!peer.pc.remoteDescription) {
+    (peer.pendingCands = peer.pendingCands || []).push(candidate);
+    return;
+  }
   try {
     await peer.pc.addIceCandidate(demoteVpnCandidate(candidate));
   } catch (e) {
@@ -616,9 +710,20 @@ function readSettings() {
   return { ...s };
 }
 
-async function startShare() {
-  if (!selectedSource) return;
-  const settings = readSettings();
+// overrides: ex. { engine: 'chromium' } quando a captura nativa caiu várias vezes
+let shareBusy = false;
+async function startShare(overrides) {
+  if (shareBusy || !selectedSource) return; // evita dois inícios ao mesmo tempo (duplo clique)
+  shareBusy = true;
+  try {
+    await startShareInner(overrides && !(overrides instanceof Event) ? overrides : null);
+  } finally {
+    shareBusy = false;
+  }
+}
+
+async function startShareInner(overrides) {
+  const settings = { ...readSettings(), ...(overrides || {}) };
   const src = selectedSource;
   $('#btn-start-share').disabled = true;
 
@@ -668,6 +773,8 @@ async function startShare() {
     } catch (e) {
       toast(`Não foi possível capturar: ${e.message}`, 'error');
       $('#btn-start-share').disabled = false;
+      // a captura anterior já foi parada: não deixa um "ao vivo" com imagem congelada
+      if (state.share) await stopShare();
       return;
     }
     video = stream.getVideoTracks()[0];
@@ -693,6 +800,7 @@ async function startShare() {
   state.share = {
     stream, video, audio, settings, preview,
     sourceName: src.name,
+    source: src,                         // para reiniciar a mesma tela se a captura cair
     native: !!nativeInfo,                // captura feita pelo helper
     direct: !!nativeInfo && direct,      // H.264 do helper vai direto para a rede
     width: nativeInfo ? nativeInfo.width : 0,
@@ -708,6 +816,7 @@ async function startShare() {
   $('#share-modal').classList.add('hidden');
   $('#btn-share').textContent = 'Trocar tela';
   $('#btn-stop').classList.remove('hidden');
+  $('#btn-adjust').classList.remove('hidden');
 
   for (const peer of state.peers.values()) {
     applySendParams(peer); // ajusta codec/renegocia se precisar
@@ -783,14 +892,88 @@ async function watchKeyRequests() {
 }
 setInterval(watchKeyRequests, 250);
 
+// ------------------------------------------------------------------ ajustes durante a transmissão
+function openAdjust() {
+  const panel = $('#adjust-panel');
+  if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
+  const s = state.share ? state.share.settings : state.settings;
+  $('#adj-bitrate').value = s.bitrate;
+  $('#adj-bitrate-label').textContent = `${s.bitrate} Mbps`;
+  $('#adj-res').value = s.res;
+  $('#adj-fps').value = String(s.fps);
+  $('#adj-mode').value = s.mode;
+  $('#adj-engine').value = s.engine || 'native';
+  panel.classList.remove('hidden');
+}
+
+// Qualidade: aplica sem reiniciar nada (limites do encoder + renegociação dos limites de banda)
+function applyLiveBitrate(mbps) {
+  state.settings.bitrate = mbps;
+  saveSettings();
+  $('#opt-bitrate').value = mbps;
+  const share = state.share;
+  if (!share) return;
+  share.settings.bitrate = mbps;
+  if (share.direct) {
+    state.nativeKbps = mbps * 1000;
+    window.Helper.videoBitrate(state.nativeKbps);
+  }
+  for (const peer of state.peers.values()) {
+    applySendParams(peer);
+    negotiate(peer); // atualiza os limites de banda combinados (x-google-*)
+  }
+  toast(`Qualidade: ${mbps} Mbps`);
+}
+
+// Resolução/FPS/prioridade/captura: reinicia só a captura da mesma tela
+async function applyAdjust() {
+  if (!state.share) return;
+  $('#opt-res').value = $('#adj-res').value;
+  $('#opt-fps').value = $('#adj-fps').value;
+  $('#opt-mode').value = $('#adj-mode').value;
+  $('#opt-engine').value = $('#adj-engine').value;
+  $('#opt-bitrate').value = $('#adj-bitrate').value;
+  if (state.share.audio) $('#opt-audio').value = state.settings.audio; // mantém o áudio como estava
+  $('#adjust-panel').classList.add('hidden');
+  selectedSource = state.share.source;
+  await startShare();
+}
+
 // eventos do AudioHelper (estatísticas e fim da captura nativa)
 function onHelperEvent(msg) {
   if (msg.type === 'video-stats') state.nativeStats = msg;
   else if (msg.type === 'video-ended' && state.share && state.share.native) {
     toast('A janela compartilhada foi fechada.');
     stopShare();
-  } else if (msg.type === 'video-error') {
-    toast(`Erro na captura: ${msg.message}`, 'error');
+  } else if (msg.type === 'video-warn') {
+    toast(msg.message);
+  } else if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
+    recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
+  }
+}
+
+// A captura nativa parou (placa de vídeo reiniciada, helper caiu...): reinicia a mesma tela
+// sozinho. Se cair 3 vezes em 1 minuto, passa para a captura do Chromium.
+const recoverTimes = [];
+let recovering = false;
+async function recoverShare(reason) {
+  if (recovering || !state.share) return;
+  recovering = true;
+  const now = Date.now();
+  while (recoverTimes.length && now - recoverTimes[0] > 60000) recoverTimes.shift();
+  recoverTimes.push(now);
+  const tooMany = recoverTimes.length > 3;
+  toast(tooMany
+    ? `A captura nativa caiu de novo (${reason}). Usando a captura do Chromium.`
+    : `A captura parou (${reason}). Reiniciando...`, 'error');
+  const src = state.share.source;
+  try {
+    await new Promise((r) => setTimeout(r, 800));
+    if (!state.share || !src) return;
+    selectedSource = src;
+    await startShare(tooMany ? { engine: 'chromium' } : undefined);
+  } finally {
+    recovering = false;
   }
 }
 
@@ -808,6 +991,8 @@ async function stopShare() {
   }
   $('#btn-share').textContent = 'Compartilhar tela';
   $('#btn-stop').classList.add('hidden');
+  $('#btn-adjust').classList.add('hidden');
+  $('#adjust-panel').classList.add('hidden');
   render();
 }
 
@@ -827,7 +1012,15 @@ async function leaveRoom() {
   await stopShare();
   for (const id of [...state.peers.keys()]) removePeer(id);
   // "Sair" não fecha mais a sala de quem hospeda (ela fica aberta em segundo plano)
-  if (state.ws) { const ws = state.ws; state.ws = null; ws.onclose = null; ws.close(); }
+  clearInterval(heartbeat);
+  setReconnectBanner(false);
+  if (state.ws) {
+    const ws = state.ws;
+    state.ws = null;
+    ws.onclose = null;
+    try { ws.send(JSON.stringify({ type: 'leave' })); } catch {} // saída de propósito: avisa na hora
+    setTimeout(() => ws.close(), 200);
+  }
   state.isHost = false;
   if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
   state.ws = null;
@@ -1234,6 +1427,10 @@ function initRoomUi() {
   $('#btn-stop').onclick = stopShare;
   $('#btn-leave').onclick = leaveRoom;
   $('#btn-close-room').onclick = closeRoomForEveryone;
+  $('#btn-adjust').onclick = openAdjust;
+  $('#adj-bitrate').oninput = () => { $('#adj-bitrate-label').textContent = `${$('#adj-bitrate').value} Mbps`; };
+  $('#adj-bitrate').onchange = () => applyLiveBitrate(Number($('#adj-bitrate').value));
+  $('#adj-apply').onclick = applyAdjust;
   $('#modal-close').onclick = () => $('#share-modal').classList.add('hidden');
   $('#share-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'share-modal') $('#share-modal').classList.add('hidden'); });
   $('#btn-start-share').onclick = startShare;

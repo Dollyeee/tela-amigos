@@ -66,11 +66,60 @@
       <div class="top-actions">
         <button id="btn-stats" class="ghost" title="Mostrar estatísticas (S)">Estatísticas</button>
         <button id="btn-share" class="primary">Compartilhar tela</button>
+        <button id="btn-adjust" class="ghost hidden" title="Mudar qualidade sem parar de compartilhar">Ajustes</button>
         <button id="btn-stop" class="danger hidden">Parar</button>
         <button id="btn-leave" class="ghost" title="Sai da sala; se você hospeda, a sala continua aberta">Sair</button>
         <button id="btn-close-room" class="ghost danger-text hidden" title="Fecha a sala para todo mundo">Fechar sala</button>
       </div>
     </header>
+
+    <!-- ajustes durante a transmissão -->
+    <div id="adjust-panel" class="adjust-panel hidden">
+      <div class="adjust-row">
+        <label class="field field-grow">
+          <span>Qualidade: <b id="adj-bitrate-label">20 Mbps</b> <span class="muted">(muda na hora)</span></span>
+          <input id="adj-bitrate" type="range" min="4" max="80" step="1" value="20">
+        </label>
+      </div>
+      <div class="adjust-row">
+        <label class="field">
+          <span>Resolução</span>
+          <select id="adj-res">
+            <option value="native">Nativa do monitor</option>
+            <option value="1440">1440p</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>FPS</span>
+          <select id="adj-fps"><option value="60">60</option><option value="30">30</option></select>
+        </label>
+        <label class="field">
+          <span>Prioridade</span>
+          <select id="adj-mode">
+            <option value="motion">Fluidez</option>
+            <option value="detail">Nitidez</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Captura</span>
+          <select id="adj-engine">
+            <option value="native">Nativa (adapta à rede)</option>
+            <option value="native-direct">Nativa direta</option>
+            <option value="chromium">Chromium</option>
+          </select>
+        </label>
+      </div>
+      <div class="adjust-foot">
+        <span class="muted">Resolução, FPS, prioridade e captura reiniciam só a captura (menos de 1 s).</span>
+        <button id="adj-apply" class="primary">Aplicar</button>
+      </div>
+    </div>
+
+    <div id="reconnect-banner" class="reconnect-banner hidden">
+      Conexão com a sala caiu. Reconectando... (as telas continuam enquanto isso)
+    </div>
 
     <div class="room-body">
       <aside class="sidebar">

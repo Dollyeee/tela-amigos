@@ -150,6 +150,17 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .modal-foot span { flex: 1; font-size: 12px; }
 
 .danger-text { color: #ff8592 !important; }
+.adjust-panel { position: absolute; right: 14px; top: 58px; z-index: 15; width: 520px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+.adjust-row { display: flex; gap: 10px; }
+.adjust-row .field { flex: 1; min-width: 0; }
+.field-grow { flex: 1; }
+.adjust-foot { display: flex; align-items: center; gap: 12px; }
+.adjust-foot span { flex: 1; font-size: 11px; }
+#room { position: relative; }
+.reconnect-banner { background: rgba(242, 179, 61, .15); color: var(--warn); border-bottom: 1px solid rgba(242, 179, 61, .35);
+  padding: 6px 14px; font-size: 13px; text-align: center; }
 .rooms-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
 .rooms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow-y: auto; }
 .rooms li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; background: var(--bg);

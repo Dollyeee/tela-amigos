@@ -24,8 +24,10 @@ window.Sdp = (() => {
           `x-google-max-bitrate=${Math.round(cap || videoKbps * 1.3)}`,
         ]
       : [
-          `x-google-start-bitrate=${Math.round(videoKbps * 0.7)}`,
-          `x-google-min-bitrate=${Math.min(1500, Math.round(videoKbps * 0.2))}`,
+          // a estimativa de banda pelo Radmin é conservadora demais (caía para ~4 Mbps com
+          // 100 Mbps disponíveis): começa no bitrate escolhido e nunca desce de 40% dele
+          `x-google-start-bitrate=${Math.round(videoKbps)}`,
+          `x-google-min-bitrate=${Math.round(videoKbps * 0.4)}`,
           `x-google-max-bitrate=${Math.round(videoKbps * 1.25)}`,
         ];
     const opusParams = ['stereo=1', 'sprop-stereo=1', 'maxaveragebitrate=256000', 'useinbandfec=1'];

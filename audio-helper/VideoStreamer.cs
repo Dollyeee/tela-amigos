@@ -95,6 +95,12 @@ sealed unsafe class VideoStreamer : IDisposable
     IntPtr codecApi;
     byte[]? sequenceHeader;
     int needInput;
+    int inFlight;   // quadros entregues ao encoder que ele ainda não devolveu
+
+    // HDR
+    bool hdr;
+    HdrToneMapper? toneMapper;
+    DirectXPixelFormat poolFormat = DirectXPixelFormat.B8G8R8A8UIntNormalized;
     volatile bool forceKey = true;
     volatile bool running;
     Thread? tickThread, eventThread;
@@ -105,10 +111,15 @@ sealed unsafe class VideoStreamer : IDisposable
     readonly Dictionary<long, long> submitTicks = new();
     readonly Stopwatch clock = Stopwatch.StartNew();
 
+    // o app não deu conta de ler um quadro (fila de saída cheia): os próximos quadros dependem
+    // dele, então pula tudo até o próximo keyframe (e pede um)
+    volatile bool dropUntilKey;
+
     public VideoStreamer(int fps, int bitrateKbps)
     {
         this.fps = fps;
         this.bitrateKbps = bitrateKbps;
+        Program.OnVideoDropped = () => { dropUntilKey = true; forceKey = true; };
     }
 
     // ================================================================ início
@@ -344,7 +355,30 @@ sealed unsafe class VideoStreamer : IDisposable
         }
         Log("item ok");
         poolSize = item.Size;
-        framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 3, poolSize);
+
+        // Monitor em HDR: captura em ponto flutuante (scRGB) e converte para SDR na placa.
+        // Capturar HDR direto em 8 bits deixava as cores lavadas/estouradas para quem assiste.
+        IntPtr hmon = target.Type == "window"
+            ? MonitorFromWindow(new IntPtr(target.Hwnd), 2)
+            : MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2);
+        hdr = false;
+        try
+        {
+            if (HdrInfo.IsHdr(hmon, out var monName) && Environment.GetEnvironmentVariable("TELA_NO_HDR") != "1")
+            {
+                float white = HdrInfo.SdrWhiteScale(monName);
+                toneMapper = new HdrToneMapper(device, context, white);
+                hdr = true;
+                Program.SendJson(new { type = "video-hdr", sdrWhiteNits = Math.Round(white * 80) });
+            }
+        }
+        catch (Exception ex)
+        {
+            toneMapper?.Dispose(); toneMapper = null; hdr = false;
+            Program.SendJson(new { type = "warn", message = $"HDR detectado mas a conversão falhou ({ex.Message}); capturando em 8 bits." });
+        }
+        poolFormat = hdr ? DirectXPixelFormat.R16G16B16A16Float : DirectXPixelFormat.B8G8R8A8UIntNormalized;
+        framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(winrtDevice, poolFormat, 3, poolSize);
         framePool.FrameArrived += OnFrameArrived;
         session = framePool.CreateCaptureSession(item);
         try { session.IsBorderRequired = false; } catch { }
@@ -366,6 +400,7 @@ sealed unsafe class VideoStreamer : IDisposable
             var desc = tex.Description;
             lock (gpuLock)
             {
+                if (device == null || nv12[0] == null) return; // já foi encerrado (ou ainda iniciando)
                 if (latest == null || latestW != (int)desc.Width || latestH != (int)desc.Height)
                 {
                     vpIn?.Dispose(); vpIn = null;
@@ -373,11 +408,16 @@ sealed unsafe class VideoStreamer : IDisposable
                     latest = device.CreateTexture2D(new Texture2DDescription
                     {
                         Width = desc.Width, Height = desc.Height, MipLevels = 1, ArraySize = 1,
-                        Format = Format.B8G8R8A8_UNorm, SampleDescription = new SampleDescription(1, 0),
+                        Format = desc.Format, SampleDescription = new SampleDescription(1, 0), // BGRA 8 bits ou FP16 (HDR)
                         Usage = ResourceUsage.Default, BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
                     });
                     latestW = (int)desc.Width;
                     latestH = (int)desc.Height;
+                    if (toneMapper != null)
+                    {
+                        toneMapper.ResetSource();
+                        toneMapper.Process(latest, latestW, latestH); // cria a textura SDR do novo tamanho
+                    }
                     CreateProcessor();
                 }
                 context.CopyResource(latest, tex);
@@ -393,7 +433,7 @@ sealed unsafe class VideoStreamer : IDisposable
         if (cs.Width != poolSize.Width || cs.Height != poolSize.Height)
         {
             poolSize = cs;
-            pool.Recreate(winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 3, cs);
+            pool.Recreate(winrtDevice, poolFormat, 3, cs);
         }
     }
 
@@ -425,7 +465,8 @@ sealed unsafe class VideoStreamer : IDisposable
         };
         videoDevice.CreateVideoProcessorEnumerator(content, out vpEnum).CheckError();
         videoDevice.CreateVideoProcessor(vpEnum, 0, out vp).CheckError();
-        videoDevice.CreateVideoProcessorInputView(latest!, vpEnum,
+        // no HDR, o VideoProcessor lê a versão já convertida para SDR
+        videoDevice.CreateVideoProcessorInputView(toneMapper?.Output ?? latest!, vpEnum,
             new VideoProcessorInputViewDescription { FourCC = 0, ViewDimension = VideoProcessorInputViewDimension.Texture2D, Texture2D = new Texture2DVideoProcessorInputView { MipSlice = 0 } },
             out vpIn).CheckError();
         for (int i = 0; i < Ring; i++)
@@ -460,13 +501,20 @@ sealed unsafe class VideoStreamer : IDisposable
     // ================================================================ encoder (Media Foundation, async HW MFT)
     void CreateEncoder(IMFActivate activate)
     {
-        encoder = activate.ActivateObject<IMFTransform>(typeof(IMFTransform).GUID);
-        activate.Dispose();
-        using (var attrs = encoder.Attributes) attrs.Set(TRANSFORM_ASYNC_UNLOCK, 1u);
+        Step("criar o encoder", () =>
+        {
+            encoder = activate.ActivateObject<IMFTransform>(typeof(IMFTransform).GUID);
+            activate.Dispose();
+            using var attrs = encoder.Attributes;
+            attrs.Set(TRANSFORM_ASYNC_UNLOCK, 1u);
+        });
 
-        deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
-        deviceManager.ResetDevice(device).CheckError();
-        encoder.ProcessMessage(TMessageType.MessageSetD3DManager, (UIntPtr)(ulong)deviceManager.NativePointer);
+        Step("ligar o encoder à placa de vídeo", () =>
+        {
+            deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
+            deviceManager.ResetDevice(device).CheckError();
+            encoder.ProcessMessage(TMessageType.MessageSetD3DManager, (UIntPtr)(ulong)deviceManager.NativePointer);
+        });
 
         Guid iid = IID_ICodecAPI;
         if (Marshal.QueryInterface(encoder.NativePointer, ref iid, out codecApi) != 0) codecApi = IntPtr.Zero;
@@ -479,24 +527,41 @@ sealed unsafe class VideoStreamer : IDisposable
         SetCodec(CODECAPI_GOPSize, (uint)fps * 4);
         SetCodec(CODECAPI_QualityVsSpeed, 50u);
 
-        using (var outType = MediaFactory.MFCreateMediaType())
+        // Formato de saída: tenta o completo (High + cores BT.709); se o encoder recusar,
+        // tenta versões mais simples antes de desistir.
+        var outErrors = new List<string>();
+        foreach (var (profile, colors) in new[] { (100u, true), (100u, false), (77u, false), (0u, false) })
         {
-            outType.Set(MT_MAJOR_TYPE, MediaType_Video);
-            outType.Set(MT_SUBTYPE, VideoFormat_H264);
-            outType.Set(MT_AVG_BITRATE, (uint)bitrateKbps * 1000);
-            outType.Set(MT_FRAME_SIZE, ((ulong)Width << 32) | (uint)Height);
-            outType.Set(MT_FRAME_RATE, ((ulong)fps << 32) | 1u);
-            outType.Set(MT_PIXEL_ASPECT_RATIO, (1UL << 32) | 1u);
-            outType.Set(MT_INTERLACE_MODE, 2u);                 // progressivo
-            outType.Set(MT_MPEG2_PROFILE, 100u);                // High
-            outType.Set(MT_YUV_MATRIX, 1u);                     // BT.709
-            outType.Set(MT_VIDEO_NOMINAL_RANGE, 2u);            // 16-235
-            outType.Set(MT_VIDEO_PRIMARIES, 2u);
-            outType.Set(MT_TRANSFER_FUNCTION, 5u);
-            encoder.SetOutputType(0, outType, 0);
+            try
+            {
+                using var outType = MediaFactory.MFCreateMediaType();
+                outType.Set(MT_MAJOR_TYPE, MediaType_Video);
+                outType.Set(MT_SUBTYPE, VideoFormat_H264);
+                outType.Set(MT_AVG_BITRATE, (uint)bitrateKbps * 1000);
+                outType.Set(MT_FRAME_SIZE, ((ulong)Width << 32) | (uint)Height);
+                outType.Set(MT_FRAME_RATE, ((ulong)fps << 32) | 1u);
+                outType.Set(MT_PIXEL_ASPECT_RATIO, (1UL << 32) | 1u);
+                outType.Set(MT_INTERLACE_MODE, 2u);                       // progressivo
+                if (profile != 0) outType.Set(MT_MPEG2_PROFILE, profile); // 100 High, 77 Main
+                if (colors)
+                {
+                    outType.Set(MT_YUV_MATRIX, 1u);                       // BT.709
+                    outType.Set(MT_VIDEO_NOMINAL_RANGE, 2u);              // 16-235
+                    outType.Set(MT_VIDEO_PRIMARIES, 2u);
+                    outType.Set(MT_TRANSFER_FUNCTION, 5u);
+                }
+                encoder.SetOutputType(0, outType, 0);
+                outErrors.Clear();
+                break;
+            }
+            catch (Exception ex) { outErrors.Add($"perfil {profile}{(colors ? "+cores" : "")}: {ex.Message}"); }
         }
-        using (var inType = MediaFactory.MFCreateMediaType())
+        if (outErrors.Count > 0)
+            throw new Exception($"Falha ao definir o formato de saída {Width}x{Height}@{fps} ({string.Join("; ", outErrors)})");
+
+        Step($"definir o formato de entrada NV12 {Width}x{Height}", () =>
         {
+            using var inType = MediaFactory.MFCreateMediaType();
             inType.Set(MT_MAJOR_TYPE, MediaType_Video);
             inType.Set(MT_SUBTYPE, VideoFormat_NV12);
             inType.Set(MT_FRAME_SIZE, ((ulong)Width << 32) | (uint)Height);
@@ -504,12 +569,15 @@ sealed unsafe class VideoStreamer : IDisposable
             inType.Set(MT_PIXEL_ASPECT_RATIO, (1UL << 32) | 1u);
             inType.Set(MT_INTERLACE_MODE, 2u);
             encoder.SetInputType(0, inType, 0);
-        }
+        });
         ReadSequenceHeader();
 
-        events = encoder.QueryInterface<IMFMediaEventGenerator>();
-        encoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
-        encoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+        Step("iniciar o encoder", () =>
+        {
+            events = encoder.QueryInterface<IMFMediaEventGenerator>();
+            encoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
+            encoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+        });
     }
 
     void ReadSequenceHeader()
@@ -572,12 +640,27 @@ sealed unsafe class VideoStreamer : IDisposable
                 var type = ev.EventType;
                 if (type == MediaEventTypes.TransformNeedInput) Interlocked.Increment(ref needInput);
                 else if (type == MediaEventTypes.TransformHaveOutput) DrainOutput();
+                else if (type == MediaEventTypes.Error || ev.Status.Failure)
+                {
+                    // ex.: a placa de vídeo foi resetada (driver atualizado, jogo trocou o modo de tela)
+                    Fail($"encoder parou (0x{ev.Status.Code:X8})");
+                    return;
+                }
             }
         }
         catch (Exception ex)
         {
-            if (running) Program.SendJson(new { type = "video-error", message = "encoder: " + ex.Message });
+            Fail("encoder: " + ex.Message);
         }
+    }
+
+    /// Para tudo e avisa o app uma única vez (ele reinicia a captura sozinho).
+    int failed;
+    void Fail(string message)
+    {
+        if (!running || Interlocked.Exchange(ref failed, 1) == 1) return;
+        running = false;
+        Program.SendJson(new { type = "video-error", message });
     }
 
     void DrainOutput()
@@ -604,6 +687,12 @@ sealed unsafe class VideoStreamer : IDisposable
         bool key = false;
         try { key = sample.GetUInt32(SampleExtension_CleanPoint) != 0; } catch { }
         long time100ns = sample.SampleTime;
+        Interlocked.Decrement(ref inFlight); // o encoder terminou de usar uma textura de entrada
+        if (dropUntilKey)
+        {
+            if (!key) return;
+            dropUntilKey = false;
+        }
 
         using var buffer = sample.ConvertToContiguousBuffer();
         buffer.Lock(out IntPtr ptr, out _, out int len);
@@ -648,6 +737,7 @@ sealed unsafe class VideoStreamer : IDisposable
         long start = clock.ElapsedTicks;
         long n = 0;
         long lastStats = start;
+        bool warnedNoFrames = false;
         try
         {
             while (running)
@@ -658,21 +748,31 @@ sealed unsafe class VideoStreamer : IDisposable
                 if (now > due + periodTicks * 4) { n = (now - start) / periodTicks; continue; } // travou: pula
                 WaitUntil(timer, due);
 
-                if (Interlocked.CompareExchange(ref capturedFrames, 0, 0) == 0) continue; // nada capturado ainda
-                if (Volatile.Read(ref needInput) <= 0) { statDropped++; continue; }        // encoder ocupado
-                Interlocked.Decrement(ref needInput);
-                SubmitFrame(n * 10_000_000L / fps);
-
+                // estatísticas e verificação da placa uma vez por segundo (antes de qualquer "continue")
                 if (clock.ElapsedTicks - lastStats >= Stopwatch.Frequency)
                 {
                     SendStats((clock.ElapsedTicks - lastStats) / (double)Stopwatch.Frequency);
                     lastStats = clock.ElapsedTicks;
+                    var removed = device.DeviceRemovedReason;
+                    if (removed.Failure) { Fail($"a placa de vídeo foi reiniciada (0x{removed.Code:X8})"); break; }
+                    if (!warnedNoFrames && Interlocked.Read(ref capturedFrames) == 0 && clock.ElapsedTicks - start > Stopwatch.Frequency * 4)
+                    {
+                        warnedNoFrames = true;
+                        Program.SendJson(new { type = "video-warn", message = "Nenhuma imagem capturada ainda. A janela está minimizada?" });
+                    }
                 }
+
+                if (Interlocked.Read(ref capturedFrames) == 0) continue;                 // nada capturado ainda
+                if (Volatile.Read(ref needInput) <= 0) { statDropped++; continue; }        // encoder ocupado
+                // nunca reescrever uma textura que o encoder ainda está lendo
+                if (Volatile.Read(ref inFlight) >= Ring - 1) { statDropped++; continue; }
+                Interlocked.Decrement(ref needInput);
+                if (!SubmitFrame(n * 10_000_000L / fps)) Interlocked.Increment(ref needInput); // devolve o crédito
             }
         }
         catch (Exception ex)
         {
-            if (running) Program.SendJson(new { type = "video-error", message = "captura: " + ex.Message });
+            Fail("captura: " + ex.Message);
         }
         finally
         {
@@ -694,13 +794,14 @@ sealed unsafe class VideoStreamer : IDisposable
         while (clock.ElapsedTicks < dueTicks) Thread.SpinWait(50);
     }
 
-    void SubmitFrame(long time100ns)
+    bool SubmitFrame(long time100ns)
     {
         int idx = ringIndex;
-        ringIndex = (ringIndex + 1) % Ring;
         lock (gpuLock)
         {
-            if (vp == null || vpIn == null) return;
+            if (vp == null || vpIn == null || vpOut[idx] == null) return false;
+            ringIndex = (ringIndex + 1) % Ring;
+            if (toneMapper != null && latest != null) toneMapper.Process(latest, latestW, latestH); // HDR -> SDR
             SetRects();
             var stream = new VideoProcessorStream { Enable = true, InputSurface = vpIn };
             videoContext.VideoProcessorBlt(vp, vpOut[idx], 0, 1, new[] { stream }).CheckError();
@@ -718,7 +819,9 @@ sealed unsafe class VideoStreamer : IDisposable
             SetCodec(CODECAPI_ForceKeyFrame, 1u);
         }
         lock (submitTicks) submitTicks[time100ns] = clock.ElapsedTicks;
+        Interlocked.Increment(ref inFlight);
         encoder.ProcessInput(0, sample, 0);
+        return true;
     }
 
     void SendStats(double seconds)
@@ -778,6 +881,8 @@ sealed unsafe class VideoStreamer : IDisposable
                 vpOut[i] = null!; nv12[i] = null!;
             }
             try { latest?.Dispose(); } catch { }
+            try { toneMapper?.Dispose(); } catch { }
+            toneMapper = null; hdr = false;
             vpIn = null; vp = null; vpEnum = null; latest = null; latestW = latestH = 0;
         }
         try { events?.Dispose(); } catch { }
@@ -791,6 +896,8 @@ sealed unsafe class VideoStreamer : IDisposable
         videoContext = null!; videoDevice = null!; context = null!; device = null!;
         sequenceHeader = null;
         Volatile.Write(ref capturedFrames, 0);
+        Volatile.Write(ref inFlight, 0);
+        Volatile.Write(ref needInput, 0);
     }
 
     // ================================================================ interop
