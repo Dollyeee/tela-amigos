@@ -287,6 +287,7 @@ const scriptB = common + `
     sendRelay(null, { kind: 'chat', text: 'smoke-smart-normal' });
     await until(async () => (await inMain()).frameHeight === 720, 45000, 'resolução inteligente voltar');
     log('resolução inteligente voltou (720p)');
+    await sleep(5000); // encoder assentar no tamanho cheio antes das próximas trocas
     // foto da tela
     const shot = await takeShot(peer().id);
     if (!shot) throw new Error('foto não salvou');

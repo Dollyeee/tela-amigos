@@ -115,6 +115,22 @@ async function buildRendererDiag() {
       });
     } catch {}
   }
+  // áudio: o que o helper vê tocando e o que está capturando (ex.: som do jogo não chega)
+  try {
+    const t0 = performance.now();
+    const l = await window.Helper.list();
+    const ms = Math.round(performance.now() - t0);
+    lines.push('', '===== áudio =====');
+    if (l.type === 'error') lines.push(`helper NÃO respondeu à lista de programas (${l.message})`);
+    else {
+      lines.push(`helper respondeu em ${ms} ms · opção de som="${state.settings.audio}" · enviando som=${!!(state.share && state.share.audio)}`);
+      lines.push(`programas com som aberto: ${(l.apps || []).map((a) => `${a.name} [${a.exe} pid ${a.pid}${a.discord ? ' DISCORD' : ''}]`).join(' · ') || 'nenhum'}`);
+    }
+    if (state.share && state.share.audio) {
+      const m = await window.Helper.mixerApps();
+      lines.push(`capturando agora: ${m.type === 'error' ? 'sem resposta' : (m.apps || []).map((a) => `${a.name} [${a.exe} pid ${a.pid}]`).join(' · ') || 'nada'}`);
+    }
+  } catch {}
   try {
     const d = await window.Helper.diag();
     lines.push('', `placas/encoders: ${safeJson(d.info || d)}`);
@@ -1372,6 +1388,7 @@ async function startShareInner(overrides) {
       audio = await window.HelperAudio.start(mode, pid);
       sendStoredGains(); // volumes do mixer guardados
     } catch (e) {
+      console.warn('áudio da transmissão:', e.message);
       toast(`Áudio indisponível: ${e.message}`, 'error');
     }
   } else if (state.share && state.share.audio) {
@@ -2621,6 +2638,7 @@ function onHelperEvent(msg) {
   }
   if (msg.type === 'boost') console.log(`prioridade de GPU (pid: nível 4=alta, 3=acima do normal): ${safeJson(msg.result)}`);
   if (msg.type === 'helper-exit') console.warn(`AudioHelper fechou (código ${msg.code})`);
+  if (msg.type === 'warn') console.warn(`AudioHelper: ${msg.message}`); // ex.: falha ao capturar o som de um jogo
   if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
   }

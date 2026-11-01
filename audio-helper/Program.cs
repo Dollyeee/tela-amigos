@@ -579,7 +579,7 @@ sealed class Mixer : IDisposable
         {
             cap.Dead = true;
             lock (capLock) failedUntil[pid] = DateTime.UtcNow.AddSeconds(30); // não insiste a cada 2 s
-            Program.SendJson(new { type = "warn", message = $"Falha ao capturar pid {pid}: {ex.Message}" });
+            Program.SendJson(new { type = "warn", message = $"Falha ao capturar o som de {(cap.Exe.Length > 0 ? cap.Exe : "?")} (pid {pid}): {ex.Message}" });
         }
     }
 
