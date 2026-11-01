@@ -38,6 +38,8 @@ process.on('uncaughtException', (e) => console.error('erro não tratado no proce
 process.on('unhandledRejection', (e) => console.error('promessa rejeitada no processo principal:', e));
 
 const SIGNAL_PORT = Number(process.env.TELA_PORT) || 47800;
+// aberto junto com o Windows: começa só no ícone da bandeja
+const STARTED_HIDDEN = process.argv.includes('--hidden');
 
 // Sem isso o WebRTC esconde o IP local atrás de nomes ".local" (mDNS), que não
 // resolvem pela VPN do Radmin -> a conexão direta falharia.
@@ -153,7 +155,7 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: '#0e0f13',
     title: 'Tela Amigos',
-    show: !process.env.TELA_TEST_HIDDEN, // teste automático roda sem janela na tela
+    show: !process.env.TELA_TEST_HIDDEN && !STARTED_HIDDEN, // teste sem janela; com o Windows: só na bandeja
     icon: path.join(__dirname, 'renderer', 'icon.png'),
     autoHideMenuBar: true,
     // barra de título integrada: o topo do app vira a área de arrastar e os botões do Windows
@@ -531,12 +533,18 @@ function setupAutoUpdate() {
 }
 
 ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle('app:autostart', (_e, on) => {
+  if (!app.isPackaged) return false; // rodando pelo npm start: não mexe no Windows
+  if (typeof on === 'boolean') app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'] });
+  return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
+});
+ipcMain.handle('app:started-hidden', () => STARTED_HIDDEN);
 
 // ---- diagnóstico: junta tudo num .txt na Área de Trabalho e mostra o arquivo ----
-ipcMain.handle('diag:save', async (_e, rendererText) => {
+async function buildDiag(rendererText) {
   let gpu = '';
   try { gpu = JSON.stringify(await app.getGPUInfo('basic'), null, 1).slice(0, 4000); } catch {}
-  const text = [
+  return [
     `Tela Amigos v${app.getVersion()} — diagnóstico ${new Date().toLocaleString('pt-BR')}`,
     `Windows ${os.release()} · ${os.cpus()[0] && os.cpus()[0].model} · ${os.cpus().length} núcleos · RAM ${Math.round(os.totalmem() / 1e9)} GB`,
     `Redes: ${JSON.stringify(localIPs())}`,
@@ -545,8 +553,14 @@ ipcMain.handle('diag:save', async (_e, rendererText) => {
     '', '===== registro em arquivo (inclui sessões anteriores) =====', readLogTail(400),
     '', '===== placa de vídeo =====', gpu,
   ].join('\n');
+}
+ipcMain.handle('diag:build', (_e, rendererText) => buildDiag(String(rendererText || '')));
+// opts.raw: texto pronto (diagnóstico que veio de um amigo); opts.name: nome dele no arquivo
+ipcMain.handle('diag:save', async (_e, rendererText, opts = {}) => {
+  const text = opts.raw ? String(rendererText).slice(0, 5_000_000) : await buildDiag(rendererText);
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
-  const file = path.join(app.getPath('desktop'), `TelaAmigos-diagnostico-${stamp}.txt`);
+  const who = opts.name ? '-' + String(opts.name).replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) : '';
+  const file = path.join(TEST_HIDDEN ? app.getPath('userData') : app.getPath('desktop'), `TelaAmigos-diagnostico${who}-${stamp}.txt`);
   fs.writeFileSync(file, '﻿' + text, 'utf8'); // com BOM: acentos certos em qualquer editor
   if (!TEST_HIDDEN) shell.showItemInFolder(file);
   return file;

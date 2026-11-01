@@ -372,3 +372,16 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 /* volume acima de 100% (reforço) */
 .vol.boost input { accent-color: #ffb347; }
 .vol.boost .vol-pct { color: #ffcf80; }
+
+/* zoom na tela */
+.tile.zoomed video { cursor: grab; }
+.tile.zoomed.pen-on video { cursor: crosshair; }
+.zoom-badge { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px;
+  background: rgba(14, 15, 19, .8); border-radius: 10px; padding: 2px 4px 2px 10px; font-size: 12px; }
+.zoom-badge button { border: none; background: #2a2e44; color: #fff; border-radius: 6px; padding: 1px 7px; cursor: pointer; font: inherit; }
+.tile.thumb .zoom-badge { display: none; }
+/* diagnóstico do amigo: aparece ao passar o mouse na pessoa */
+#people li { position: relative; }
+#people .person-diag { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); margin: 0;
+  opacity: 0; pointer-events: none; transition: opacity .15s; background: var(--panel-2); }
+#people li:hover .person-diag { opacity: 1; pointer-events: auto; }

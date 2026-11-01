@@ -26,6 +26,10 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **HDR → SDR automático**: quem joga com HDR ligado aparece com as cores certas para quem assiste.
 - **Telas lisas enquanto joga**: com jogo pesado aberto, o app ganha prioridade alta na placa de vídeo e as telas dos amigos ganham ~0,15 s de buffer para não engasgar. Dica: limitar o FPS do jogo (ex.: 3 abaixo da taxa do monitor) deixa a placa com folga e ajuda muito.
 - **Sala sobrevive à atualização**: o instalador fecha tudo que roda da pasta do app; se a sua sala estava aberta, ela reabre sozinha quando o app volta (os amigos reconectam sozinhos).
+- **Zoom**: Ctrl + rodinha aproxima a tela de um amigo no ponto do mouse (até 600%); arraste para mover; ✕ ou Ctrl+0 volta.
+- **Atraso por amigo**: botão de relógio na tela dele: *Automático* (mínimo, +0,15 s com jogo pesado), *Atraso mínimo* (jogar junto) ou *Imagem lisa* (+0,35 s, para rede instável). Fica salvo por amigo.
+- **Diagnóstico do amigo com um clique**: passe o mouse no nome dele na lista e clique em 🩺; o diagnóstico dele chega na sua Área de Trabalho.
+- **Abrir com o Windows** e **Entrar sozinho na última sala** (Opções): o app abre só na bandeja e entra na sala de antes (quem hospeda reabre a própria).
 - **Registro de problemas**: tudo fica em `%APPDATA%\Tela Amigos\logs`; se a tela do app cair, ela recarrega sozinha.
 - **Ajustes** durante a transmissão: qualidade muda na hora; resolução/FPS/captura sem parar.
 - Layouts **Grade** e **Foco** (miniaturas embaixo). Duplo clique foca/desfoca; **Esc** sai da tela cheia e do foco;

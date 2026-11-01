@@ -190,6 +190,28 @@ const scriptB = common + `
     if (!(t.trailLines && t.trailLines.length >= 5)) throw new Error('caneta não desenhou localmente');
     await sleep(1500);
     log('caneta desenhou ' + t.trailLines.length + ' traços');
+    t.penBtn.click(); // desliga a caneta
+    // zoom: Ctrl + rodinha no meio da tela do A
+    const zr = t.el.getBoundingClientRect();
+    for (let i = 0; i < 3; i++) t.el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100, clientX: zr.left + zr.width / 2, clientY: zr.top + zr.height / 2 }));
+    const zoomed = t.zoom.s;
+    if (!(zoomed > 1.9) || !/scale/.test(t.video.style.transform) || t.el.querySelector('.zoom-badge').classList.contains('hidden')) throw new Error('zoom não aplicou: ' + zoomed);
+    t.resetZoom();
+    if (t.zoom.s !== 1 || t.video.style.transform) throw new Error('zoom não voltou');
+    log('zoom ok (' + Math.round(zoomed * 100) + '% e voltou)');
+    // atraso por amigo: automático -> mínimo -> lisa (buffer de 0,35 s no receptor)
+    cycleLatency(peer().id); cycleLatency(peer().id);
+    const jb = peer().pc.getReceivers().filter((r) => r.track && r.track.kind === 'video').map((r) => r.jitterBufferTarget);
+    if (!jb.every((x) => x === 350)) throw new Error('modo "imagem lisa" não aplicou: ' + JSON.stringify(jb));
+    cycleLatency(peer().id); // volta ao automático
+    log('atraso por amigo ok');
+    // diagnóstico do amigo com um clique
+    requestDiag(peer());
+    const toastsD = () => [...document.querySelectorAll('#toasts > *')].map((x) => x.textContent).join(' | ');
+    await until(() => /Diagnóstico de Teste A salvo/.test(toastsD()), 30000, 'diagnóstico do amigo chegar');
+    const f = /: (TelaAmigos-diagnostico-Teste A-[^ |]+\.txt)/.exec(toastsD());
+    console.log('SMOKEDIAG ' + (f ? f[1] : '?'));
+    log('diagnóstico do amigo chegou: ' + (f ? f[1] : '?'));
     // "Nativa direta" em H.265
     sendRelay(null, { kind: 'chat', text: 'smoke-direct-pedido' });
     await until(() => /smoke-direct-ligada/.test($('#chat-log').textContent), 15000, 'A ligar a direta em H.265');
@@ -229,6 +251,7 @@ function runInstance(name, script) {
   const child = spawn(electronPath, ['.'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];
   const files = [];
+  const diags = [];
   let rest = '';
   child.stdout.on('data', (d) => {
     rest += d.toString();
@@ -237,13 +260,15 @@ function runInstance(name, script) {
     for (const l of parts) {
       const f = /SMOKEFILE (.*)$/.exec(l);
       if (f) { files.push(f[1].trim()); continue; }
+      const dg = /SMOKEDIAG (.*)$/.exec(l);
+      if (dg) { diags.push(dg[1].trim()); continue; }
       const m = /SMOKE (.*)$/.exec(l);
       if (m) { lines.push(m[1]); console.log(`  [${name}] ${m[1]}`); }
     }
   });
   child.stderr.on('data', () => {});
   const done = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
-  return { child, lines, files, done };
+  return { child, lines, files, diags, done };
 }
 
 async function main() {
@@ -277,6 +302,16 @@ async function main() {
       }
       fs.unlinkSync(f);
     } catch (e) { errors.push(`gravação ilegível: ${e.message}`); }
+  }
+  // diagnóstico que veio do A: completo (parte do app e do processo principal)
+  for (const name of b.diags) {
+    const f = path.join(process.env.APPDATA, 'Tela Amigos', 'smoke-b', name);
+    try {
+      const t = fs.readFileSync(f, 'utf8');
+      if (!/Tela Amigos v\d/.test(t) || !/nome=Teste A/.test(t) || !/===== registro em arquivo/.test(t)) errors.push('diagnóstico do amigo incompleto');
+      else console.log(`  diagnóstico do amigo completo (${Math.round(t.length / 1000)} KB)`);
+      fs.unlinkSync(f);
+    } catch (e) { errors.push(`diagnóstico do amigo ilegível: ${e.message}`); }
   }
   const ok = result !== 'timeout' && a.lines.includes('A OK') && b.lines.includes('B OK') && !errors.length;
   if (!ok) {

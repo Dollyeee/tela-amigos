@@ -21,7 +21,10 @@ contextBridge.exposeInMainWorld('native', {
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   onUpdateStatus: (cb) => ipcRenderer.on('update:status', (_e, s) => cb(s)),
 
-  saveDiagnostics: (text) => ipcRenderer.invoke('diag:save', text),
+  saveDiagnostics: (text, opts) => ipcRenderer.invoke('diag:save', text, opts),
+  buildDiagnostics: (text) => ipcRenderer.invoke('diag:build', text),
+  autostart: (on) => ipcRenderer.invoke('app:autostart', on),
+  startedHidden: () => ipcRenderer.invoke('app:started-hidden'),
   focusWindow: () => ipcRenderer.invoke('window:focus'),
   trayStatus: (s) => ipcRenderer.send('tray:status', s),
   saveClip: (name, buffer) => ipcRenderer.invoke('clip:save', name, buffer),

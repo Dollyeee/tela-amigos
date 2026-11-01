@@ -72,6 +72,11 @@ function safeJson(o) { try { return JSON.stringify(o); } catch { return String(o
 
 // Junta tudo o que ajuda a achar um problema e salva na Área de Trabalho
 async function saveDiagnostics() {
+  const file = await window.native.saveDiagnostics(await buildRendererDiag());
+  toast(`Diagnóstico salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}. Mande esse arquivo.`);
+}
+
+async function buildRendererDiag() {
   const lines = [];
   const s = state.share;
   lines.push(`nome=${state.myName} id=${state.myId} sala=${state.hostIp} anfitriao=${!!state.isHost} layout=${state.layout}`);
@@ -106,8 +111,43 @@ async function saveDiagnostics() {
     lines.push('', `placas/encoders: ${safeJson(d.info || d)}`);
   } catch {}
   lines.push('', '===== registro =====', ...appLog);
-  const file = await window.native.saveDiagnostics(lines.join('\n'));
-  toast(`Diagnóstico salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}. Mande esse arquivo.`);
+  return lines.join('\n');
+}
+
+// ------------------------------------------------------------------ diagnóstico dos amigos
+// "Pedir diagnóstico": o amigo monta o diagnóstico completo dele e manda pelo canal de dados
+// (em pedaços); chega aqui salvo na Área de Trabalho com o nome dele.
+const diagIn = new Map(); // id do amigo -> { parts, n, timer }
+function requestDiag(peer) {
+  if (!peer.dc || peer.dc.readyState !== 'open') { toast(`Sem conexão direta com ${peer.name} agora.`, 'error'); return; }
+  if (diagIn.has(peer.id)) return;
+  try { dcSend(peer, { t: 'diag-req' }); } catch (e) { toast(e.message, 'error'); return; }
+  const timer = setTimeout(() => {
+    diagIn.delete(peer.id);
+    toast(`${peer.name} não respondeu ao pedido de diagnóstico (ele precisa estar na versão nova).`, 'error');
+  }, 45000);
+  diagIn.set(peer.id, { parts: [], n: 0, timer });
+  toast(`Pedindo o diagnóstico de ${peer.name}...`);
+}
+async function sendMyDiag(peer) {
+  toast(`${peer.name} pediu o seu diagnóstico (para achar problemas). Enviando...`);
+  const text = await window.native.buildDiagnostics(await buildRendererDiag());
+  const CH = 60000, n = Math.max(1, Math.ceil(text.length / CH));
+  for (let i = 0; i < n; i++) {
+    dcSend(peer, { t: 'diag-part', i, n, data: text.slice(i * CH, (i + 1) * CH) });
+    while (peer.dc.bufferedAmount > (1 << 20)) await new Promise((r) => setTimeout(r, 50));
+  }
+}
+async function onDiagPart(peer, m) {
+  const d = diagIn.get(peer.id);
+  if (!d || !Number.isInteger(m.i) || !Number.isInteger(m.n) || m.n > 200 || m.i < 0 || m.i >= m.n) return;
+  d.parts[m.i] = String(m.data || '');
+  d.n = m.n;
+  if (d.parts.filter((x) => x != null).length < m.n) return;
+  clearTimeout(d.timer);
+  diagIn.delete(peer.id);
+  const file = await window.native.saveDiagnostics(d.parts.join(''), { raw: true, name: peer.name });
+  toast(`Diagnóstico de ${peer.name} salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}`);
 }
 
 // ------------------------------------------------------------------ sons de aviso
@@ -155,6 +195,7 @@ async function initLobby() {
     const radmin = info.ips.find((x) => x.radmin) || info.ips[0];
     state.hostIp = radmin ? radmin.ip : '127.0.0.1';
     state.isHost = true;
+    localStorage.setItem('lastRole', 'host');
     connect('127.0.0.1', true);
   };
   $('#btn-close-my-room').onclick = async () => {
@@ -164,6 +205,29 @@ async function initLobby() {
   refreshMyRoom();
   renderRooms();
   discoverLoop();
+  autoJoinOnStart();
+}
+
+// Entrar sozinho na última sala ao abrir (opção). Quem hospedava reabre a própria sala; quem
+// entrava tenta a sala de antes até ela aparecer (o PC de quem hospeda pode ligar depois).
+async function autoJoinOnStart() {
+  if (localStorage.getItem('autoJoin') !== '1') return;
+  const name = (localStorage.getItem('name') || '').trim();
+  if (!name) return;
+  const role = localStorage.getItem('lastRole');
+  const ip = localStorage.getItem('hostIp');
+  const deadline = Date.now() + 30 * 60 * 1000;
+  for (;;) {
+    if (!$('#lobby').classList.contains('hidden') || Date.now() > deadline || localStorage.getItem('autoJoin') !== '1') return;
+    if (!$('#btn-join').disabled) {
+      $('#name').value = name;
+      if (role === 'host') { $('#btn-host').click(); }
+      else if (ip) { joinRoom(ip); }
+      else return;
+    }
+    await new Promise((r) => setTimeout(r, 20000));
+    if (role === 'host') return; // a própria sala: uma tentativa basta
+  }
 }
 
 // ------------------------------------------------------------------ salas abertas / recentes
@@ -247,6 +311,7 @@ async function refreshMyRoom() {
     const ip = $('#host-ip').value.trim();
     if (!/^[\w.-]+$/.test(ip)) return showLobbyError('Digite o IP de quem está hospedando.');
     localStorage.setItem('hostIp', ip);
+    localStorage.setItem('lastRole', 'guest');
     state.hostIp = ip;
     connect(ip, false);
   };
@@ -1293,6 +1358,8 @@ function onDataMessage(peer, data) {
     }
     case 'st-res': dcResolve(peer, 'st-res', m.ms ? (m.bytes * 8) / (m.ms / 1000) : 0); break;
     case 'st-rev': stBlast(peer).catch(() => {}); break; // ele pediu para medir o sentido contrário
+    case 'diag-req': sendMyDiag(peer).catch((e) => console.warn('enviar diagnóstico', e)); break;
+    case 'diag-part': onDiagPart(peer, m).catch((e) => console.warn('receber diagnóstico', e)); break;
     default: break;
   }
 }
@@ -2312,13 +2379,34 @@ function onHelperEvent(msg) {
 // telas dos amigos engasgam. Um pequeno buffer de reprodução (~150 ms a mais de atraso) absorve
 // essas variações; sem jogo, volta ao mínimo (menor atraso possível).
 const GAME_BUFFER_MS = 150;
+// Atraso de cada amigo (guardado pelo nome):
+//  auto   = mínimo; com jogo pesado aberto ganha +0,15 s para não engasgar
+//  low    = sempre o mínimo possível (jogar junto, dar dica na hora)
+//  smooth = +0,35 s de buffer: absorve as variações da rede (Radmin ruim, Wi-Fi)
+const LATENCY_MODES = { auto: 'Automático', low: 'Atraso mínimo', smooth: 'Imagem lisa (+0,35 s)' };
+function latencyMode(peer) { return localStorage.getItem(`lat:${peer.name}`) || 'auto'; }
 function applyPlayoutBuffer() {
-  const target = state.gaming && localStorage.getItem('gamebuffer') !== '0' ? GAME_BUFFER_MS : null;
+  const gameBuf = state.gaming && localStorage.getItem('gamebuffer') !== '0' ? GAME_BUFFER_MS : null;
   for (const peer of state.peers.values()) {
+    const mode = latencyMode(peer);
+    const target = mode === 'low' ? null : mode === 'smooth' ? 350 : gameBuf;
     for (const r of peer.pc.getReceivers()) {
-      if (r.track && r.track.kind === 'video') { try { r.jitterBufferTarget = target; } catch {} }
+      if (r.track && (r.track.kind === 'video' || mode === 'smooth')) { try { r.jitterBufferTarget = target; } catch {} }
+    }
+    if (peer.tile && peer.tile.latBtn) {
+      peer.tile.latBtn.classList.toggle('active', mode !== 'auto');
+      peer.tile.latBtn.title = `Atraso: ${LATENCY_MODES[mode]} (clique para trocar)`;
     }
   }
+}
+function cycleLatency(id) {
+  const peer = state.peers.get(id);
+  if (!peer) return;
+  const order = ['auto', 'low', 'smooth'];
+  const next = order[(order.indexOf(latencyMode(peer)) + 1) % order.length];
+  localStorage.setItem(`lat:${peer.name}`, next);
+  applyPlayoutBuffer();
+  toast(`Tela de ${peer.name}: ${LATENCY_MODES[next]}.`);
 }
 
 // Entrou alguém sem H.265 durante a "Nativa direta" em H.265: reinicia em H.264 (o vídeo direto
@@ -2462,6 +2550,7 @@ const ICONS = {
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.5C4.3 9 3 12 3 12s4 6 9 6a9 9 0 0 0 4.2-1"/></svg>',
   vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+  latency: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></svg>',
   pen: '<svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg>',
   playpause: '<svg viewBox="0 0 24 24"><path d="M4 5l8 7-8 7z" class="fill"/><path d="M15 5v14M20 5v14"/></svg>',
   record: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/><circle cx="9.5" cy="12" r="2.5" class="fill"/></svg>',
@@ -2589,6 +2678,7 @@ function makeTile(id) {
     iconButton('rec', 'Replay: guarda os últimos 30 s desta tela para salvar um clipe', (b) => toggleReplay(id, b)),
     iconButton('clip', 'Salvar clipe dos últimos 30 s (Ctrl+Shift+C)', () => saveClip(id)),
     iconButton('record', 'Gravar esta tela (sem limite de tempo) / parar e salvar', () => toggleRecording(id)),
+    ...(isMe ? [] : [(tile.latBtn = iconButton('latency', 'Atraso: Automático (clique para trocar)', () => cycleLatency(id)))]),
     (tile.penBtn = iconButton('pen', 'Caneta: desenhar nesta tela (os traços ficam alguns segundos para todos)', () => setPen(tile, id, !tile.pen))),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
   );
@@ -2614,6 +2704,7 @@ function makeTile(id) {
   bar.append(grip, label, actions);
   el.append(video, tile.camBox, tile.stats, bar);
   attachInteractions(tile, id);
+  attachZoom(tile);
 
   // duplo clique: em tela cheia sai dela; na tela em foco volta para a grade; senão foca
   el.ondblclick = () => {
@@ -2648,6 +2739,77 @@ function makeTile(id) {
   video.addEventListener('enterpictureinpicture', () => { state.pipId = id; render(); });
   video.addEventListener('leavepictureinpicture', () => { if (state.pipId === id) state.pipId = null; render(); });
   return tile;
+}
+
+// ------------------------------------------------------------------ zoom na tela
+// Ctrl + rodinha aproxima no ponto do mouse (até 6x); arrastar com o botão esquerdo move.
+// O selo "🔍 300% ✕" mostra o zoom; ✕ (ou Ctrl+0) volta ao normal. Mãozinhas e desenhos seguem
+// o zoom (as posições são calculadas pela área do vídeo na tela).
+function attachZoom(tile) {
+  const el = tile.el, v = tile.video;
+  tile.zoom = { s: 1, x: 0, y: 0 };
+  const badge = document.createElement('div');
+  badge.className = 'zoom-badge hidden';
+  const label = document.createElement('span');
+  const reset = document.createElement('button');
+  reset.textContent = '✕';
+  reset.title = 'Voltar ao normal (Ctrl+0)';
+  badge.append(label, reset);
+  el.appendChild(badge);
+  const apply = () => {
+    const z = tile.zoom, W = el.clientWidth, H = el.clientHeight;
+    // limita pela IMAGEM (sem as faixas pretas): ela cobre a tela quando dá; senão fica centralizada
+    const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+    const k = Math.min(W / vw, H / vh), cw = vw * k, ch = vh * k, cl = (W - cw) / 2, ct = (H - ch) / 2;
+    const clampAxis = (t, size, start, len) => (z.s * len <= size
+      ? (size - z.s * len) / 2 - z.s * start
+      : Math.min(-z.s * start, Math.max(size - z.s * (start + len), t)));
+    z.x = z.s > 1 ? clampAxis(z.x, W, cl, cw) : 0;
+    z.y = z.s > 1 ? clampAxis(z.y, H, ct, ch) : 0;
+    v.style.transformOrigin = '0 0';
+    v.style.transform = z.s > 1 ? `translate(${z.x}px, ${z.y}px) scale(${z.s})` : '';
+    el.classList.toggle('zoomed', z.s > 1);
+    badge.classList.toggle('hidden', z.s <= 1);
+    label.textContent = `🔍 ${Math.round(z.s * 100)}%`;
+    if (tile.camBox) placeCamBubble(tile);
+  };
+  tile.resetZoom = () => { tile.zoom = { s: 1, x: 0, y: 0 }; apply(); };
+  reset.onclick = (e) => { e.stopPropagation(); tile.resetZoom(); };
+  reset.ondblclick = (e) => e.stopPropagation();
+  // Ctrl + rodinha: zoom no ponto do mouse (antes do volume, que usa a rodinha sem Ctrl)
+  el.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const r = el.getBoundingClientRect(), z = tile.zoom;
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const s2 = Math.max(1, Math.min(6, z.s * (e.deltaY < 0 ? 1.25 : 0.8)));
+    z.x = px - ((px - z.x) * s2) / z.s;
+    z.y = py - ((py - z.y) * s2) / z.s;
+    z.s = s2;
+    if (s2 === 1) { z.x = 0; z.y = 0; }
+    apply();
+  }, { passive: false, capture: true });
+  // arrastar para mover (com zoom, sem caneta, botão esquerdo)
+  let drag = null;
+  el.addEventListener('pointerdown', (e) => {
+    if (tile.zoom.s <= 1 || tile.pen || e.button !== 0 || e.target.closest('.tile-bar, .react-bar, .pen-tools, .cam-pip, .zoom-badge')) return;
+    drag = { x: e.clientX, y: e.clientY, zx: tile.zoom.x, zy: tile.zoom.y, moved: false };
+    try { el.setPointerCapture(e.pointerId); } catch {}
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
+    tile.zoom.x = drag.zx + (e.clientX - drag.x);
+    tile.zoom.y = drag.zy + (e.clientY - drag.y);
+    apply();
+  });
+  const end = () => { if (drag && drag.moved) tile.suppressClick = true; drag = null; };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  // arrastar não pode virar "clique" (trocaria o foco da tela)
+  el.addEventListener('click', (e) => { if (tile.suppressClick) { tile.suppressClick = false; e.stopPropagation(); } }, true);
+  new ResizeObserver(() => { if (tile.zoom.s > 1) apply(); }).observe(el);
 }
 
 // nome da tela com avatar e bolinha "ao vivo" (só refaz se mudou)
@@ -3055,6 +3217,12 @@ function renderPeople() {
     const status = p.conn === 'connected' ? 'connected' : p.conn === 'failed' ? 'failed' : 'connecting';
     // "conectando" já aparece na bolinha do avatar (amarela); só a falha merece etiqueta
     if (status === 'failed') extra.appendChild(tag('falhou'));
+    const db = document.createElement('button');
+    db.className = 'tag-btn person-diag';
+    db.textContent = '🩺';
+    db.title = `Pedir o diagnóstico de ${p.name} (chega na sua Área de Trabalho)`;
+    db.onclick = () => requestDiag(p);
+    extra.appendChild(db);
     row(p.name, status, extra);
   }
 }
@@ -3173,6 +3341,15 @@ function initRoomUi() {
   $('#btn-region-clear').onclick = () => { if (selectedSource) delete selectedSource.crop; updateRegionUi(); };
   $('#opt-leveler').checked = localStorage.getItem('leveler') !== '0';
   $('#opt-leveler').onchange = () => localStorage.setItem('leveler', $('#opt-leveler').checked ? '1' : '0');
+  // abrir com o Windows (na bandeja) e entrar sozinho na última sala
+  window.native.autostart().then((on) => { $('#opt-autostart').checked = !!on; }).catch(() => {});
+  $('#opt-autostart').onchange = async () => {
+    const on = await window.native.autostart($('#opt-autostart').checked);
+    $('#opt-autostart').checked = !!on;
+    if ($('#opt-autostart').checked !== on) toast('Só funciona no app instalado.', 'error');
+  };
+  $('#opt-autojoin').checked = localStorage.getItem('autoJoin') === '1';
+  $('#opt-autojoin').onchange = () => localStorage.setItem('autoJoin', $('#opt-autojoin').checked ? '1' : '0');
   $('#side-opts').open = localStorage.getItem('sideOpts') === '1';
   $('#side-opts').ontoggle = () => localStorage.setItem('sideOpts', $('#side-opts').open ? '1' : '0');
   // falha ao gravar no disco (disco cheio...): para a gravação em vez de fingir que salvou
@@ -3270,6 +3447,11 @@ function initRoomUi() {
       if ($('#share-modal').classList.contains('hidden') && state.layout === 'focus') { state.layout = 'grid'; render(); return; }
     }
     if (e.target.matches('input, select, textarea') || $('#room').classList.contains('hidden')) return;
+    if (e.ctrlKey && e.key === '0') { // Ctrl+0: tira o zoom de todas as telas
+      for (const t of [meTile, ...[...state.peers.values()].map((p) => p.tile)]) if (t && t.resetZoom) t.resetZoom();
+      e.preventDefault();
+      return;
+    }
     if (!$('#share-modal').classList.contains('hidden')) {
       if (e.key === 'Escape') $('#share-modal').classList.add('hidden');
       return;
