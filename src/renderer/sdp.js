@@ -56,9 +56,15 @@ window.Sdp = (() => {
     return out.join('\r\n');
   }
 
+  // codec que derrubou o app NESTE PC ao transmitir (ex.: H.265 na RX 7600: o Chromium aborta):
+  // nunca mais é usado para enviar aqui (receber continua normal)
+  const sendBad = (name) => localStorage.getItem(`codecBad:${name}`) === '1';
+  const usable = (c) => !((/h265/i.test(c.mimeType) && sendBad('H265')) || (/av1/i.test(c.mimeType) && sendBad('AV1')));
   function codecPreferences(preferred) {
-    const caps = RTCRtpReceiver.getCapabilities('video');
-    if (!caps) return null;
+    const caps0 = RTCRtpReceiver.getCapabilities('video');
+    if (!caps0) return null;
+    const caps = { codecs: caps0.codecs.filter(usable) };
+    if ((preferred === 'H265' && sendBad('H265')) || (preferred === 'AV1' && sendBad('AV1'))) preferred = 'auto';
     // Automático: H.265 primeiro (mesma imagem com ~30-40% menos bits; o Chromium só lista H.265
     // quando a placa codifica/decodifica), depois H.264; quem não tiver H.265 negocia H.264
     if (preferred === 'auto') {
@@ -78,6 +84,7 @@ window.Sdp = (() => {
   function h265OnlyPreferences() {
     const caps = RTCRtpReceiver.getCapabilities('video');
     if (!caps) return null;
+    if (sendBad('H265')) return null;
     const h265 = caps.codecs.filter((c) => /h265/i.test(c.mimeType));
     const extras = caps.codecs.filter((c) => /rtx|red|ulpfec|flexfec/i.test(c.mimeType));
     return h265.length ? [...h265, ...extras] : null;
@@ -86,6 +93,7 @@ window.Sdp = (() => {
   function av1OnlyPreferences() {
     const caps = RTCRtpReceiver.getCapabilities('video');
     if (!caps) return null;
+    if (sendBad('AV1')) return null;
     const av1 = caps.codecs.filter((c) => /av1/i.test(c.mimeType) && !/profile=1/.test(c.sdpFmtpLine || ''));
     const extras = caps.codecs.filter((c) => /rtx|red|ulpfec|flexfec/i.test(c.mimeType));
     return av1.length ? [...av1, ...extras] : null;
@@ -112,5 +120,5 @@ window.Sdp = (() => {
     return h264.length ? [...h264, ...extras] : null;
   }
 
-  return { munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw, av1Ready };
+  return { sendBad, munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw, av1Ready };
 })();

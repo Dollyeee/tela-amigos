@@ -1293,9 +1293,9 @@ async function startShareInner(overrides) {
       // direta: AV1 se eu e TODOS os amigos temos placa que decodifica AV1 (e a minha codifica);
       // senão H.265 se todos decodificam; senão H.264
       const peersNow = [...state.peers.values()];
-      const wantAv1 = direct && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 &&
+      const wantAv1 = direct && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 && !window.Sdp.sendBad('AV1') &&
         !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && window.Sdp.hasAV1Hw() && peersNow.every((p) => p.av1);
-      const wantHevc = direct && settings.codec !== 'H264' && !settings.forceH264 && window.Sdp.hasH265() &&
+      const wantHevc = direct && settings.codec !== 'H264' && !settings.forceH264 && !window.Sdp.sendBad('H265') && window.Sdp.hasH265() &&
         peersNow.every((p) => p.h265);
       const codecs = [wantAv1 && 'av1', wantHevc && 'hevc', 'h264'].filter(Boolean);
       const opts = {
@@ -1376,6 +1376,9 @@ async function startShareInner(overrides) {
   };
   state.nativeStats = null;
   if (old && !old.native) old.video.stop();
+  // codec que deve sair (as estatísticas confirmam depois): protege contra queda logo no início
+  markSendingCodec(state.share.direct ? (state.share.codec === 'hevc' ? 'h265' : state.share.codec)
+    : settings.codec === 'auto' ? (window.Sdp.hasH265() && !window.Sdp.sendBad('H265') ? 'h265' : 'h264') : String(settings.codec));
 
   if (!nativeInfo) video.onended = () => stopShare(); // janela fechada, etc.
 
@@ -2351,14 +2354,21 @@ let cpuStrikes = 0, cpuSeenAt = 0;
 async function healthLoop() {
   if (state.share && state.peers.size) {
     let cpu = false;
+    let sendMime = '';
     for (const peer of state.peers.values()) {
       if (!peer.vT.sender.track) continue;
       try {
-        (await peer.vT.sender.getStats()).forEach((r) => {
+        const rep = await peer.vT.sender.getStats();
+        rep.forEach((r) => {
           if (r.type === 'outbound-rtp' && r.qualityLimitationReason === 'cpu') cpu = true;
+          if (r.type === 'outbound-rtp' && r.codecId && rep.get(r.codecId)) {
+            const m = rep.get(r.codecId).mimeType || '';
+            if (/h265|av1/i.test(m) || !sendMime) sendMime = m;
+          }
         });
       } catch {}
     }
+    if (sendMime) markSendingCodec(sendMime);
     const ns = state.nativeStats;
     if (ns && state.share.native && ns.dropped > 6) cpu = true; // encoder do helper não dá conta
     const now = Date.now();
@@ -2589,6 +2599,7 @@ async function stopShare() {
   const share = state.share;
   if (!share) return;
   state.share = null;
+  markSendingCodec('');
   if (window.Clips.isRecording('me')) toggleRecording('me'); // parou de transmitir: salva a gravação
   if (window.Clips.isOn('me')) { // replay da minha tela ficaria preso na trilha encerrada
     window.Clips.stop('me');
@@ -3779,6 +3790,26 @@ function drawHistory() {
   } else tip.classList.add('hidden');
 }
 
+// ------------------------------------------------------------------ proteção contra codec que derruba o app
+// Em algumas placas (ex.: RX 7600) o H.265 pela placa faz o Chromium abortar a interface no meio
+// da transmissão. O codec em uso fica anotado; se a interface cair transmitindo com ele, ele é
+// bloqueado para ENVIAR neste PC (o "Automático" passa a usar o próximo) e o app avisa.
+function markSendingCodec(mime) {
+  const name = /h265/i.test(mime) ? 'H265' : /av1/i.test(mime) ? 'AV1' : /h264/i.test(mime) ? 'H264' : mime ? 'outro' : '';
+  if (name) localStorage.setItem('sendingCodec', name); else localStorage.removeItem('sendingCodec');
+}
+function checkCodecCrash(why) {
+  const c = localStorage.getItem('sendingCodec');
+  localStorage.removeItem('sendingCodec');
+  if (!why || (c !== 'H265' && c !== 'AV1')) return false;
+  localStorage.setItem(`codecBad:${c}`, '1');
+  const label = c === 'H265' ? 'H.265' : 'AV1';
+  console.error(`interface caiu (${why}) transmitindo em ${label}: ${label} bloqueado para enviar neste PC`);
+  toast(`O app caiu enquanto transmitia em ${label} (a placa de vídeo não se deu bem com ele). ` +
+    `Neste PC a transmissão passa a usar H.264 — o "Automático" já cuida disso.`, 'error');
+  return true;
+}
+
 // ------------------------------------------------------------------ estatísticas
 let statsBusy = false;
 let statsLast = 0;
@@ -4033,6 +4064,7 @@ function initUpdates() {
   window.native.appVersion().then((v) => { $('#app-version').textContent = `v${v}`; });
   // a interface caiu e foi recarregada sozinha: avisa (o motivo fica no registro/diagnóstico)
   window.native.recovered().then((why) => {
+    if (checkCodecCrash(why)) return;
     if (why) toast(`O app teve um problema (${why}) e foi recarregado. Se repetir, clique em "Enviar diagnóstico".`, 'error');
   }).catch(() => {});
   const bar = $('#update-bar');

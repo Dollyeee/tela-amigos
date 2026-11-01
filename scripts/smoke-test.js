@@ -325,6 +325,13 @@ const scriptB = common + `
     const gotA = a1.framesDecoded - a0.framesDecoded;
     if (gotA < 70) throw new Error('direta AV1 com poucos quadros: ' + gotA + ' em 3 s');
     log('direta AV1 ok: ' + a1.frameWidth + 'x' + a1.frameHeight + ', ' + gotA + ' quadros em 3 s, ' + acodec + ', dec ' + a1.decoderImplementation);
+    // proteção: a interface "caiu" transmitindo em H.265 -> H.265 bloqueado só para enviar
+    localStorage.setItem('sendingCodec', 'H265');
+    if (!checkCodecCrash('crashed') || localStorage.getItem('codecBad:H265') !== '1') throw new Error('proteção de codec não marcou');
+    const prefs = window.Sdp.codecPreferences('auto') || [];
+    if (prefs.some((c) => /h265/i.test(c.mimeType)) || window.Sdp.h265OnlyPreferences() !== null) throw new Error('H.265 bloqueado ainda aparece');
+    localStorage.removeItem('codecBad:H265');
+    log('proteção contra codec que derruba o app ok');
     log('B OK');
   } catch (e) {
     const p = [...state.peers.values()][0];
