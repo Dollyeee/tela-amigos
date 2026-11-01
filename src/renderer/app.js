@@ -423,14 +423,18 @@ function onRelay(from, data) {
       peer.health = { cpu: !!data.cpu };
       break;
     case 'chat':
-      addChat(peer.name, String(data.text || '').slice(0, 300));
+      if (!String(data.text || '').trim()) break; // ignora mensagem vazia
+      addChat(peer.name, String(data.text).slice(0, 300));
       if (!document.hasFocus()) Sfx.play('chat');
       break;
     case 'react':
       if (typeof data.emoji === 'string' && data.emoji.length <= 8) showReaction(String(data.target), data.emoji, peer.name);
       break;
     case 'point':
-      if (Number.isFinite(data.x) && Number.isFinite(data.y)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y);
+      if (Number.isFinite(data.x) && Number.isFinite(data.y)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y, !!data.draw);
+      break;
+    case 'press':
+      if (Number.isFinite(data.x) && Number.isFinite(data.y)) showPress(String(data.target), peer.id, peer.name, data.x, data.y);
       break;
     case 'point-end':
       hideLaser(String(data.target), peer.id);
@@ -1175,7 +1179,48 @@ function videoBox(tile) {
   return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
 }
 
-function showLaser(target, fromId, name, x, y) {
+// mãozinha apontando (a ponta do dedo fica exatamente no ponto)
+const HAND_SVG = '<svg viewBox="0 0 32 32" width="34" height="34"><path d="M11 3.5c1.4 0 2.5 1.1 2.5 2.5v8.2l.6-.1c1.3-.2 2.4.6 2.7 1.8l.1.4.5-.1c1.3-.2 2.4.6 2.7 1.8l.1.3.4-.1c1.4-.2 2.6.8 2.7 2.2l.4 4.2c.2 2.6-1.1 5-3.4 6.2l-.8.4c-1.2.6-2.5.9-3.9.9h-1.2c-2.4 0-4.6-1.2-5.9-3.2l-4.3-6.6c-.7-1.1-.4-2.6.7-3.3 1-.6 2.3-.4 3.1.4L8.5 22V6c0-1.4 1.1-2.5 2.5-2.5z" fill="var(--c)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+
+// rastro (Shift + botão direito): uma camada de desenho por tela, que apaga sozinha
+function trailLayer(tile) {
+  if (tile.trail && tile.trail.isConnected) return tile.trail;
+  const c = document.createElement('canvas');
+  c.className = 'trail-layer';
+  tile.el.appendChild(c);
+  tile.trail = c;
+  tile.trailLines = [];
+  const draw = () => {
+    if (!c.isConnected) return;
+    const r = tile.el.getBoundingClientRect();
+    if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) { c.width = Math.round(r.width); c.height = Math.round(r.height); }
+    const g = c.getContext('2d');
+    g.clearRect(0, 0, c.width, c.height);
+    const now = performance.now();
+    tile.trailLines = tile.trailLines.filter((s) => now - s.t < 2500);
+    const b = videoBox(tile);
+    for (const s of tile.trailLines) {
+      g.globalAlpha = Math.max(0, 1 - (now - s.t) / 2500);
+      g.strokeStyle = s.color;
+      g.lineWidth = 5;
+      g.lineCap = 'round';
+      g.beginPath();
+      g.moveTo(b.left - r.left + s.x1 * b.width, b.top - r.top + s.y1 * b.height);
+      g.lineTo(b.left - r.left + s.x2 * b.width, b.top - r.top + s.y2 * b.height);
+      g.stroke();
+    }
+    if (tile.trailLines.length) requestAnimationFrame(draw); else tile.trailAnimating = false;
+  };
+  tile.trailDraw = () => { if (!tile.trailAnimating) { tile.trailAnimating = true; requestAnimationFrame(draw); } };
+  return c;
+}
+
+function sendToMyDesktop(target, fromId) {
+  return target === state.myId && fromId !== 'me' && state.share && state.share.source &&
+    state.share.source.type === 'screen' && localStorage.getItem('laserDesk') !== '0';
+}
+
+function showLaser(target, fromId, name, x, y, drawing = false) {
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   const tile = tileByOwner(target);
   if (tile && tile.el.isConnected) {
@@ -1183,7 +1228,8 @@ function showLaser(target, fromId, name, x, y) {
     let l = tile.lasers[fromId];
     if (!l) {
       l = document.createElement('div');
-      l.className = 'laser';
+      l.className = 'hand';
+      l.innerHTML = HAND_SVG;
       const tag = document.createElement('span');
       tag.textContent = name;
       l.appendChild(tag);
@@ -1191,6 +1237,14 @@ function showLaser(target, fromId, name, x, y) {
       tile.lasers[fromId] = l;
     }
     l.style.setProperty('--c', color);
+    // rastro: liga o ponto anterior a este
+    if (drawing && l.lastX != null) {
+      trailLayer(tile);
+      tile.trailLines.push({ x1: l.lastX, y1: l.lastY, x2: x, y2: y, color, t: performance.now() });
+      tile.trailDraw();
+    }
+    l.lastX = drawing ? x : null;
+    l.lastY = drawing ? y : null;
     const b = videoBox(tile), er = tile.el.getBoundingClientRect();
     l.style.left = `${b.left - er.left + x * b.width}px`;
     l.style.top = `${b.top - er.top + y * b.height}px`;
@@ -1198,9 +1252,30 @@ function showLaser(target, fromId, name, x, y) {
     l.timer = setTimeout(() => hideLaser(target, fromId), 1500);
   }
   // apontaram para a MINHA tela: mostra também no meu monitor, por cima do jogo
-  if (target === state.myId && fromId !== 'me' && state.share && state.share.source &&
-      state.share.source.type === 'screen' && localStorage.getItem('laserDesk') !== '0') {
-    window.native.pointer({ displayId: state.share.source.displayId, id: fromId, x, y, color, name });
+  if (sendToMyDesktop(target, fromId)) {
+    window.native.pointer({ displayId: state.share.source.displayId, id: fromId, x, y, color, name, drawing });
+  }
+}
+
+// "apertar": a mão faz o gesto e sai uma ondinha no ponto
+function showPress(target, fromId, name, x, y) {
+  const color = `hsl(${nameHue(name)}, 85%, 55%)`;
+  showLaser(target, fromId, name, x, y);
+  const tile = tileByOwner(target);
+  if (tile && tile.el.isConnected) {
+    const l = tile.lasers && tile.lasers[fromId];
+    if (l) { l.classList.remove('pressing'); void l.offsetWidth; l.classList.add('pressing'); }
+    const b = videoBox(tile), er = tile.el.getBoundingClientRect();
+    const r = document.createElement('div');
+    r.className = 'press-ripple';
+    r.style.setProperty('--c', color);
+    r.style.left = `${b.left - er.left + x * b.width}px`;
+    r.style.top = `${b.top - er.top + y * b.height}px`;
+    tile.el.appendChild(r);
+    setTimeout(() => r.remove(), 700);
+  }
+  if (sendToMyDesktop(target, fromId)) {
+    window.native.pointer({ displayId: state.share.source.displayId, id: fromId, x, y, color, name, press: true });
   }
 }
 
@@ -1232,34 +1307,64 @@ function attachInteractions(tile, id) {
   }
   tile.el.appendChild(bar);
 
-  if (id === 'me') return; // laser só na tela dos outros
-  // laser: segure o botão DIREITO do mouse sobre a tela do amigo
-  let on = false, last = 0;
-  const point = (e) => {
-    const now = performance.now();
-    if (now - last < 33) return; // ~30 por segundo
-    last = now;
+  if (id === 'me') return; // mãozinha só na tela dos outros
+  // Mãozinha: segure o botão DIREITO sobre a tela do amigo e mova.
+  //  - clique esquerdo (com o direito segurado) ou clique rápido com o direito = "apertar"
+  //  - Shift + mover = desenhar um rastro que some sozinho
+  let on = false, moved = false, last = 0, downAt = null, suppressClick = false;
+  const pos = (e) => {
     const b = videoBox(tile);
-    const x = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width));
-    const y = Math.max(0, Math.min(1, (e.clientY - b.top) / b.height));
+    return {
+      x: Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)),
+      y: Math.max(0, Math.min(1, (e.clientY - b.top) / b.height)),
+    };
+  };
+  const point = (e, force = false) => {
+    const now = performance.now();
+    if (!force && now - last < 33) return; // ~30 por segundo
+    last = now;
+    const { x, y } = pos(e);
     const target = ownerKey(id);
-    sendRelay(null, { kind: 'point', target, x, y });
-    showLaser(target, 'me', state.myName, x, y);
+    const drawing = e.shiftKey;
+    sendRelay(null, { kind: 'point', target, x, y, draw: drawing });
+    showLaser(target, 'me', state.myName, x, y, drawing);
+  };
+  const press = (e) => {
+    const { x, y } = pos(e);
+    const target = ownerKey(id);
+    sendRelay(null, { kind: 'press', target, x, y });
+    showPress(target, 'me', state.myName, x, y);
   };
   tile.el.addEventListener('contextmenu', (e) => e.preventDefault());
   tile.el.addEventListener('pointerdown', (e) => {
-    if (e.button !== 2) return;
-    on = true;
-    tile.el.setPointerCapture(e.pointerId);
+    if (e.button === 2) {
+      on = true; moved = false;
+      downAt = { x: e.clientX, y: e.clientY };
+      tile.el.setPointerCapture(e.pointerId);
+      point(e, true);
+    } else if (e.button === 0 && on) {
+      // apertar com o esquerdo enquanto aponta (sem trocar o foco da tela)
+      e.preventDefault();
+      e.stopPropagation();
+      suppressClick = true;
+      press(e);
+    }
+  });
+  tile.el.addEventListener('click', (e) => { if (suppressClick) { suppressClick = false; e.stopPropagation(); } }, true);
+  tile.el.addEventListener('pointermove', (e) => {
+    if (!on) return;
+    if (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 6) moved = true;
     point(e);
   });
-  tile.el.addEventListener('pointermove', (e) => { if (on) point(e); });
   const end = (e) => {
-    if (!on || (e.button !== undefined && e.button !== 2 && e.type === 'pointerup')) return;
+    if (!on || (e.type === 'pointerup' && e.button !== 2)) return;
     on = false;
     const target = ownerKey(id);
-    sendRelay(null, { kind: 'point-end', target });
-    hideLaser(target, 'me');
+    if (!moved && e.type === 'pointerup') press(e); // clique rápido com o direito = apertar
+    setTimeout(() => {
+      sendRelay(null, { kind: 'point-end', target });
+      hideLaser(target, 'me');
+    }, moved ? 0 : 600); // deixa ver o "apertar" antes de sumir
   };
   tile.el.addEventListener('pointerup', end);
   tile.el.addEventListener('pointercancel', end);
@@ -1572,6 +1677,9 @@ function makeTile(id) {
   tile.camVideo.playsInline = true;
   tile.camVideo.muted = true;
   tile.camBox.appendChild(tile.camVideo);
+  tile.camBox.title = 'Arraste para mover · rodinha muda o tamanho · duplo clique volta ao canto';
+  tile.camKey = `campos:${isMe ? state.myName : ((state.peers.get(id) || {}).name || id)}`;
+  attachCamDrag(tile);
 
   if (!isMe) {
     // volume lembrado pelo NOME do amigo (o id muda a cada vez que ele entra);
@@ -1747,17 +1855,96 @@ function updateTileMedia(id) {
   if (showBubble) placeCamBubble(tile);
 }
 
-// bolha da câmera no canto inferior direito da IMAGEM (não do quadro, que tem faixas pretas)
+// Posição da câmera dentro da IMAGEM (não do quadro, que tem faixas pretas), em frações:
+// x/y = canto superior esquerdo, w = largura. Cada um arruma do seu jeito; fica salvo por amigo.
+const CAM_DEFAULT = { x: 0.74, y: 0.70, w: 0.24 };
+function camPos(tile) {
+  if (!tile.camPos) {
+    try { tile.camPos = JSON.parse(localStorage.getItem(tile.camKey)) || { ...CAM_DEFAULT }; } catch { tile.camPos = { ...CAM_DEFAULT }; }
+  }
+  return tile.camPos;
+}
+// mantém a câmera inteira dentro da imagem
+function clampCam(tile, p, b) {
+  const hFrac = (p.w * b.width * 9 / 16) / b.height;
+  p.w = Math.max(0.1, Math.min(0.5, p.w));
+  p.x = Math.max(0, Math.min(1 - p.w, p.x));
+  p.y = Math.max(0, Math.min(1 - hFrac, p.y));
+  return p;
+}
 function placeCamBubble(tile) {
   if (!tile || tile.camBox.classList.contains('hidden') || !tile.el.isConnected) return;
   const b = videoBox(tile), er = tile.el.getBoundingClientRect();
   if (!b.width) return;
-  const w = b.width * 0.24;
+  const p = clampCam(tile, camPos(tile), b);
+  const w = b.width * p.w;
   tile.camBox.style.width = `${w}px`;
-  tile.camBox.style.left = `${b.left - er.left + b.width - w - b.width * 0.02}px`;
-  tile.camBox.style.top = `${b.top - er.top + b.height - (w * 9) / 16 - b.height * 0.04}px`;
+  tile.camBox.style.left = `${b.left - er.left + p.x * b.width}px`;
+  tile.camBox.style.top = `${b.top - er.top + p.y * b.height}px`;
   tile.camBox.style.right = 'auto';
   tile.camBox.style.bottom = 'auto';
+}
+
+// arrastar (botão esquerdo), redimensionar (rodinha), duplo clique volta ao padrão
+function attachCamDrag(tile) {
+  const box = tile.camBox;
+  let drag = null;
+  const save = () => localStorage.setItem(tile.camKey, JSON.stringify(tile.camPos));
+  box.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const r = box.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    box.setPointerCapture(e.pointerId);
+    box.classList.add('dragging');
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const b = videoBox(tile);
+    const p = camPos(tile);
+    p.x = (e.clientX - drag.dx - b.left) / b.width;
+    p.y = (e.clientY - drag.dy - b.top) / b.height;
+    clampCam(tile, p, b);
+    placeCamBubble(tile);
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    box.classList.remove('dragging');
+    // encaixa no canto se soltar perto da borda
+    const b = videoBox(tile);
+    const p = camPos(tile);
+    const hFrac = (p.w * b.width * 9 / 16) / b.height;
+    const m = 0.02, snap = 0.06;
+    if (p.x < snap) p.x = m;
+    if (1 - p.w - p.x < snap) p.x = 1 - p.w - m;
+    if (p.y < snap) p.y = m * 2;
+    if (1 - hFrac - p.y < snap) p.y = 1 - hFrac - m * 2;
+    clampCam(tile, p, b);
+    placeCamBubble(tile);
+    save();
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+  box.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation(); // não mexe no volume da tela
+    const b = videoBox(tile);
+    const p = camPos(tile);
+    const oldW = p.w;
+    p.w = Math.max(0.1, Math.min(0.5, p.w + (e.deltaY < 0 ? 0.02 : -0.02)));
+    p.x -= (p.w - oldW) / 2; // cresce a partir do centro
+    clampCam(tile, p, b);
+    placeCamBubble(tile);
+    save();
+  }, { passive: false });
+  box.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    tile.camPos = { ...CAM_DEFAULT };
+    placeCamBubble(tile);
+    save();
+  });
 }
 function placeAllCamBubbles() {
   if (meTile) placeCamBubble(meTile);

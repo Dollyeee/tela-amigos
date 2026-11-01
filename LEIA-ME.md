@@ -30,8 +30,10 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - Sala resistente a quedas: reconecta sozinha sem derrubar as telas.
 - **Câmera** estilo streamer: com tela + câmera, a câmera fica no canto da imagem.
 - **Sobreposição**: janelinha da tela de um amigo sempre por cima do jogo; "Travar" deixa o mouse atravessar.
-- **Chat**, **reações** com emoji e **laser** (segure o botão direito sobre a tela de alguém; quem transmite
-  vê o ponteiro no próprio monitor, sem aparecer na transmissão).
+- **Chat**, **reações** com emoji e **mãozinha**: segure o botão direito sobre a tela de alguém e mova;
+  clique esquerdo (ou clique rápido com o direito) "aperta"; Shift desenha um rastro. Quem transmite vê a mãozinha
+  no próprio monitor, sem aparecer na transmissão.
+- A **câmera** de cada amigo pode ser arrastada e redimensionada (rodinha) na tela dele; fica salvo por amigo.
 - **Clipes**: ligue o replay numa tela e salve os últimos 30 s em MP4 (Vídeos\Tela Amigos).
 - Qualidade de cada tela (bolinha verde/amarela/vermelha), **modo leve** automático quando o PC está no limite,
   prévia escondida automaticamente ao jogar em tela cheia, notificações, ícone na bandeja.
