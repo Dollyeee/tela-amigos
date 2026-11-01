@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <title>Tela Amigos - escolher área</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; cursor: crosshair; user-select: none;
+      font: 14px "Segoe UI", sans-serif; color: #fff; background: rgba(0, 0, 0, .01); }
+    /* fundo escurecido, exceto a área escolhida (sombra gigante em volta do retângulo) */
+    #dim { position: fixed; inset: 0; background: rgba(8, 10, 20, .45); }
+    #sel { position: fixed; display: none; outline: 2px solid #6c7cff; box-shadow: 0 0 0 9999px rgba(8, 10, 20, .45); }
+    body.has-sel #dim { display: none; }
+    body.has-sel #sel { display: block; }
+    #size { position: absolute; left: 0; top: -26px; background: #6c7cff; padding: 2px 8px; border-radius: 6px 6px 0 0;
+      font-size: 12px; white-space: nowrap; }
+    #help { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); background: rgba(20, 22, 34, .92);
+      padding: 10px 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.4); display: flex; gap: 10px; align-items: center;
+      cursor: default; z-index: 2; }
+    #help button { border: none; border-radius: 7px; padding: 6px 12px; font: inherit; cursor: pointer; background: #2a2e44; color: #fff; }
+    #help button.primary { background: #6c7cff; }
+    #help button:disabled { opacity: .4; cursor: default; }
+  </style>
+</head>
+<body>
+  <div id="dim"></div>
+  <div id="sel"><span id="size"></span></div>
+  <div id="help">
+    <span id="msg">Arraste para escolher a área que vai aparecer para os amigos</span>
+    <button id="ok" class="primary" disabled>Usar esta área (Enter)</button>
+    <button id="cancel">Cancelar (Esc)</button>
+  </div>
+<script>
+  const sel = document.getElementById('sel'), size = document.getElementById('size'), ok = document.getElementById('ok');
+  let start = null, rect = null;
+  const W = () => window.innerWidth, H = () => window.innerHeight;
+  function draw(r) {
+    sel.style.left = r.x + 'px'; sel.style.top = r.y + 'px'; sel.style.width = r.w + 'px'; sel.style.height = r.h + 'px';
+    const k = window.devicePixelRatio || 1;
+    size.textContent = `${Math.round(r.w * k)} × ${Math.round(r.h * k)}`;
+    size.style.top = r.y < 30 ? '4px' : '-26px';
+    document.body.classList.add('has-sel');
+  }
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest('#help')) return;
+    start = { x: e.clientX, y: e.clientY };
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!start) return;
+    const x = Math.max(0, Math.min(start.x, e.clientX)), y = Math.max(0, Math.min(start.y, e.clientY));
+    rect = { x, y, w: Math.min(W(), Math.max(start.x, e.clientX)) - x, h: Math.min(H(), Math.max(start.y, e.clientY)) - y };
+    draw(rect);
+  });
+  document.addEventListener('mouseup', () => {
+    start = null;
+    ok.disabled = !(rect && rect.w > 40 && rect.h > 40);
+  });
+  const finish = () => {
+    if (!rect || ok.disabled) return;
+    window.regionApi.done({ x: rect.x / W(), y: rect.y / H(), w: rect.w / W(), h: rect.h / H() });
+  };
+  ok.onclick = finish;
+  document.getElementById('cancel').onclick = () => window.regionApi.done(null);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') window.regionApi.done(null);
+    if (e.key === 'Enter') finish();
+  });
+</script>
+</body>
+</html>

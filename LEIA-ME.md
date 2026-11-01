@@ -37,6 +37,20 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
   no próprio monitor, sem aparecer na transmissão.
 - A **câmera** de cada amigo pode ser arrastada e redimensionada (rodinha) na tela dele; fica salvo por amigo.
 - **Clipes**: ligue o replay numa tela e salve os últimos 30 s em MP4 (Vídeos\Tela Amigos).
+- **Gravação longa**: botão de câmera de vídeo na tela grava sem limite de tempo (com a câmera do amigo e o
+  mesmo áudio dos clipes). Clique de novo para parar; o arquivo fica em Vídeos\Tela Amigos e continua
+  aproveitável mesmo se o app fechar no meio.
+- **Status nas telas**: fps e ping no canto de cada tela e, quando piora, de quem é o problema
+  ("rede", "PC do Fulano" ou "seu PC").
+- **Testar conexão**: mede ping e velocidade com cada amigo pelo Radmin e sugere a qualidade (botão "Usar sugestão").
+- **Escolher área**: no "Compartilhar", depois de escolher uma tela, transmita só um pedaço dela (mapa do jogo,
+  metade de um ultrawide...). Só na captura nativa.
+- **Mixer**: em Ajustes, durante a transmissão, o volume de cada app no som que os amigos ouvem (fica salvo).
+- **Assistir junto**: botão ⏯ na tela de um amigo pede play/pausa no vídeo dele (ele precisa ligar
+  "Amigos controlam play/pausa" nas Opções). "Todo mundo pronto?" faz cada um confirmar e conta 3, 2, 1;
+  no "já" o vídeo de quem está em foco começa sozinho.
+- **Caneta**: botão de lápis numa tela; arraste com o botão esquerdo para desenhar. Os traços ficam ~8 s para
+  todos (e no monitor de quem transmite) e depois somem; "Apagar" tira os seus na hora; Esc desliga.
 - Qualidade de cada tela (bolinha verde/amarela/vermelha), **modo leve** automático quando o PC está no limite,
   prévia escondida automaticamente ao jogar em tela cheia, notificações, ícone na bandeja.
 - Atalhos globais: **Ctrl+Shift+S** transmitir/parar · **M** mutar todos · **O** destravar sobreposição · **C** salvar clipe.

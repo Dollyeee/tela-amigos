@@ -37,3 +37,18 @@ static class Priority
         return result;
     }
 }
+
+// Tecla de mídia (play/pausa) no PC de quem transmite: o Windows manda para o player ativo
+// (YouTube no navegador, Spotify, VLC...). Usado no "assistir junto", só com permissão.
+static class MediaKeys
+{
+    [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    const uint EXTENDED = 0x1, KEYUP = 0x2;
+
+    public static void Press(string key)
+    {
+        byte vk = key switch { "next" => 0xB0, "prev" => 0xB1, "stop" => 0xB2, _ => 0xB3 }; // 0xB3 = play/pausa
+        keybd_event(vk, 0, EXTENDED, UIntPtr.Zero);
+        keybd_event(vk, 0, EXTENDED | KEYUP, UIntPtr.Zero);
+    }
+}

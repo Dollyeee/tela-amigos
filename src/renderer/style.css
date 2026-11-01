@@ -301,3 +301,70 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
   box-shadow: 0 6px 20px rgba(0, 0, 0, .4); transition: opacity .4s, transform .4s; max-width: 360px; }
 .toast.error { border-color: var(--danger); }
 .toast.out { opacity: 0; transform: translateY(8px); }
+
+/* selo de qualidade: bolinha + fps/ping + causa (rede / PC dele / seu PC) */
+.qbadge { position: absolute; top: 8px; right: 8px; z-index: 3; display: flex; align-items: center; gap: 6px;
+  padding: 2px 8px 2px 6px; border-radius: 10px; background: rgba(0,0,0,.55); font: 11px/1.4 "Segoe UI", sans-serif;
+  color: #e8eaf0; pointer-events: auto; transition: opacity .2s; }
+.qbadge .qdot { position: static; width: 9px; height: 9px; }
+.qbadge.good { opacity: .65; }
+.qbadge.warn .qtext { color: #ffd479; }
+.qbadge.bad .qtext { color: #ff8a8a; }
+.qbadge:empty, .qbadge .qtext:empty { display: none; }
+.tile.thumb .qbadge { top: 6px; right: 6px; padding: 2px; background: transparent; }
+.tile.thumb .qbadge .qtext { display: none; }
+.stage.nostatus .qbadge .qtext { display: none; }
+.stage.nostatus .qbadge { background: transparent; padding: 2px; }
+
+/* teste de conexão */
+.nettest-card { width: min(640px, 94vw); }
+.nettest-body { padding: 14px 18px; min-height: 80px; }
+.nettest-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nettest-table th { text-align: left; color: var(--muted, #8a90a0); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.nettest-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.nettest-table td.good { color: var(--ok); }
+.nettest-table td.warn { color: var(--warn); }
+.nettest-table td.bad { color: var(--danger); }
+
+/* mixer do áudio transmitido (painel Ajustes) */
+.mixer { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.mixer-head { font-weight: 600; font-size: 13px; }
+.mixer-head .muted { font-weight: 400; font-size: 12px; }
+.mixer-list { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow: auto; }
+.mixer-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.mixer-name { width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixer-row input { flex: 1; }
+.mixer-pct { width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* gravação longa */
+.rec-badge { position: absolute; top: 8px; left: 8px; z-index: 3; background: rgba(200, 30, 45, .85); color: #fff;
+  font: 600 11px/1.4 "Segoe UI", sans-serif; padding: 2px 8px; border-radius: 10px; pointer-events: none; }
+.stage.stats-on .rec-badge { top: auto; bottom: 48px; }
+.tile.recording { box-shadow: 0 0 0 2px rgba(220, 40, 60, .8), 0 6px 18px rgba(0, 0, 0, .35); }
+
+/* assistir junto: "todo mundo pronto?" e contagem */
+.ready-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center;
+  gap: 12px; background: var(--panel); border: 1px solid var(--accent, #6c7cff); border-radius: 12px; padding: 10px 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.5); max-width: 90%; }
+.ready-info { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.ready-info .muted { font-size: 12px; }
+.countdown { position: absolute; inset: 0; z-index: 25; display: grid; place-items: center; pointer-events: none;
+  font: 800 160px/1 "Segoe UI", sans-serif; color: #fff; text-shadow: 0 6px 40px rgba(0,0,0,.8); }
+.countdown.pop { animation: cd-pop .9s ease-out; }
+@keyframes cd-pop { 0% { transform: scale(1.6); opacity: 0; } 25% { transform: scale(1); opacity: 1; } 100% { opacity: .2; } }
+
+/* caneta */
+.tile.pen-on video { cursor: crosshair; }
+.tile.pen-on { outline: 2px dashed rgba(108, 124, 255, .7); outline-offset: -2px; }
+.pen-tools { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 8px;
+  background: rgba(14, 15, 19, .85); border: 1px solid var(--line); border-radius: 10px; padding: 4px 6px 4px 10px; font-size: 12px; }
+.pen-tools button { border: none; border-radius: 6px; padding: 3px 8px; background: #2a2e44; color: #fff; font: inherit; cursor: pointer; }
+.pen-tools button:hover { background: #3a3f5c; }
+.tile.thumb .pen-tools { display: none; }
+.icon-btn.active { background: rgba(108, 124, 255, .35); }
+
+/* opções da barra lateral (abre/fecha; lembra o estado) */
+.side-opts { margin-top: 8px; }
+.side-opts summary { cursor: pointer; font-size: 12px; color: var(--muted); user-select: none; }
+.side-opts summary:hover { color: #fff; }
+.side-opts[open] summary { margin-bottom: 2px; }

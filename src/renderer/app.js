@@ -420,7 +420,27 @@ function onRelay(from, data) {
       applySendParams(peer);
       break;
     case 'health':
-      peer.health = { cpu: !!data.cpu };
+      peer.health = {
+        cpu: !!data.cpu, gaming: !!data.gaming,
+        cap: Number.isFinite(data.cap) ? data.cap : null, target: Number.isFinite(data.target) ? data.target : null,
+      };
+      break;
+    case 'media': onMediaRequest(peer); break;
+    case 'media-denied': toast(`${peer.name} não liberou o controle de play/pausa (opção na barra lateral dele).`); break;
+    case 'media-done': addChat('', String(data.text || '').slice(0, 200), true); break;
+    case 'ready-check':
+      onReadyCheck({ id: String(data.id), from: from, fromName: peer.name, target: data.target ? String(data.target) : null });
+      break;
+    case 'ready': onReady(from, String(data.id)); break;
+    case 'ink':
+      if (Array.isArray(data.segs)) {
+        const segs = data.segs.slice(0, 200).filter((sg) => Array.isArray(sg) && sg.length === 4 && sg.every((v) => Number.isFinite(v) && v >= 0 && v <= 1));
+        if (segs.length) showInk(data.target, from, peer.name, segs);
+      }
+      break;
+    case 'ink-clear': clearInk(data.target, from); break;
+    case 'ready-cancel':
+      if (readyCheck && readyCheck.id === String(data.id)) endReadyCheck(`${peer.name} cancelou`);
       break;
     case 'chat':
       if (!String(data.text || '').trim()) break; // ignora mensagem vazia
@@ -478,6 +498,12 @@ function createPeer(id, name) {
     streams: [peer.camMS],
     sendEncodings: [{ maxBitrate: 2_500_000, maxFramerate: 30 }],
   });
+  // canal de dados (combinado dos dois lados, id fixo): teste de conexão e "assistir junto"
+  try {
+    peer.dc = pc.createDataChannel('tela', { negotiated: true, id: 7 });
+    peer.dc.binaryType = 'arraybuffer';
+    peer.dc.onmessage = (e) => onDataMessage(peer, e.data);
+  } catch (e) { console.warn('canal de dados:', e.message); }
   peer.camStream = new MediaStream();   // câmera recebida deste amigo
   peer.videoTracks = new Map();         // id do stream -> trilha de vídeo recebida
   setCodec(peer, state.share && state.share.direct ? 'native' : s.codec);
@@ -636,6 +662,12 @@ function removePeer(id) {
   window.NativeVideo.remove(id);
   closeOverlay(id);
   window.Clips.stop(id);
+  if (window.Clips.isRecording(id)) toggleRecording(id); // saiu da sala: salva o que foi gravado
+  if (readyCheck) setTimeout(() => {               // "todo mundo pronto?": quem saiu não conta mais
+    if (!readyCheck) return;
+    renderReady();
+    if (memberIds().every((m) => readyCheck.ready.has(m))) countdown();
+  }, 0);
   if (peer.tile) peer.tile.el.remove();
   state.peers.delete(id);
   state.order = state.order.filter((x) => x !== id);
@@ -783,6 +815,7 @@ async function openShareModal() {
   $('#opt-bitrate-label').textContent = `${s.bitrate} Mbps`;
   $('#btn-start-share').textContent = state.share ? 'Trocar' : 'Compartilhar';
   selectedSource = null;
+  updateRegionUi();
   $('#btn-start-share').disabled = true;
   sourcesLoaded = { screen: false, window: false };
   renderSources();
@@ -842,10 +875,34 @@ function renderSources() {
       selectedSource = src;
       $('#btn-start-share').disabled = false;
       renderSources();
+      updateRegionUi();
     };
     el.ondblclick = () => startShare();
     box.appendChild(el);
   }
+}
+
+// área da tela (só telas inteiras, captura nativa): fica guardada na fonte escolhida
+function updateRegionUi() {
+  const src = selectedSource;
+  const isScreen = !!(src && src.type === 'screen');
+  $('#btn-region').classList.toggle('hidden', !isScreen);
+  $('#btn-region-clear').classList.toggle('hidden', !(isScreen && src.crop));
+  $('#btn-region').textContent = isScreen && src.crop ? 'Trocar área...' : 'Escolher área...';
+  $('#share-note').textContent = isScreen && src.crop
+    ? `Só uma área: ${Math.round(src.crop.w * 100)}% × ${Math.round(src.crop.h * 100)}% da tela`
+    : '';
+}
+
+async function pickRegion() {
+  const src = selectedSource;
+  if (!src || src.type !== 'screen') return;
+  const rect = await window.native.pickRegion(src.displayId);
+  if (rect) {
+    src.crop = rect;
+    if ($('#opt-engine').value === 'chromium') { $('#opt-engine').value = 'native'; updateEngineFields(); }
+  }
+  updateRegionUi();
 }
 
 async function loadAudioOptions() {
@@ -906,6 +963,8 @@ async function startShareInner(overrides) {
   const settings = { ...readSettings(), ...(overrides || {}) };
   const src = selectedSource;
   $('#btn-start-share').disabled = true;
+  // área da tela só existe na captura nativa
+  if (src.crop && settings.engine === 'chromium') settings.engine = 'native';
 
   let [maxW, maxH] = RES[settings.res] || [3840, 2160];
   if (settings.res === 'native' && src.size) { maxW = src.size.width; maxH = src.size.height; }
@@ -926,7 +985,7 @@ async function startShareInner(overrides) {
       baseRtt = Infinity;
       lastCut = 0;
       nativeInfo = await window.NativeVideo.start({
-        sourceId: src.id, displayId: src.displayId, inject: direct,
+        sourceId: src.id, displayId: src.displayId, inject: direct, crop: src.crop || null,
         fps: settings.fps, kbps: direct ? state.nativeKbps : 50000, maxWidth: maxW, maxHeight: maxH,
       });
       video = nativeInfo.track;
@@ -971,6 +1030,7 @@ async function startShareInner(overrides) {
         ? ['app', Number(settings.audio.slice(4))]
         : ['all-except', 0];
       audio = await window.HelperAudio.start(mode, pid);
+      sendStoredGains(); // volumes do mixer guardados
     } catch (e) {
       toast(`Áudio indisponível: ${e.message}`, 'error');
     }
@@ -980,7 +1040,7 @@ async function startShareInner(overrides) {
 
   state.share = {
     stream, video, audio, settings, preview,
-    sourceName: src.name,
+    sourceName: src.crop ? `${src.name} (área)` : src.name,
     source: src,                         // para reiniciar a mesma tela se a captura cair
     native: !!nativeInfo,                // captura feita pelo helper
     direct: !!nativeInfo && direct,      // H.264 do helper vai direto para a rede
@@ -1006,6 +1066,167 @@ async function startShareInner(overrides) {
     sendState(peer.id);
   }
   render();
+}
+
+// ------------------------------------------------------------------ teste de conexão
+// Mede, com cada amigo, a velocidade real pelo caminho que o vídeo usa (Radmin): ping, variação
+// e quantos Mb/s passam em cada sentido. Depois sugere a qualidade de transmissão.
+const ST_MS = 4000, ST_CHUNK = 64 * 1024;
+const stRx = new Map();     // id do amigo -> { bytes, t0 } (recebendo um teste)
+const stWait = new Map();   // "id:chave" -> resolve (esperando resposta)
+
+function dcSend(peer, obj) {
+  if (!peer.dc || peer.dc.readyState !== 'open') throw new Error('canal de dados fechado');
+  peer.dc.send(JSON.stringify(obj));
+}
+function dcWait(peer, key, ms) {
+  return new Promise((resolve, reject) => {
+    const k = `${peer.id}:${key}`;
+    const timer = setTimeout(() => { stWait.delete(k); reject(new Error('sem resposta (o amigo precisa estar na versão nova)')); }, ms);
+    stWait.set(k, (v) => { clearTimeout(timer); stWait.delete(k); resolve(v); });
+  });
+}
+function dcResolve(peer, key, v) { const f = stWait.get(`${peer.id}:${key}`); if (f) f(v); }
+
+// manda dados o mais rápido possível por ST_MS (sem estourar o buffer do canal)
+async function stBlast(peer) {
+  const chunk = new ArrayBuffer(ST_CHUNK);
+  const dc = peer.dc;
+  dc.bufferedAmountLowThreshold = 1 << 20;
+  dcSend(peer, { t: 'st-go' });
+  const end = performance.now() + ST_MS;
+  while (performance.now() < end && dc.readyState === 'open') {
+    if (dc.bufferedAmount > (8 << 20)) {
+      await new Promise((r) => { dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; setTimeout(r, 200); });
+      continue;
+    }
+    dc.send(chunk);
+  }
+  dcSend(peer, { t: 'st-end' });
+}
+
+function onDataMessage(peer, data) {
+  if (data instanceof ArrayBuffer) {
+    const rx = stRx.get(peer.id);
+    if (rx) { if (!rx.t0) rx.t0 = performance.now(); rx.bytes += data.byteLength; }
+    return;
+  }
+  let m;
+  try { m = JSON.parse(data); } catch { return; }
+  switch (m.t) {
+    case 'ping': try { dcSend(peer, { t: 'pong', ts: m.ts }); } catch {} break;
+    case 'pong': dcResolve(peer, 'pong', performance.now() - m.ts); break;
+    case 'st-go': stRx.set(peer.id, { bytes: 0, t0: 0 }); break;
+    case 'st-end': {
+      const rx = stRx.get(peer.id);
+      stRx.delete(peer.id);
+      const ms = rx && rx.t0 ? performance.now() - rx.t0 : 0;
+      try { dcSend(peer, { t: 'st-res', bytes: rx ? rx.bytes : 0, ms }); } catch {}
+      dcResolve(peer, 'st-in', rx && ms ? (rx.bytes * 8) / (ms / 1000) : 0); // teste vindo dele = meu download
+      break;
+    }
+    case 'st-res': dcResolve(peer, 'st-res', m.ms ? (m.bytes * 8) / (m.ms / 1000) : 0); break;
+    case 'st-rev': stBlast(peer).catch(() => {}); break; // ele pediu para medir o sentido contrário
+    default: break;
+  }
+}
+
+async function testPeer(peer, onStep) {
+  const r = { name: peer.name };
+  // ping pelo canal de dados (10 vezes): média e variação
+  const pings = [];
+  for (let i = 0; i < 10; i++) {
+    const wait = dcWait(peer, 'pong', 3000);
+    dcSend(peer, { t: 'ping', ts: performance.now() });
+    pings.push(await wait);
+    await new Promise((res) => setTimeout(res, 60));
+  }
+  r.ping = pings.reduce((a, b) => a + b, 0) / pings.length;
+  r.jitter = Math.max(...pings) - Math.min(...pings);
+  onStep(`${peer.name}: medindo o seu envio...`);
+  const resUp = dcWait(peer, 'st-res', ST_MS + 8000);
+  await stBlast(peer);
+  r.up = await resUp;
+  onStep(`${peer.name}: medindo o envio dele para você...`);
+  const resDown = dcWait(peer, 'st-in', ST_MS + 8000);
+  dcSend(peer, { t: 'st-rev' });
+  r.down = await resDown;
+  return r;
+}
+
+// Sugestão: o vídeo usa ~60% do que passou (sobra para áudio, câmera e variações).
+// Na malha cada amigo recebe uma cópia: o seu upload é dividido entre eles.
+function suggestQuality(results) {
+  const ok = results.filter((r) => r.up > 0);
+  if (!ok.length) return null;
+  const minUp = Math.min(...ok.map((r) => r.up)) / 1e6;
+  const totalUp = Math.max(...ok.map((r) => r.up)) / 1e6; // um teste de cada vez: o maior ≈ seu upload
+  const perPeer = Math.min(minUp * 0.6, (totalUp * 0.6) / Math.max(1, state.peers.size));
+  const bitrate = Math.max(3, Math.min(50, Math.floor(perPeer)));
+  const worstPing = Math.max(...ok.map((r) => r.ping));
+  // com folga (20+ Mb/s) mantém a resolução escolhida (nativa/1440p); senão, 1080p ou menos
+  let res = bitrate >= 20 ? state.settings.res : '1080', fps = 60;
+  if (bitrate < 6) { res = '720'; fps = 30; } else if (bitrate < 10) res = '720';
+  return { bitrate, res, fps, worstPing };
+}
+
+async function runNetTest() {
+  const modal = $('#nettest-modal'), body = $('#nettest-body'), apply = $('#nettest-apply');
+  modal.classList.remove('hidden');
+  if (state.netTesting) return;
+  apply.classList.add('hidden');
+  const peers = [...state.peers.values()].filter((p) => p.dc && p.dc.readyState === 'open');
+  if (!peers.length) {
+    body.innerHTML = '<p class="muted">Ninguém conectado para testar (ou os amigos ainda estão numa versão antiga).</p>';
+    return;
+  }
+  state.netTesting = true;
+  const results = [];
+  const grade = (v, warn, bad, lower) => (lower ? (v < bad ? 'bad' : v < warn ? 'warn' : 'good') : (v > bad ? 'bad' : v > warn ? 'warn' : 'good'));
+  const draw = (status) => {
+    body.innerHTML = '';
+    const table = document.createElement('table');
+    table.className = 'nettest-table';
+    table.innerHTML = '<tr><th>Amigo</th><th>Ping</th><th>Variação</th><th>Você → ele</th><th>Ele → você</th></tr>';
+    for (const r of results) {
+      const tr = document.createElement('tr');
+      const cell = (t, cls = '', span = 1) => { const td = document.createElement('td'); td.textContent = t; td.className = cls; td.colSpan = span; tr.appendChild(td); };
+      cell(r.name);
+      if (r.error) cell(r.error, 'bad', 4);
+      else {
+        cell(`${Math.round(r.ping)} ms`, grade(r.ping, 60, 120));
+        cell(`${Math.round(r.jitter)} ms`, grade(r.jitter, 25, 60));
+        cell(fmtMbps(r.up), grade(r.up, 25e6, 10e6, true));
+        cell(fmtMbps(r.down), grade(r.down, 25e6, 10e6, true));
+      }
+      table.appendChild(tr);
+    }
+    body.appendChild(table);
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = status;
+    body.appendChild(p);
+  };
+  try {
+    for (const peer of peers) {
+      draw(`Testando com ${peer.name}...`);
+      try { results.push(await testPeer(peer, (t) => draw(t))); } catch (e) { results.push({ name: peer.name, error: e.message }); }
+    }
+    console.log(`teste de conexão: ${safeJson(results.map((r) => ({ ...r, up: r.up && +(r.up / 1e6).toFixed(1), down: r.down && +(r.down / 1e6).toFixed(1) })))}`);
+    const sug = suggestQuality(results);
+    if (!sug) { draw('Não deu para medir. Tente de novo.'); return; }
+    draw(`Sugestão: ${sug.res}p ${sug.fps} fps, ${sug.bitrate} Mb/s por amigo.` +
+      (sug.worstPing > 120 ? ' Ping alto: prefira "Fluidez".' : '') +
+      ' Medido pelo Radmin; é um mínimo, a velocidade real pode ser maior.');
+    apply.classList.remove('hidden');
+    apply.onclick = () => {
+      Object.assign(state.settings, { bitrate: sug.bitrate, res: sug.res, fps: sug.fps });
+      saveSettings();
+      if (state.share) applyLiveBitrate(sug.bitrate);
+      toast(`Qualidade: ${sug.res}p ${sug.fps} fps, ${sug.bitrate} Mb/s.${state.share ? ' Resolução e FPS valem ao reiniciar a transmissão (ou em Ajustes).' : ''}`);
+      modal.classList.add('hidden');
+    };
+  } finally { state.netTesting = false; }
 }
 
 // ------------------------------------------------------------------ bitrate adaptativo (modo nativo)
@@ -1087,6 +1308,59 @@ function openAdjust() {
   $('#adj-mode').value = s.mode;
   $('#adj-engine').value = s.engine || 'native';
   panel.classList.remove('hidden');
+  refreshMixer();
+}
+
+// ------------------------------------------------------------------ mixer (áudio transmitido)
+// Volume de cada app no som que os amigos ouvem (ex.: música mais baixa que o jogo).
+// Guardado pelo nome do programa: vale de novo nas próximas transmissões.
+function storedGains() { try { return JSON.parse(localStorage.getItem('gains')) || {}; } catch { return {}; } }
+function sendStoredGains() {
+  for (const [exe, g] of Object.entries(storedGains())) window.Helper.audioGain(exe, g);
+}
+let mixerTimer = null;
+async function refreshMixer() {
+  clearTimeout(mixerTimer);
+  const panel = $('#adjust-panel'), box = $('#mixer'), list = $('#mixer-list');
+  if (panel.classList.contains('hidden')) return;
+  const sharingAudio = !!(state.share && state.share.audio);
+  box.classList.toggle('hidden', !sharingAudio);
+  if (!sharingAudio) return;
+  let apps = [];
+  try { apps = (await window.Helper.mixerApps()).apps || []; } catch {}
+  // não refaz os controles enquanto a pessoa arrasta um deles
+  if (!list.contains(document.activeElement) || list.dataset.key !== apps.map((a) => a.exe).join('|')) {
+    list.dataset.key = apps.map((a) => a.exe).join('|');
+    list.innerHTML = '';
+    if (!apps.length) list.innerHTML = '<p class="muted">Nenhum app tocando som agora.</p>';
+    const gains = storedGains();
+    for (const a of apps) {
+      const row = document.createElement('label');
+      row.className = 'mixer-row';
+      const name = document.createElement('span');
+      name.className = 'mixer-name';
+      name.textContent = a.name;
+      name.title = a.exe;
+      const r = document.createElement('input');
+      r.type = 'range'; r.min = 0; r.max = 1.5; r.step = 0.05;
+      r.value = gains[a.exe] ?? a.gain ?? 1;
+      const pct = document.createElement('span');
+      pct.className = 'mixer-pct';
+      const show = () => { pct.textContent = Number(r.value) === 0 ? 'mudo' : `${Math.round(r.value * 100)}%`; };
+      show();
+      r.oninput = () => {
+        show();
+        const g = storedGains();
+        if (Number(r.value) === 1) delete g[a.exe]; else g[a.exe] = Number(r.value);
+        localStorage.setItem('gains', JSON.stringify(g));
+        window.Helper.audioGain(a.exe, Number(r.value));
+      };
+      r.ondblclick = () => { r.value = 1; r.oninput(); };
+      row.append(name, r, pct);
+      list.appendChild(row);
+    }
+  }
+  mixerTimer = setTimeout(refreshMixer, 3000); // apps começam/param de tocar
 }
 
 // Qualidade: aplica sem reiniciar nada (limites do encoder + renegociação dos limites de banda)
@@ -1198,12 +1472,14 @@ function trailLayer(tile) {
     const g = c.getContext('2d');
     g.clearRect(0, 0, c.width, c.height);
     const now = performance.now();
-    tile.trailLines = tile.trailLines.filter((s) => now - s.t < 2500);
+    // rastro some em 2,5 s; caneta fica INK_LIFE e só esmaece no final
+    tile.trailLines = tile.trailLines.filter((s) => now - s.t < (s.life || 2500));
     const b = videoBox(tile);
     for (const s of tile.trailLines) {
-      g.globalAlpha = Math.max(0, 1 - (now - s.t) / 2500);
+      const age = now - s.t;
+      g.globalAlpha = s.life ? Math.max(0, Math.min(1, (s.life - age) / 1200)) : Math.max(0, 1 - age / 2500);
       g.strokeStyle = s.color;
-      g.lineWidth = 5;
+      g.lineWidth = s.life ? 4 : 5;
       g.lineCap = 'round';
       g.beginPath();
       g.moveTo(b.left - r.left + s.x1 * b.width, b.top - r.top + s.y1 * b.height);
@@ -1214,6 +1490,93 @@ function trailLayer(tile) {
   };
   tile.trailDraw = () => { if (!tile.trailAnimating) { tile.trailAnimating = true; requestAnimationFrame(draw); } };
   return c;
+}
+
+// ------------------------------------------------------------------ caneta (desenho que fica)
+// Botão de caneta numa tela: arrastar com o botão esquerdo desenha; os traços ficam INK_LIFE
+// para todos (e no monitor de quem transmite) e depois somem. "Apagar" tira os seus na hora.
+const INK_LIFE = 8000;
+function showInk(target, fromId, name, segs) {
+  const color = `hsl(${nameHue(name)}, 85%, 55%)`;
+  const tile = tileByOwner(target);
+  if (tile && tile.el.isConnected) {
+    trailLayer(tile);
+    const t = performance.now();
+    for (const [x1, y1, x2, y2] of segs) tile.trailLines.push({ x1, y1, x2, y2, color, t, life: INK_LIFE, from: fromId });
+    tile.trailDraw();
+  }
+  if (sendToMyDesktop(target, fromId)) {
+    window.native.ink({ displayId: state.share.source.displayId, id: fromId, segs, color, life: INK_LIFE });
+  }
+}
+function clearInk(target, fromId) {
+  const tile = tileByOwner(target);
+  if (tile && tile.trailLines) { tile.trailLines = tile.trailLines.filter((s) => s.from !== fromId); tile.trailDraw && tile.trailDraw(); }
+  if (target === state.myId) window.native.ink({ clear: true, id: fromId });
+}
+
+function setPen(tile, id, on) {
+  tile.pen = on;
+  tile.el.classList.toggle('pen-on', on);
+  if (tile.penBtn) tile.penBtn.classList.toggle('active', on);
+  if (on && !tile.penTools) {
+    const tools = document.createElement('div');
+    tools.className = 'pen-tools';
+    const label = document.createElement('span');
+    label.textContent = '✏️ Caneta: arraste para desenhar';
+    const clear = document.createElement('button');
+    clear.textContent = 'Apagar';
+    clear.onclick = (e) => { e.stopPropagation(); const target = ownerKey(id); sendRelay(null, { kind: 'ink-clear', target }); clearInk(target, 'me'); };
+    const close = document.createElement('button');
+    close.textContent = '✕';
+    close.title = 'Desligar a caneta (Esc)';
+    close.onclick = (e) => { e.stopPropagation(); setPen(tile, id, false); };
+    for (const b of [clear, close]) { b.ondblclick = (e) => e.stopPropagation(); b.onpointerdown = (e) => e.stopPropagation(); }
+    tools.append(label, clear, close);
+    tile.el.appendChild(tools);
+    tile.penTools = tools;
+  }
+  if (tile.penTools) tile.penTools.classList.toggle('hidden', !on);
+}
+
+// liga a caneta numa tela: desenha com o botão esquerdo, manda os traços em lotes (~20/s)
+function attachPen(tile, id) {
+  let drawing = false, last = null, batch = [], flushTimer = null;
+  const pos = (e) => {
+    const b = videoBox(tile);
+    return [Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)), Math.max(0, Math.min(1, (e.clientY - b.top) / b.height))];
+  };
+  const flush = () => {
+    flushTimer = null;
+    if (!batch.length) return;
+    const segs = batch.map((sg) => sg.map((v) => Math.round(v * 10000) / 10000));
+    batch = [];
+    sendRelay(null, { kind: 'ink', target: ownerKey(id), segs });
+  };
+  tile.el.addEventListener('pointerdown', (e) => {
+    if (!tile.pen || e.button !== 0 || e.target.closest('.tile-bar, .react-bar, .pen-tools, .cam-pip')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drawing = true;
+    last = pos(e);
+    try { tile.el.setPointerCapture(e.pointerId); } catch {}
+  }, true);
+  tile.el.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 0.002) return;
+    const seg = [last[0], last[1], p[0], p[1]];
+    last = p;
+    showInk(ownerKey(id), 'me', state.myName, [seg]);
+    batch.push(seg);
+    if (!flushTimer) flushTimer = setTimeout(flush, 50);
+  });
+  const end = () => { if (!drawing) return; drawing = false; flush(); };
+  tile.el.addEventListener('pointerup', end);
+  tile.el.addEventListener('pointercancel', end);
+  // com a caneta ligada, clique/duplo clique não trocam o foco nem a tela cheia
+  tile.el.addEventListener('click', (e) => { if (tile.pen && !e.target.closest('.tile-bar, .react-bar, .pen-tools')) e.stopPropagation(); }, true);
+  tile.el.addEventListener('dblclick', (e) => { if (tile.pen && !e.target.closest('.tile-bar')) e.stopPropagation(); }, true);
 }
 
 function sendToMyDesktop(target, fromId) {
@@ -1307,6 +1670,7 @@ function attachInteractions(tile, id) {
     bar.appendChild(b);
   }
   tile.el.appendChild(bar);
+  attachPen(tile, id);
 
   if (id === 'me') return; // mãozinha só na tela dos outros
   // Mãozinha: segure o botão DIREITO sobre a tela do amigo e mova.
@@ -1420,6 +1784,170 @@ async function saveClip(id) {
   }
 }
 
+// ------------------------------------------------------------------ assistir junto
+// ⏯ na tela de um amigo: pede play/pausa no PC dele (tecla de mídia do Windows: vale para
+// YouTube no navegador, Spotify, VLC...), só se ele permitir. "Todo mundo pronto?": cada um
+// confirma; com todos prontos vem a contagem 3-2-1 e, se a contagem foi pedida para o vídeo de
+// alguém, o vídeo dele começa sozinho no "já".
+function mediaAllowed() { return localStorage.getItem('mediactl') === '1'; }
+
+function requestMedia(id) {
+  const peer = state.peers.get(id);
+  if (!peer || !peer.sharing) return;
+  sendRelay(id, { kind: 'media', action: 'playpause' });
+}
+
+function pressMedia(byName) {
+  window.Helper.mediaKey('playpause');
+  const text = `⏯ ${byName} deu play/pausa no vídeo de ${state.myName}`;
+  addChat('', text, true);
+  sendRelay(null, { kind: 'media-done', text });
+}
+
+function onMediaRequest(peer) {
+  if (!state.share) return;
+  if (!mediaAllowed()) {
+    toast(`${peer.name} quer dar play/pausa no seu vídeo. Para deixar, ligue "Amigos controlam play/pausa" na barra lateral.`);
+    sendRelay(peer.id, { kind: 'media-denied' });
+    return;
+  }
+  pressMedia(peer.name);
+}
+
+let readyCheck = null; // { id, from, fromName, target, ready: Set, timer }
+function memberIds() { return [state.myId, ...state.peers.keys()].map(String); }
+
+function startReadyCheck() {
+  if (readyCheck) return;
+  // alvo: quem está em foco (ou o único) transmitindo, para o play automático no "já"
+  const sharing = [...state.peers.values()].filter((p) => p.sharing);
+  const focused = state.focusId && state.peers.get(state.focusId);
+  const target = focused && focused.sharing ? focused.id : sharing.length === 1 ? sharing[0].id : (state.share ? state.myId : null);
+  const check = { id: `${state.myId}-${Date.now()}`, from: state.myId, fromName: state.myName, target: target ? String(target) : null };
+  sendRelay(null, { kind: 'ready-check', ...check });
+  onReadyCheck(check);
+  markReady();
+}
+
+function onReadyCheck(c) {
+  if (readyCheck) clearTimeout(readyCheck.timer);
+  readyCheck = { ...c, ready: new Set() };
+  readyCheck.timer = setTimeout(() => endReadyCheck('ninguém respondeu a tempo'), 60000);
+  if (String(c.from) !== String(state.myId)) { Sfx.play('chat'); if (!document.hasFocus()) window.native.focusWindow(); }
+  renderReady();
+}
+
+function markReady() {
+  if (!readyCheck) return;
+  sendRelay(null, { kind: 'ready', id: readyCheck.id });
+  onReady(state.myId, readyCheck.id);
+}
+
+function onReady(who, id) {
+  if (!readyCheck || readyCheck.id !== id) return;
+  readyCheck.ready.add(String(who));
+  renderReady();
+  if (memberIds().every((m) => readyCheck.ready.has(m))) countdown();
+}
+
+function endReadyCheck(reason) {
+  if (!readyCheck) return;
+  clearTimeout(readyCheck.timer);
+  readyCheck = null;
+  $('#ready-banner').classList.add('hidden');
+  if (reason) toast(`"Todo mundo pronto?" cancelado: ${reason}.`);
+}
+
+function renderReady() {
+  const b = $('#ready-banner');
+  if (!readyCheck) { b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
+  const names = memberIds().map((m) => {
+    const name = m === String(state.myId) ? state.myName : (state.peers.get(m) || state.peers.get(Number(m)) || {}).name || '?';
+    return `${readyCheck.ready.has(m) ? '✅' : '⏳'} ${name}`;
+  });
+  const targetName = readyCheck.target
+    ? (String(readyCheck.target) === String(state.myId) ? 'seu vídeo' : `o vídeo de ${(state.peers.get(readyCheck.target) || state.peers.get(Number(readyCheck.target)) || {}).name || '?'}`)
+    : null;
+  $('#ready-text').textContent = `${readyCheck.fromName} perguntou: todo mundo pronto?${targetName ? ` (no "já", ${targetName} começa)` : ''}`;
+  $('#ready-list').textContent = names.join('   ');
+  $('#ready-ok').classList.toggle('hidden', readyCheck.ready.has(String(state.myId)));
+}
+
+function countdown() {
+  const check = readyCheck;
+  clearTimeout(check.timer);
+  readyCheck = null;
+  $('#ready-banner').classList.add('hidden');
+  const el = $('#countdown');
+  let n = 3;
+  const step = () => {
+    el.classList.remove('hidden', 'pop');
+    void el.offsetWidth; // reinicia a animação
+    el.classList.add('pop');
+    el.textContent = n > 0 ? String(n) : 'Já!';
+    Sfx.play(n > 0 ? 'chat' : 'share');
+    if (n === 0) {
+      // quem transmite o vídeo-alvo dá o play (sem pedir permissão: todos confirmaram, inclusive ele)
+      if (check.target && String(check.target) === String(state.myId) && state.share) pressMedia('a contagem');
+      setTimeout(() => el.classList.add('hidden'), 900);
+      return;
+    }
+    n--;
+    setTimeout(step, 1000);
+  };
+  step();
+}
+
+// ------------------------------------------------------------------ gravação longa
+// Grava a tela (com a câmera por cima e o mesmo áudio dos clipes) direto num MP4 em
+// Vídeos\Tela Amigos, sem limite de tempo. Clique de novo para parar.
+async function toggleRecording(id) {
+  const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+  if (window.Clips.isRecording(id)) {
+    const r = await window.Clips.stopRecording(id).catch((e) => { toast(`Falha ao salvar a gravação: ${e.message}`, 'error'); return null; });
+    if (tile) { tile.el.classList.remove('recording'); tile.recBadge && tile.recBadge.remove(); tile.recBadge = null; }
+    if (r) toast(`Gravação salva (${fmtDuration(r.seconds)}, ${fmtSize(r.bytes)}) em Vídeos\\Tela Amigos.`);
+    else toast('A gravação terminou sem imagem (nada foi salvo).', 'error');
+    return;
+  }
+  const stream = tileStream(id);
+  if (!stream || !stream.getVideoTracks().length) { toast('Essa tela não está transmitindo nada para gravar.', 'error'); return; }
+  const opts = {
+    compose: () => (tile && !tile.camBox.classList.contains('hidden')) ? { video: tile.camVideo, pos: camPos(tile) } : null,
+  };
+  if (localStorage.getItem('clipSys') !== '0' && (await window.native.audioAvailable())) {
+    try {
+      const mix = await window.ClipAudio.mixFor(stream);
+      opts.audioTrack = mix.track;
+      opts.release = mix.release;
+    } catch (e) { console.warn('áudio do PC na gravação', e); }
+  }
+  if (!window.Clips.startRecording(id, stream, tileName(id), opts)) { toast('Não deu para começar a gravação.', 'error'); return; }
+  if (tile) {
+    tile.el.classList.add('recording');
+    tile.recBadge = document.createElement('div');
+    tile.recBadge.className = 'rec-badge';
+    tile.recBadge.title = 'Gravando · clique no botão de gravar de novo para parar';
+    tile.el.appendChild(tile.recBadge);
+  }
+  updateRecBadges();
+  toast(`Gravando a tela de ${tileName(id)}. Clique de novo no botão de gravar para parar e salvar.`);
+}
+function fmtDuration(sec) {
+  const s = Math.floor(sec), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+function fmtSize(b) { return b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`; }
+function updateRecBadges() {
+  for (const id of window.Clips.recordingIds()) {
+    const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+    const info = window.Clips.recInfo(id);
+    if (tile && tile.recBadge && info) tile.recBadge.textContent = `● REC ${fmtDuration(info.seconds)} · ${fmtSize(info.bytes)}`;
+  }
+}
+setInterval(updateRecBadges, 1000);
+
 // ------------------------------------------------------------------ sobreposição (por cima do jogo)
 // Abre uma janelinha sempre por cima com a tela do amigo. A janela é do mesmo app, então
 // recebe o próprio stream (sem decodificar de novo nem gastar banda extra).
@@ -1488,7 +2016,9 @@ async function healthLoop() {
       toast('Modo leve desligado: qualidade normal de volta.');
       for (const peer of state.peers.values()) applySendParams(peer);
     }
-    sendRelay(null, { kind: 'health', cpu: state.lightMode || cpu });
+    // a causa certa para o indicador dos amigos: PC no limite, captura abaixo do alvo, jogando
+    const capFps = ns && state.share.native ? ns.captureFps : null;
+    sendRelay(null, { kind: 'health', cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (state.share.settings && state.share.settings.fps) || 60), gaming: !!state.gaming });
   }
 
   for (const peer of state.peers.values()) {
@@ -1501,28 +2031,55 @@ async function healthLoop() {
       });
     } catch { continue; }
     if (!v) continue;
+    const pq = peer.tile.video.getVideoPlaybackQuality ? peer.tile.video.getVideoPlaybackQuality() : null;
     const prev = peer.qprev;
-    peer.qprev = { lost: v.packetsLost || 0, recv: v.packetsReceived || 0, fz: v.freezeCount || 0 };
+    peer.qprev = {
+      t: performance.now(), lost: v.packetsLost || 0, recv: v.packetsReceived || 0, fz: v.freezeCount || 0,
+      fRecv: v.framesReceived || 0, fDec: v.framesDecoded || 0, decT: v.totalDecodeTime || 0,
+      shown: pq ? pq.totalVideoFrames : 0, pdrop: pq ? pq.droppedVideoFrames : 0,
+    };
     if (!prev) continue;
-    const lostD = Math.max(0, peer.qprev.lost - prev.lost), recvD = Math.max(0, peer.qprev.recv - prev.recv);
+    const q = peer.qprev, dt = (q.t - prev.t) / 1000 || 2;
+    const lostD = Math.max(0, q.lost - prev.lost), recvD = Math.max(0, q.recv - prev.recv);
     const loss = lostD + recvD ? lostD / (lostD + recvD) : 0;
-    const freezes = peer.qprev.fz - prev.fz;
+    const freezes = q.fz - prev.fz;
     const fps = v.framesPerSecond || 0;
+    const recvFps = (q.fRecv - prev.fRecv) / dt;                   // quadros que chegaram
+    const decMs = q.fDec > prev.fDec ? ((q.decT - prev.decT) / (q.fDec - prev.fDec)) * 1000 : 0;
+    const shownD = q.shown - prev.shown, pdropD = q.pdrop - prev.pdrop;
+    const renderDrop = shownD > 0 ? pdropD / shownD : 0;            // quadros que o SEU PC não desenhou
     const thumb = peer.iWant === 'thumb';
-    const lowFps = thumb ? 12 : 40, badFps = thumb ? 5 : 15;
-    let level = 'good', reason = 'tudo certo';
-    if (peer.health && peer.health.cpu) { level = 'warn'; reason = `PC de ${peer.name} no limite (modo leve)`; }
-    if (loss > 0.01 || (rtt && rtt > 0.12) || fps < lowFps || freezes >= 1) {
+    const h = peer.health || {};
+    // "poucos quadros" é relativo ao que o amigo escolheu (30 ou 60 fps)
+    const lowFps = thumb ? 12 : Math.min(40, (h.target || 60) * 0.75), badFps = thumb ? 5 : 15;
+    const senderSlow = h.cpu || (h.cap != null && h.target && h.cap < h.target * 0.75);
+    const netBad = loss > 0.01 || (rtt && rtt > 0.12) || (freezes >= 1 && lostD > 0);
+    const mineBad = renderDrop > 0.1 || decMs > 25 || (recvFps > fps + 10);
+    let level = 'good', reason = 'tudo certo', short = '';
+    if (fps < lowFps || freezes >= 1 || netBad || senderSlow || mineBad) {
       level = 'warn';
-      reason = loss > 0.01 ? `rede perdendo pacotes (${(loss * 100).toFixed(1)}%)`
-        : rtt && rtt > 0.12 ? `atraso alto (${Math.round(rtt * 1000)} ms)`
-          : freezes ? 'travando' : `poucos quadros (${Math.round(fps)} fps)`;
-      if (peer.health && peer.health.cpu) reason = `PC de ${peer.name} no limite`;
+      if (senderSlow) {
+        reason = `PC de ${peer.name} no limite${h.cap != null ? ` (capturando ${Math.round(h.cap)} fps)` : ''}${h.gaming ? ' — jogo pesado' : ''}`;
+        short = `PC de ${peer.name}`;
+      } else if (netBad) {
+        reason = loss > 0.01 ? `rede entre vocês perdendo pacotes (${(loss * 100).toFixed(1)}%)`
+          : rtt && rtt > 0.12 ? `rede com atraso alto (${Math.round(rtt * 1000)} ms)` : 'rede instável';
+        short = 'rede';
+      } else if (mineBad) {
+        reason = `seu PC está ocupado (${renderDrop > 0.1 ? `${Math.round(renderDrop * 100)}% dos quadros não desenhados` : `decodificação lenta ${Math.round(decMs)} ms`})`;
+        short = 'seu PC';
+      } else if (freezes >= 1) { reason = 'travou um pouco'; short = 'travou'; }
+      else { reason = `poucos quadros (${Math.round(fps)} fps) — a tela pode estar parada`; short = 'tela parada?'; }
     }
     if (loss > 0.05 || fps < badFps || freezes >= 2) level = 'bad';
     peer.quality = { level, reason };
-    const dot = peer.tile.qdot;
-    if (dot) { dot.className = `qdot ${level}`; dot.title = `Qualidade: ${reason}`; }
+    const t = peer.tile;
+    if (t.qdot) {
+      t.qdot.className = `qdot ${level}`;
+      t.qbadge.className = `qbadge ${level}`;
+      t.qbadge.title = `Qualidade: ${reason}`;
+      t.qtext.textContent = `${Math.round(fps)} fps · ${rtt != null ? Math.round(rtt * 1000) : '?'} ms` + (short ? ` · ${short}` : '');
+    }
   }
 }
 setInterval(() => { healthLoop().catch(() => {}); }, 2000);
@@ -1596,6 +2153,7 @@ async function stopShare() {
   const share = state.share;
   if (!share) return;
   state.share = null;
+  if (window.Clips.isRecording('me')) toggleRecording('me'); // parou de transmitir: salva a gravação
   share.video.onended = null;
   if (share.native) await window.NativeVideo.stop();
   else share.stream.getTracks().forEach((t) => t.stop());
@@ -1670,6 +2228,9 @@ const ICONS = {
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.5C4.3 9 3 12 3 12s4 6 9 6a9 9 0 0 0 4.2-1"/></svg>',
   vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+  pen: '<svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg>',
+  playpause: '<svg viewBox="0 0 24 24"><path d="M4 5l8 7-8 7z" class="fill"/><path d="M15 5v14M20 5v14"/></svg>',
+  record: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/><circle cx="9.5" cy="12" r="2.5" class="fill"/></svg>',
   rec: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4" class="fill"/></svg>',
   clip: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.5 7.5L20 18M8.5 16.5L20 6"/></svg>',
   overlay: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="14" height="12" rx="2"/><rect x="9" y="3" width="13" height="10" rx="2" class="fill"/></svg>',
@@ -1771,18 +2332,27 @@ function makeTile(id) {
   }
   actions.append(
     iconButton('focus', 'Focar nesta tela / voltar para a grade', () => toggleFocus(id)),
+    ...(isMe ? [] : [iconButton('playpause', 'Play/pausa no vídeo do amigo (se ele permitir)', () => requestMedia(id))]),
     iconButton('pip', 'Picture-in-picture (janela flutuante)', () => togglePip(id)),
     ...(isMe ? [] : [iconButton('overlay', 'Sobreposição: janelinha por cima do jogo', () => openOverlay(id))]),
     iconButton('rec', 'Replay: guarda os últimos 30 s desta tela para salvar um clipe', (b) => toggleReplay(id, b)),
     iconButton('clip', 'Salvar clipe dos últimos 30 s (Ctrl+Shift+C)', () => saveClip(id)),
+    iconButton('record', 'Gravar esta tela (sem limite de tempo) / parar e salvar', () => toggleRecording(id)),
+    (tile.penBtn = iconButton('pen', 'Caneta: desenhar nesta tela (os traços ficam alguns segundos para todos)', () => setPen(tile, id, !tile.pen))),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
   );
   if (!isMe) {
     // bolinha de qualidade (verde/amarelo/vermelho) com o motivo ao passar o mouse
+    // + selo com fps/ping e, quando piora, de quem é o problema (rede, PC dele, seu PC)
+    tile.qbadge = document.createElement('div');
+    tile.qbadge.className = 'qbadge';
     tile.qdot = document.createElement('span');
     tile.qdot.className = 'qdot';
-    tile.qdot.title = 'Qualidade: medindo...';
-    el.appendChild(tile.qdot);
+    tile.qtext = document.createElement('span');
+    tile.qtext.className = 'qtext';
+    tile.qbadge.title = 'Qualidade: medindo...';
+    tile.qbadge.append(tile.qdot, tile.qtext);
+    el.appendChild(tile.qbadge);
   }
   if (isMe) actions.append(iconButton('corner', 'Minimizar para o canto / colocar na grade', () => {
     state.meMini = !state.meMini;
@@ -2342,6 +2912,22 @@ function initRoomUi() {
   $('#opt-clipsys').onchange = () => localStorage.setItem('clipSys', $('#opt-clipsys').checked ? '1' : '0');
   $('#opt-laserdesk').checked = localStorage.getItem('laserDesk') !== '0';
   $('#opt-laserdesk').onchange = () => localStorage.setItem('laserDesk', $('#opt-laserdesk').checked ? '1' : '0');
+  $('#btn-region').onclick = () => pickRegion().catch((e) => toast(`Falha ao escolher a área: ${e.message}`, 'error'));
+  $('#btn-region-clear').onclick = () => { if (selectedSource) delete selectedSource.crop; updateRegionUi(); };
+  $('#side-opts').open = localStorage.getItem('sideOpts') === '1';
+  $('#side-opts').ontoggle = () => localStorage.setItem('sideOpts', $('#side-opts').open ? '1' : '0');
+  $('#btn-ready').onclick = () => startReadyCheck();
+  $('#ready-ok').onclick = () => markReady();
+  $('#ready-cancel').onclick = () => {
+    if (!readyCheck) return;
+    sendRelay(null, { kind: 'ready-cancel', id: readyCheck.id });
+    endReadyCheck(null);
+  };
+  $('#opt-mediactl').checked = mediaAllowed();
+  $('#opt-mediactl').onchange = () => localStorage.setItem('mediactl', $('#opt-mediactl').checked ? '1' : '0');
+  $('#btn-nettest').onclick = () => runNetTest().catch((e) => toast(`Falha no teste: ${e.message}`, 'error'));
+  $('#nettest-again').onclick = () => runNetTest().catch((e) => toast(`Falha no teste: ${e.message}`, 'error'));
+  $('#nettest-close').onclick = () => $('#nettest-modal').classList.add('hidden');
   $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));
   // mostra os atalhos que de fato ficaram valendo (outro programa pode ter "pegado" algum)
   window.native.getHotkeys().then((k) => {
@@ -2354,6 +2940,9 @@ function initRoomUi() {
   }).catch(() => {});
   $('#opt-gamehide').checked = localStorage.getItem('gamehide') !== '0';
   $('#opt-gamehide').onchange = () => { localStorage.setItem('gamehide', $('#opt-gamehide').checked ? '1' : '0'); render(); };
+  $('#opt-status').checked = localStorage.getItem('status') !== '0';
+  $('#stage').classList.toggle('nostatus', !$('#opt-status').checked);
+  $('#opt-status').onchange = () => { localStorage.setItem('status', $('#opt-status').checked ? '1' : '0'); $('#stage').classList.toggle('nostatus', !$('#opt-status').checked); };
   $('#opt-gamebuffer').checked = localStorage.getItem('gamebuffer') !== '0';
   $('#opt-gamebuffer').onchange = () => { localStorage.setItem('gamebuffer', $('#opt-gamebuffer').checked ? '1' : '0'); applyPlayoutBuffer(); };
   // teclas globais (funcionam com o jogo em primeiro plano)
@@ -2409,6 +2998,9 @@ function initRoomUi() {
     if (e.key === 'Escape') {
       if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
       if (!$('#adjust-panel').classList.contains('hidden')) { $('#adjust-panel').classList.add('hidden'); return; }
+      // caneta ligada em alguma tela: Esc desliga
+      const penTiles = [meTile, ...[...state.peers.values()].map((p) => p.tile)].filter((t) => t && t.pen);
+      if (penTiles.length) { for (const t of penTiles) setPen(t, t.el.dataset.id, false); return; }
       if ($('#share-modal').classList.contains('hidden') && state.layout === 'focus') { state.layout = 'grid'; render(); return; }
     }
     if (e.target.matches('input, select, textarea') || $('#room').classList.contains('hidden')) return;

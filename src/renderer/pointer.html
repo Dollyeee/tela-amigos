@@ -31,15 +31,29 @@
     canvas.width = innerWidth; canvas.height = innerHeight;
     const g = canvas.getContext('2d');
     const now = performance.now();
-    for (let i = lines.length - 1; i >= 0; i--) if (now - lines[i].t > 2500) lines.splice(i, 1);
+    // cada traço tem sua duração (rastro 2,5 s; caneta ~8 s, some só no final)
+    for (let i = lines.length - 1; i >= 0; i--) if (now - lines[i].t > (lines[i].life || 2500)) lines.splice(i, 1);
     for (const s of lines) {
-      g.globalAlpha = Math.max(0, 1 - (now - s.t) / 2500);
-      g.strokeStyle = s.color; g.lineWidth = 7; g.lineCap = 'round';
+      const life = s.life || 2500, age = now - s.t;
+      g.globalAlpha = s.life ? Math.max(0, Math.min(1, (life - age) / 1200)) : Math.max(0, 1 - age / 2500);
+      g.strokeStyle = s.color; g.lineWidth = s.life ? 6 : 7; g.lineCap = 'round';
       g.beginPath(); g.moveTo(s.x1 * innerWidth, s.y1 * innerHeight); g.lineTo(s.x2 * innerWidth, s.y2 * innerHeight); g.stroke();
     }
     if (lines.length) requestAnimationFrame(drawTrail); else animating = false;
   }
   window.pointerApi.onPointer((p) => {
+    // caneta: lote de traços que ficam alguns segundos; ou "limpar" os traços de alguém
+    if (p.inkClear) {
+      for (let i = lines.length - 1; i >= 0; i--) if (lines[i].id === p.id) lines.splice(i, 1);
+      if (!animating) { animating = true; requestAnimationFrame(drawTrail); } // redesenha (apaga da tela)
+      return;
+    }
+    if (p.inkSegs) {
+      const t = performance.now();
+      for (const [x1, y1, x2, y2] of p.inkSegs) lines.push({ x1, y1, x2, y2, color: p.color, t, life: p.life || 8000, id: p.id });
+      if (!animating) { animating = true; requestAnimationFrame(drawTrail); }
+      return;
+    }
     // esta janela (tela inteira) agora só desenha o RASTRO; a mão é uma janelinha à parte
     if (p.trailOnly) {
       const prev = hands[p.id];

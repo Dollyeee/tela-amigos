@@ -9,7 +9,17 @@ const root = path.join(__dirname, '..');
 const run = (cmd, env) => execSync(cmd, { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } });
 const out = (cmd) => execSync(cmd, { cwd: root, encoding: 'utf8' }).trim();
 
-const bump = process.argv[2] || 'patch';
+// antes de tudo: compila o helper e roda o teste automático (duas cópias do app conectando e
+// transmitindo). Se falhar, nada é publicado. "--skip-test" pula (só em emergência).
+run('npm run build:helper');
+if (!process.argv.includes('--skip-test')) {
+  try { run('node scripts/smoke-test.js'); } catch {
+    console.error('\nO teste automático falhou: versão NÃO publicada.');
+    process.exit(1);
+  }
+}
+
+const bump = process.argv.find((a) => ['patch', 'minor', 'major'].includes(a)) || 'patch';
 const pkgFile = path.join(root, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
 const [ma, mi, pa] = pkg.version.split('.').map(Number);
@@ -29,7 +39,6 @@ run('git push origin HEAD');
 run(`git push -f origin v${pkg.version}`);
 
 const tag = `v${pkg.version}`;
-run('npm run build:helper');
 // só compila; o envio é feito pelo gh (o envio do electron-builder falhava/corria em paralelo)
 run('npx electron-builder --win nsis --publish never');
 

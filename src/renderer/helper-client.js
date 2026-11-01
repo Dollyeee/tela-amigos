@@ -63,9 +63,13 @@ window.Helper = (() => {
   return {
     list: () => request({ cmd: 'list' }, 'list'),
     audioStart: (mode, pid) => request({ cmd: 'start', mode, pid }, 'started'),
+    audioGain: (exe, gain) => send({ cmd: 'audio-gain', exe, gain }),
+    mediaKey: (key) => send({ cmd: 'media-key', key }),
+    mixerApps: () => request({ cmd: 'mixer-apps' }, 'mixer-apps', 5000),
     audioStop: () => request({ cmd: 'stop' }, 'stopped'),
     async videoStart(opts) {
       const target = await window.native.videoTarget({ sourceId: opts.sourceId, displayId: opts.displayId });
+      if (opts.crop) target.crop = opts.crop; // só uma área da tela (frações 0..1)
       return request({
         cmd: 'video-start', target, fps: opts.fps, kbps: opts.kbps, maxWidth: opts.maxWidth, maxHeight: opts.maxHeight,
       }, 'video-started', 15000);

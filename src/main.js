@@ -150,6 +150,7 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: '#0e0f13',
     title: 'Tela Amigos',
+    show: !process.env.TELA_TEST_HIDDEN, // teste automático roda sem janela na tela
     icon: path.join(__dirname, 'renderer', 'icon.png'),
     autoHideMenuBar: true,
     // barra de título integrada: o topo do app vira a área de arrastar e os botões do Windows
@@ -382,6 +383,41 @@ ipcMain.handle('video:target', (_e, { sourceId, displayId }) => {
   return { type: 'monitor', x: Math.round(p.x), y: Math.round(p.y) };
 });
 
+// Escolher uma área da tela: janela transparente sobre o monitor inteiro; a pessoa arrasta um
+// retângulo. Devolve a área em frações do monitor (0..1), ou null se cancelar.
+let regionWin = null;
+ipcMain.handle('region:pick', (_e, displayId) => new Promise((resolve) => {
+  if (regionWin && !regionWin.isDestroyed()) regionWin.close();
+  const d = screen.getAllDisplays().find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
+  const b = d.bounds;
+  // a janela do app sai da frente se estiver nesse monitor (para ver o que tem embaixo)
+  const appOnIt = win && !win.isDestroyed() && !win.isMinimized() &&
+    screen.getDisplayMatching(win.getBounds()).id === d.id;
+  if (appOnIt) win.minimize();
+  let result = null;
+  regionWin = new BrowserWindow({
+    x: b.x, y: b.y, width: b.width, height: b.height, frame: false, transparent: true, resizable: false,
+    movable: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false, hasShadow: false, show: false,
+    webPreferences: { preload: path.join(__dirname, 'region-preload.js'), contextIsolation: true, sandbox: true },
+  });
+  regionWin.setAlwaysOnTop(true, 'screen-saver');
+  regionWin.setBounds(b); // garante o monitor inteiro mesmo com escalas diferentes
+  regionWin.loadFile(path.join(__dirname, 'renderer', 'region.html'));
+  regionWin.once('ready-to-show', () => { regionWin.show(); regionWin.focus(); });
+  const onDone = (_ev, rect) => {
+    const ok = rect && [rect.x, rect.y, rect.w, rect.h].every(Number.isFinite) && rect.w > 0.02 && rect.h > 0.02;
+    result = ok ? { x: Math.max(0, rect.x), y: Math.max(0, rect.y), w: Math.min(1, rect.w), h: Math.min(1, rect.h) } : null;
+    if (regionWin && !regionWin.isDestroyed()) regionWin.close();
+  };
+  ipcMain.once('region:done', onDone);
+  regionWin.on('closed', () => {
+    ipcMain.removeListener('region:done', onDone);
+    regionWin = null;
+    if (appOnIt && win && !win.isDestroyed()) { win.restore(); win.focus(); }
+    resolve(result);
+  });
+}));
+
 ipcMain.handle('audio:available', () => !!helperPath());
 
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
@@ -457,21 +493,64 @@ ipcMain.handle('diag:save', async (_e, rendererText) => {
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
   const file = path.join(app.getPath('desktop'), `TelaAmigos-diagnostico-${stamp}.txt`);
   fs.writeFileSync(file, '﻿' + text, 'utf8'); // com BOM: acentos certos em qualquer editor
-  shell.showItemInFolder(file);
+  if (!TEST_HIDDEN) shell.showItemInFolder(file);
   return file;
 });
 
 // ---- clipes: salva o MP4 em Vídeos\Tela Amigos ----
 ipcMain.handle('clip:save', (_e, name, buffer) => {
-  const dir = path.join(app.getPath('videos'), 'Tela Amigos');
+  const dir = videosDir();
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) || 'tela';
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
   const file = path.join(dir, `clipe-${safe}-${stamp}.mp4`);
   fs.writeFileSync(file, Buffer.from(buffer));
-  shell.showItemInFolder(file);
+  if (!TEST_HIDDEN) shell.showItemInFolder(file);
   return file;
 });
+
+// clipes e gravações: Vídeos\Tela Amigos (no teste automático, dentro do perfil de teste)
+const TEST_HIDDEN = !!process.env.TELA_TEST_HIDDEN;
+function videosDir() {
+  return TEST_HIDDEN ? path.join(app.getPath('userData'), 'videos') : path.join(app.getPath('videos'), 'Tela Amigos');
+}
+
+// Gravação longa: a interface manda pedaços do MP4 conforme codifica; vão direto para o disco
+const recFiles = new Map(); // handle -> { fd, file }
+let recSeq = 0;
+ipcMain.handle('rec:open', (_e, name) => {
+  const dir = videosDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) || 'tela';
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const file = path.join(dir, `gravacao-${safe}-${stamp}.mp4`);
+  const handle = ++recSeq;
+  recFiles.set(handle, { fd: fs.openSync(file, 'w'), file });
+  console.log(`gravação iniciada: ${file}`);
+  return handle;
+});
+ipcMain.on('rec:write', (_e, handle, data, position) => {
+  const r = recFiles.get(handle);
+  if (!r) return;
+  try {
+    const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    fs.writeSync(r.fd, buf, 0, buf.length, position);
+  } catch (e) {
+    console.error('gravação: falha ao escrever', e.message);
+    toRenderer('rec:error', { handle, message: e.code === 'ENOSPC' ? 'disco cheio' : e.message });
+  }
+});
+ipcMain.handle('rec:close', (_e, handle, empty) => {
+  const r = recFiles.get(handle);
+  if (!r) return null;
+  recFiles.delete(handle);
+  try { fs.closeSync(r.fd); } catch {}
+  if (empty) { try { fs.unlinkSync(r.file); } catch {} return null; }
+  console.log(`gravação salva: ${r.file}`);
+  if (!TEST_HIDDEN) shell.showItemInFolder(r.file);
+  return r.file;
+});
+app.on('will-quit', () => { for (const r of recFiles.values()) { try { fs.closeSync(r.fd); } catch {} } });
 
 ipcMain.handle('window:focus', () => {
   if (!win || win.isDestroyed()) return;
@@ -573,12 +652,35 @@ ipcMain.on('pointer:show', (_e, p) => {
     }
     sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true }, true);
     clearTimeout(trailTimer);
-    trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, 3000);
+    // não fecha antes de os traços da caneta apagarem
+    trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; },
+      Math.max(3000, trailDeadline - Date.now()));
   } else if (trailWin && !trailWin.isDestroyed()) {
     sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true, drawing: false }, false);
   }
 });
 ipcMain.on('pointer:hide', (_e, id) => destroyHand(id));
+
+// Caneta: traços que ficam alguns segundos no meu monitor (mesma janela do rastro, mantida
+// aberta até o último traço apagar)
+let trailDeadline = 0;
+ipcMain.on('ink:show', (_e, p) => {
+  const d = displayById(p.displayId);
+  if (p.clear) {
+    if (trailWin && !trailWin.isDestroyed()) sendWhenReady(trailWin, 'pointer', { inkClear: true, id: p.id }, false);
+    return;
+  }
+  if (!trailWin || trailWin.isDestroyed() || trailDisplay !== d.id) {
+    if (trailWin && !trailWin.isDestroyed()) trailWin.destroy();
+    trailWin = overlayWindow({ ...d.bounds }, 'pointer.html');
+    trailDisplay = d.id;
+    trailDeadline = 0;
+  }
+  sendWhenReady(trailWin, 'pointer', { inkSegs: p.segs, color: p.color, life: p.life, id: p.id }, true);
+  trailDeadline = Math.max(trailDeadline, Date.now() + (Number(p.life) || 8000) + 500);
+  clearTimeout(trailTimer);
+  trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, trailDeadline - Date.now());
+});
 
 // ---- ícone na bandeja: status da sala e atalhos ----
 let tray = null;

@@ -1,7 +1,7 @@
 {
   "name": "tela-amigos",
   "productName": "Tela Amigos",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "description": "Compartilhamento de tela entre amigos em alta qualidade",
   "main": "src/main.js",
   "repository": {
@@ -12,7 +12,8 @@
     "start": "electron .",
     "build:helper": "dotnet publish audio-helper/AudioHelper.csproj -c Release -o helper-bin",
     "build": "npm run build:helper && electron-builder --win nsis --publish never",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "test": "node scripts/smoke-test.js"
   },
   "license": "ISC",
   "type": "commonjs",

@@ -15,7 +15,8 @@ using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
 using WinRT;
 
-record VideoTarget(string Type, long Hwnd, int X, int Y);
+// Crop*: área da tela a transmitir, em frações (0..1) da imagem capturada (padrão: tudo)
+record VideoTarget(string Type, long Hwnd, int X, int Y, double CropX = 0, double CropY = 0, double CropW = 1, double CropH = 1);
 
 sealed unsafe class VideoStreamer : IDisposable
 {
@@ -77,6 +78,7 @@ sealed unsafe class VideoStreamer : IDisposable
     ID3D11Texture2D? latest;            // última tela capturada (BGRA)
     int latestW, latestH;               // tamanho da textura
     int contentW, contentH;             // área útil (janela pode ser menor que a textura)
+    VideoTarget? tgt;                   // alvo atual (com o recorte de área, se houver)
     long capturedFrames;
 
     // conversão
@@ -260,12 +262,14 @@ sealed unsafe class VideoStreamer : IDisposable
             if (activate == null) throw new Exception("encoder sumiu da lista");
         });
         Step($"abrir a placa de vídeo ({adapter.Desc})", () => CreateDevice(adapter.Luid));
+        tgt = target;
         Step("iniciar a captura da tela/janela", () => StartCapture(target));
 
-        // tamanho de saída: cabe em maxW x maxH mantendo proporção, sempre par
-        double scale = Math.Min(1.0, Math.Min((double)maxW / poolSize.Width, (double)maxH / poolSize.Height));
-        Width = Math.Max(64, (int)(poolSize.Width * scale) & ~1);
-        Height = Math.Max(64, (int)(poolSize.Height * scale) & ~1);
+        // tamanho de saída: cabe em maxW x maxH mantendo proporção, sempre par (só a área escolhida)
+        double srcW = Math.Max(64, poolSize.Width * target.CropW), srcH = Math.Max(64, poolSize.Height * target.CropH);
+        double scale = Math.Min(1.0, Math.Min(maxW / srcW, maxH / srcH));
+        Width = Math.Max(64, (int)(srcW * scale) & ~1);
+        Height = Math.Max(64, (int)(srcH * scale) & ~1);
 
         Step("criar texturas de conversão", CreateOutputTextures);
         Step("configurar o encoder da placa de vídeo (se estiver no limite de sessões de codificação, " +
@@ -489,11 +493,21 @@ sealed unsafe class VideoStreamer : IDisposable
     // escala mantendo a proporção, com faixas pretas se precisar
     void SetRects()
     {
-        int cw = Math.Max(1, contentW), ch = Math.Max(1, contentH);
+        int fullW = Math.Max(1, contentW), fullH = Math.Max(1, contentH);
+        // área escolhida (frações) -> pixels da captura
+        var t = tgt;
+        int sx = 0, sy = 0, cw = fullW, ch = fullH;
+        if (t != null && (t.CropW < 1 || t.CropH < 1))
+        {
+            sx = Math.Clamp((int)Math.Round(t.CropX * fullW), 0, fullW - 2);
+            sy = Math.Clamp((int)Math.Round(t.CropY * fullH), 0, fullH - 2);
+            cw = Math.Clamp((int)Math.Round(t.CropW * fullW), 2, fullW - sx);
+            ch = Math.Clamp((int)Math.Round(t.CropH * fullH), 2, fullH - sy);
+        }
         double s = Math.Min((double)Width / cw, (double)Height / ch);
         int dw = Math.Min(Width, (int)Math.Round(cw * s)) & ~1, dh = Math.Min(Height, (int)Math.Round(ch * s)) & ~1;
         int dx = ((Width - dw) / 2) & ~1, dy = ((Height - dh) / 2) & ~1;
-        videoContext.VideoProcessorSetStreamSourceRect(vp!, 0, true, new RawRect(0, 0, cw, ch));
+        videoContext.VideoProcessorSetStreamSourceRect(vp!, 0, true, new RawRect(sx, sy, sx + cw, sy + ch));
         videoContext.VideoProcessorSetStreamDestRect(vp!, 0, true, new RawRect(dx, dy, dx + dw, dy + dh));
         videoContext.VideoProcessorSetOutputTargetRect(vp!, true, new RawRect(0, 0, Width, Height));
     }

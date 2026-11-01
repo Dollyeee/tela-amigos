@@ -102,6 +102,11 @@ static class Program
                             t.TryGetProperty("hwnd", out var h) ? h.GetInt64() : 0,
                             t.TryGetProperty("x", out var x) ? x.GetInt32() : 0,
                             t.TryGetProperty("y", out var y) ? y.GetInt32() : 0);
+                        if (t.TryGetProperty("crop", out var cr) && cr.ValueKind == JsonValueKind.Object)
+                        {
+                            double F(string k, double d) => cr.TryGetProperty(k, out var e) ? Math.Clamp(e.GetDouble(), 0, 1) : d;
+                            target = target with { CropX = F("x", 0), CropY = F("y", 0), CropW = Math.Max(0.05, F("w", 1)), CropH = Math.Max(0.05, F("h", 1)) };
+                        }
                         var v = new VideoStreamer(root.GetProperty("fps").GetInt32(), root.GetProperty("kbps").GetInt32());
                         try
                         {
@@ -152,6 +157,20 @@ static class Program
                         SendJson(new { id, type = "boost", result = got.ToDictionary(k => k.Key.ToString(), k => k.Value) });
                         break;
                     }
+                    case "media-key":
+                        MediaKeys.Press(root.TryGetProperty("key", out var mk) ? mk.GetString() ?? "playpause" : "playpause");
+                        break;
+                    case "audio-gain":
+                    {
+                        var exe = root.GetProperty("exe").GetString() ?? "";
+                        float g = (float)Math.Clamp(root.GetProperty("gain").GetDouble(), 0, 2);
+                        if (exe.Length > 0) { if (Math.Abs(g - 1) < 0.001) AudioGains.ByExe.TryRemove(exe, out _); else AudioGains.ByExe[exe] = g; }
+                        if (id != null) SendJson(new { id, type = "audio-gain" });
+                        break;
+                    }
+                    case "mixer-apps":
+                        SendJson(new { id, type = "mixer-apps", apps = mixer?.Apps() ?? new List<object>() });
+                        break;
                     case "video-bitrate":
                         video?.SetBitrate(root.GetProperty("kbps").GetInt32());
                         break;
@@ -169,7 +188,15 @@ static class Program
     }
 }
 
-record AudioApp(int pid, string name, bool discord);
+record AudioApp(int pid, string name, bool discord, string exe);
+
+/// Volume de cada app no áudio transmitido (mixer de quem compartilha), pelo nome do .exe:
+/// vale de novo quando o app é reaberto (pid novo). 1 = normal, 0 = mudo, até 2 = mais alto.
+static class AudioGains
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, float> ByExe = new(StringComparer.OrdinalIgnoreCase);
+    public static float For(string exe) => exe.Length > 0 && ByExe.TryGetValue(exe, out var g) ? g : 1f;
+}
 
 static class ProcTree
 {
@@ -306,7 +333,7 @@ static class AudioApps
         foreach (var pid in SessionRoots(map))
         {
             if (ProcTree.IsSelf(pid, selfPid, map)) continue;
-            result.Add(new AudioApp(pid, FriendlyName(pid, map), ProcTree.IsDiscord(pid, map)));
+            result.Add(new AudioApp(pid, FriendlyName(pid, map), ProcTree.IsDiscord(pid, map), map.TryGetValue(pid, out var inf) ? inf.Exe : ""));
         }
         return result.OrderBy(a => a.name, StringComparer.OrdinalIgnoreCase).ToList();
     }
@@ -341,7 +368,12 @@ sealed class ProcessCapture : IDisposable
 
     public int Buffered => Volatile.Read(ref buffered);
 
-    public ProcessCapture(int pid) { Pid = pid; }
+    public readonly string Exe; // nome do .exe (volume do mixer)
+    public ProcessCapture(int pid)
+    {
+        Pid = pid;
+        try { using var p = Process.GetProcessById(pid); Exe = p.ProcessName + ".exe"; } catch { Exe = ""; }
+    }
 
     public async Task StartAsync(ProcessLoopbackMode mode)
     {
@@ -385,7 +417,7 @@ sealed class ProcessCapture : IDisposable
     }
 
     /// Soma até `count` amostras no buffer de mixagem. Retorna quantas foram lidas.
-    public int MixInto(int[] mix, int count, int offset = 0)
+    public int MixInto(int[] mix, int count, int offset = 0, float gain = 1f)
     {
         int done = 0;
         while (done < count)
@@ -396,7 +428,8 @@ sealed class ProcessCapture : IDisposable
                 partialPos = 0;
             }
             int n = Math.Min(count - done, partial.Length - partialPos);
-            for (int i = 0; i < n; i++) mix[offset + done + i] += partial[partialPos + i];
+            if (gain == 1f) for (int i = 0; i < n; i++) mix[offset + done + i] += partial[partialPos + i];
+            else for (int i = 0; i < n; i++) mix[offset + done + i] += (int)(partial[partialPos + i] * gain);
             partialPos += n;
             done += n;
         }
@@ -503,6 +536,26 @@ sealed class Mixer : IDisposable
         }
     }
 
+    // apps sendo capturados agora (para o mixer da interface)
+    public List<object> Apps()
+    {
+        lock (capLock)
+            return captures.Values.Where(c => !c.Dead && c.Exe.Length > 0)
+                .Select(c => (object)new { pid = c.Pid, exe = c.Exe, name = FriendlyName(c.Pid, c.Exe), gain = AudioGains.For(c.Exe) }).ToList();
+    }
+
+    static string FriendlyName(int pid, string exe)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            var desc = p.MainModule?.FileVersionInfo.FileDescription;
+            if (!string.IsNullOrWhiteSpace(desc)) return desc.Trim();
+        }
+        catch { }
+        return exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? exe[..^4] : exe;
+    }
+
     void MixLoop()
     {
         var mix = new int[BlockSamples + Program.Channels];
@@ -530,7 +583,7 @@ sealed class Mixer : IDisposable
                     }
                     if (buf > MaxSamples) c.Drop(buf - PrimeSamples);
                     else if (buf > HighSamples) c.Drop(Program.Channels); // descarta 1 quadro (~0,2%)
-                    int got = c.MixInto(mix, BlockSamples);
+                    int got = c.MixInto(mix, BlockSamples, 0, AudioGains.For(c.Exe));
                     if (got == 0)
                     {
                         if (++c.EmptyBlocks >= 3) { c.Primed = false; c.EmptyBlocks = 0; } // parou de tocar

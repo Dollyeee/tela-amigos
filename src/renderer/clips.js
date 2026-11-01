@@ -19,9 +19,14 @@ window.Clips = (() => {
       this.width = 0; this.height = 0;
       this.frames = 0;
       this.stopped = false;
+      this.keyEvery = 60;
+      this.bitrate = 10_000_000;
+      this.init();
       this.startVideo(stream);
       this.startAudio(opts.audioTrack ? new MediaStream([opts.audioTrack]) : stream);
     }
+
+    init() {}
 
     // câmera do amigo por cima, na posição em que ela está na tela (bordas arredondadas)
     drawCam(g, W, H) {
@@ -61,7 +66,7 @@ window.Clips = (() => {
           error: (e) => console.warn('clipe (vídeo)', e),
         });
         encoder.configure({
-          codec: 'avc1.640028', width: this.width, height: this.height, bitrate: 10_000_000, framerate: 60,
+          codec: 'avc1.640028', width: this.width, height: this.height, bitrate: this.bitrate, framerate: 60,
           hardwareAcceleration: 'prefer-hardware', latencyMode: 'realtime', avc: { format: 'avc' },
         });
         this.video.length = 0; // pedaços antigos (outro tamanho) não servem mais
@@ -71,7 +76,8 @@ window.Clips = (() => {
           const { value: frame, done } = await reader.read();
           if (done || this.stopped) { frame && frame.close(); break; }
           const key = `${frame.displayWidth}x${frame.displayHeight}`;
-          if (key !== cfgKey) { cfgKey = key; await makeEncoder(frame.displayWidth, frame.displayHeight); }
+          // gravação: o tamanho fica fixo (o arquivo não pode mudar de resolução no meio)
+          if (key !== cfgKey && !(this.fixedSize && encoder)) { cfgKey = key; await makeEncoder(frame.displayWidth, frame.displayHeight); }
           if (encoder.encodeQueueSize > 6) { frame.close(); continue; } // placa ocupada: pula um quadro
           let f = frame;
           const withCam = !!(this.opts.compose && this.opts.compose());
@@ -85,7 +91,7 @@ window.Clips = (() => {
             f = new VideoFrame(c, { timestamp: frame.timestamp });
             frame.close();
           }
-          encoder.encode(f, { keyFrame: this.frames % 60 === 0 }); // keyframe ~1 s
+          encoder.encode(f, { keyFrame: this.frames % this.keyEvery === 0 }); // keyframe ~1 s (clipe)
           this.frames++;
           f.close();
         }
@@ -102,9 +108,17 @@ window.Clips = (() => {
       while (this.video.length && this.video[0].chunk.type !== 'key') this.video.shift();
     }
 
+    pushAudio(chunk, meta) {
+      if (meta && meta.decoderConfig) this.audioConfig = meta.decoderConfig;
+      this.audio.push({ chunk, meta });
+      const last = chunk.timestamp;
+      while (this.audio.length > 1 && last - this.audio[0].chunk.timestamp > KEEP_US) this.audio.shift();
+    }
+
     async startAudio(stream) {
       const track = stream.getAudioTracks()[0];
-      if (!track || typeof AudioEncoder === 'undefined') return;
+      this.hasAudio = !!(track && typeof AudioEncoder !== 'undefined');
+      if (!this.hasAudio) return;
       this.aTrack = track.clone();
       const reader = new MediaStreamTrackProcessor({ track: this.aTrack }).readable.getReader();
       this.aReader = reader;
@@ -117,12 +131,7 @@ window.Clips = (() => {
             this.sampleRate = data.sampleRate;
             this.channels = Math.min(2, data.numberOfChannels);
             encoder = new AudioEncoder({
-              output: (chunk, meta) => {
-                if (meta && meta.decoderConfig) this.audioConfig = meta.decoderConfig;
-                this.audio.push({ chunk, meta });
-                const last = chunk.timestamp;
-                while (this.audio.length > 1 && last - this.audio[0].chunk.timestamp > KEEP_US) this.audio.shift();
-              },
+              output: (chunk, meta) => this.pushAudio(chunk, meta),
               error: (e) => console.warn('clipe (áudio)', e),
             });
             encoder.configure({ codec: 'opus', sampleRate: this.sampleRate, numberOfChannels: this.channels, bitrate: 160_000 });
@@ -167,6 +176,98 @@ window.Clips = (() => {
     }
   }
 
+  // Gravação longa: mesma codificação do replay, mas cada pedaço vai direto para um arquivo
+  // MP4 fragmentado no disco (o arquivo continua aproveitável mesmo se o app fechar no meio).
+  const recordings = new Map(); // id -> Recording
+  class Recording extends Replay {
+    init() {
+      this.fixedSize = true;
+      this.keyEvery = 120;        // keyframe a cada ~2 s (arquivo menor)
+      this.bitrate = 12_000_000;  // ~5 GB por hora em 1080p60
+      this.pending = [];          // pedaços que chegaram antes de o arquivo estar pronto
+      this.muxer = null;
+      this.startedAt = Date.now();
+      this.bytes = 0;
+      this.ready = window.native.recOpen(this.name).then((h) => { this.handle = h; });
+      // o áudio tem até 3 s para aparecer; senão grava só o vídeo
+      this.audioDeadline = performance.now() + 3000;
+    }
+    pushVideo(chunk, meta) {
+      if (meta && meta.decoderConfig) this.videoConfig = meta.decoderConfig;
+      this.feed('v', chunk, meta);
+    }
+    pushAudio(chunk, meta) {
+      if (meta && meta.decoderConfig) this.audioConfig = meta.decoderConfig;
+      this.feed('a', chunk, meta);
+    }
+    feed(kind, chunk, meta) {
+      if (this.closed) return;
+      if (!this.muxer) {
+        this.pending.push({ kind, chunk, meta });
+        const audioOk = !this.hasAudio || this.audioConfig || performance.now() > this.audioDeadline;
+        if (!this.videoConfig || !audioOk || !this.handle) return;
+        this.makeMuxer();
+        const list = this.pending; this.pending = [];
+        // o vídeo precisa começar num keyframe; o áudio de antes dele é descartado
+        const firstKey = list.find((x) => x.kind === 'v' && x.chunk.type === 'key');
+        if (!firstKey) return;
+        const t0 = firstKey.chunk.timestamp;
+        for (const x of list) if (x.chunk.timestamp >= t0) this.add(x.kind, x.chunk, x.meta);
+        return;
+      }
+      this.add(kind, chunk, meta);
+    }
+    makeMuxer() {
+      const withAudio = !!(this.hasAudio && this.audioConfig);
+      this.withAudio = withAudio;
+      this.muxer = new Mp4Muxer.Muxer({
+        target: new Mp4Muxer.StreamTarget({
+          onData: (data, position) => { this.bytes = Math.max(this.bytes, position + data.byteLength); window.native.recWrite(this.handle, data, position); },
+          chunked: true, chunkSize: 4 * 1024 * 1024,
+        }),
+        video: { codec: 'avc', width: this.width, height: this.height, frameRate: 60 },
+        audio: withAudio ? { codec: 'opus', numberOfChannels: this.channels, sampleRate: this.sampleRate } : undefined,
+        fastStart: 'fragmented',
+        firstTimestampBehavior: 'offset',
+      });
+      this.sentVideoCfg = false; this.sentAudioCfg = false;
+    }
+    add(kind, chunk, meta) {
+      try {
+        if (kind === 'v') {
+          if (!this.sentVideoCfg && chunk.type !== 'key') return;
+          this.muxer.addVideoChunk(chunk, this.sentVideoCfg ? undefined : { decoderConfig: this.videoConfig });
+          this.sentVideoCfg = true;
+        } else if (this.withAudio && this.sentVideoCfg) {
+          this.muxer.addAudioChunk(chunk, this.sentAudioCfg ? undefined : { decoderConfig: this.audioConfig });
+          this.sentAudioCfg = true;
+        }
+      } catch (e) { console.warn('gravação', e); }
+    }
+    async finish() {
+      this.stop();
+      await new Promise((r) => setTimeout(r, 300)); // últimos pedaços dos encoders
+      this.closed = true;
+      try { if (this.muxer) this.muxer.finalize(); } catch (e) { console.warn('gravação (finalizar)', e); }
+      await this.ready.catch(() => {});
+      return this.handle ? window.native.recClose(this.handle, !this.muxer) : null;
+    }
+  }
+
+  function startRecording(id, stream, name, opts) {
+    if (recordings.has(id) || !stream || !stream.getVideoTracks().length) { opts && opts.release && opts.release(); return false; }
+    recordings.set(id, new Recording(id, stream, name, opts));
+    return true;
+  }
+  async function stopRecording(id) {
+    const r = recordings.get(id);
+    if (!r) return null;
+    recordings.delete(id);
+    const file = await r.finish();
+    return file ? { file, seconds: (Date.now() - r.startedAt) / 1000, bytes: r.bytes } : null;
+  }
+  const recInfo = (id) => { const r = recordings.get(id); return r ? { seconds: (Date.now() - r.startedAt) / 1000, bytes: r.bytes } : null; };
+
   function toggle(id, stream, name, opts) {
     if (buffers.has(id)) { buffers.get(id).stop(); buffers.delete(id); return false; }
     if (!stream || !stream.getVideoTracks().length) { opts && opts.release && opts.release(); return false; }
@@ -190,5 +291,8 @@ window.Clips = (() => {
 
   function stop(id) { if (buffers.has(id)) { buffers.get(id).stop(); buffers.delete(id); } }
 
-  return { toggle, build, save, stop, isOn: (id) => buffers.has(id), ids: () => [...buffers.keys()] };
+  return {
+    toggle, build, save, stop, isOn: (id) => buffers.has(id), ids: () => [...buffers.keys()],
+    startRecording, stopRecording, isRecording: (id) => recordings.has(id), recInfo, recordingIds: () => [...recordings.keys()],
+  };
 })();
