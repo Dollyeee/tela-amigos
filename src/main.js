@@ -110,8 +110,26 @@ function createWindow() {
   win.webContents.on('did-finish-load', connectRendererToHelper);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.setWindowOpenHandler(({ url }) => {
+    // janela de sobreposição (tela de um amigo por cima do jogo)
+    if (url.startsWith('file:') && url.includes('overlay.html')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 480, height: 270, minWidth: 200, minHeight: 113, frame: false, alwaysOnTop: true,
+          backgroundColor: '#000000', title: 'Tela Amigos - sobreposição', icon: path.join(__dirname, 'renderer', 'icon.png'),
+          webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), backgroundThrottling: false },
+        },
+      };
+    }
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+  win.webContents.on('did-create-window', (child) => {
+    child.setAlwaysOnTop(true, 'screen-saver'); // por cima de jogo em tela cheia sem bordas
+    child.setAspectRatio(16 / 9);
+    child.locked = false;
+    overlays.add(child);
+    child.on('closed', () => overlays.delete(child));
   });
   // Teste automatizado (só com variável de ambiente): roda um script na página e mostra o console
   if (process.env.TELA_TEST_SCRIPT) {
@@ -376,6 +394,56 @@ ipcMain.handle('window:focus', () => {
   win.focus();
 });
 
+// ---- janelas de sobreposição ----
+const overlays = new Set();
+function setOverlayLock(w, locked) {
+  if (!w || w.isDestroyed()) return;
+  w.locked = locked;
+  w.setIgnoreMouseEvents(locked, { forward: true }); // travada: cliques atravessam para o jogo
+  w.webContents.send('overlay:locked', locked);
+}
+ipcMain.on('overlay:lock', (e, locked) => setOverlayLock(BrowserWindow.fromWebContents(e.sender), !!locked));
+ipcMain.on('overlay:opacity', (e, v) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w) w.setOpacity(Math.max(0.25, Math.min(1, Number(v) || 1)));
+});
+function toggleOverlayLocks() {
+  if (!overlays.size) return;
+  const anyUnlocked = [...overlays].some((w) => !w.locked);
+  for (const w of overlays) setOverlayLock(w, anyUnlocked);
+}
+
+// ---- laser no monitor de quem transmite ----
+// Janela transparente por cima de tudo, que não recebe cliques e fica FORA da captura
+// (não aparece na transmissão). Só fica visível enquanto alguém está apontando.
+let pointerWin = null, pointerDisplay = null, pointerHideTimer = null;
+function ensurePointerWin(displayId) {
+  const d = screen.getAllDisplays().find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
+  if (pointerWin && !pointerWin.isDestroyed() && pointerDisplay === d.id) return pointerWin;
+  if (pointerWin && !pointerWin.isDestroyed()) pointerWin.destroy();
+  pointerWin = new BrowserWindow({
+    ...d.bounds, transparent: true, frame: false, skipTaskbar: true, focusable: false, resizable: false,
+    movable: false, hasShadow: false, show: false, alwaysOnTop: true,
+    webPreferences: { preload: path.join(__dirname, 'pointer-preload.js') },
+  });
+  pointerWin.setIgnoreMouseEvents(true);
+  pointerWin.setAlwaysOnTop(true, 'screen-saver');
+  pointerWin.setContentProtection(true); // fora da captura de tela
+  pointerWin.loadFile(path.join(__dirname, 'renderer', 'pointer.html'));
+  pointerDisplay = d.id;
+  return pointerWin;
+}
+ipcMain.on('pointer:show', (_e, p) => {
+  const w = ensurePointerWin(p.displayId);
+  const send = () => { if (!w.isDestroyed()) { w.webContents.send('pointer', p); if (!w.isVisible()) w.showInactive(); } };
+  if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send); else send();
+  clearTimeout(pointerHideTimer);
+  pointerHideTimer = setTimeout(() => { if (pointerWin && !pointerWin.isDestroyed()) pointerWin.hide(); }, 2000);
+});
+ipcMain.on('pointer:hide', (_e, id) => {
+  if (pointerWin && !pointerWin.isDestroyed()) pointerWin.webContents.send('pointer-hide', id);
+});
+
 // ---- ícone na bandeja: status da sala e atalhos ----
 let tray = null;
 let trayStatus = { room: '', people: [], sharing: false };
@@ -413,7 +481,8 @@ function setupTray() {
 function setupHotkeys() {
   const keys = { 'Control+Shift+S': 'share', 'Control+Shift+M': 'mute', 'Control+Shift+O': 'overlay-lock' };
   for (const [accel, action] of Object.entries(keys)) {
-    try { globalShortcut.register(accel, () => toRenderer('hotkey', action)); } catch {}
+    const fn = action === 'overlay-lock' ? toggleOverlayLocks : () => toRenderer('hotkey', action);
+    try { globalShortcut.register(accel, fn); } catch {}
   }
 }
 app.on('will-quit', () => globalShortcut.unregisterAll());

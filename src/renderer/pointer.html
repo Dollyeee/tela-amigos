@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <title>Tela Amigos - laser</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: "Segoe UI", sans-serif; }
+    .laser { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 3px solid #fff;
+      background: var(--c); box-shadow: 0 0 18px 6px var(--c); transition: left .05s linear, top .05s linear; }
+    .laser span { position: absolute; left: 22px; top: 14px; font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap;
+      background: var(--c); padding: 2px 8px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+<script>
+  // lasers que os amigos estão apontando na minha tela (esta janela fica fora da captura)
+  const lasers = {};
+  window.pointerApi.onPointer((p) => {
+    let l = lasers[p.id];
+    if (!l) {
+      l = document.createElement('div');
+      l.className = 'laser';
+      const s = document.createElement('span');
+      s.textContent = p.name;
+      l.appendChild(s);
+      document.body.appendChild(l);
+      lasers[p.id] = l;
+    }
+    l.style.setProperty('--c', p.color);
+    l.style.left = `${p.x * innerWidth}px`;
+    l.style.top = `${p.y * innerHeight}px`;
+    clearTimeout(l.timer);
+    l.timer = setTimeout(() => { l.remove(); delete lasers[p.id]; }, 1500);
+  });
+  window.pointerApi.onHide((id) => { if (lasers[id]) { lasers[id].remove(); delete lasers[id]; } });
+</script>
+</body>
+</html>

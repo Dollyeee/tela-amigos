@@ -71,6 +71,7 @@
 
       <div class="top-actions">
         <button id="btn-stats" class="ghost" title="Mostrar estatísticas (S)">Estatísticas</button>
+        <button id="btn-camera" class="ghost" title="Liga a câmera. Com tela + câmera, ela aparece no canto da sua tela (estilo streamer)">Câmera</button>
         <button id="btn-share" class="primary">Compartilhar tela</button>
         <button id="btn-adjust" class="ghost hidden" title="Mudar qualidade sem parar de compartilhar">Ajustes</button>
         <button id="btn-stop" class="danger hidden">Parar</button>
@@ -131,9 +132,15 @@
       <aside class="sidebar">
         <h3>Na sala</h3>
         <ul id="people"></ul>
+        <div class="chat">
+          <div id="chat-log" class="chat-log"></div>
+          <input id="chat-input" maxlength="300" placeholder="Mensagem para a sala (Enter envia)">
+        </div>
         <label class="sound-toggle"><input type="checkbox" id="opt-sounds"> Sons de aviso</label>
         <label class="sound-toggle" title="Quando um jogo estiver em tela cheia, esconde a sua prévia para economizar placa de vídeo">
           <input type="checkbox" id="opt-gamehide"> Esconder minha prévia ao jogar</label>
+        <label class="sound-toggle" title="Quando alguém aponta (segurando o botão direito) na sua tela, o ponteiro aparece também no seu monitor, por cima do jogo. Não aparece na transmissão.">
+          <input type="checkbox" id="opt-laserdesk"> Mostrar lasers no meu monitor</label>
         <div class="side-links">
           <button id="btn-diag" class="link-btn">Enviar diagnóstico</button>
           <span class="muted" title="Ctrl+Shift+S: transmitir/parar · Ctrl+Shift+M: mutar todos · Ctrl+Shift+O: sobreposição">Atalhos: Ctrl+Shift+S / M / O</span>

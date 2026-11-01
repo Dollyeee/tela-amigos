@@ -58,6 +58,12 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .avatar .status.connected { background: var(--ok); }
 .avatar .status.failed { background: var(--danger); }
 .tile-name .avatar { width: 20px; height: 20px; font-size: 10px; display: inline-grid; vertical-align: middle; margin-right: 6px; }
+/* câmera no canto da tela (estilo streamer) */
+.cam-pip { position: absolute; right: 2.5%; bottom: 14%; width: 22%; aspect-ratio: 16 / 9; z-index: 2;
+  border-radius: 12px; overflow: hidden; border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+  background: #000; pointer-events: none; }
+.cam-pip video { width: 100%; height: 100%; object-fit: cover; }
+.tile.thumb .cam-pip { border-width: 1px; border-radius: 6px; bottom: 26%; }
 .qdot { position: absolute; top: 10px; right: 10px; z-index: 3; width: 12px; height: 12px; border-radius: 50%;
   background: #6b7180; border: 2px solid rgba(0, 0, 0, .5); cursor: help; }
 .qdot.good { background: var(--ok); }
@@ -113,7 +119,34 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .hint { margin-top: auto; font-size: 12px; }
 .sound-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 8px; cursor: pointer; }
 .sound-toggle input { accent-color: var(--accent); }
-.side-links { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: 11px; }
+/* chat */
+.chat { flex: 1; min-height: 120px; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12px;
+  padding-right: 4px; user-select: text; }
+.chat-msg { line-height: 1.35; word-wrap: break-word; }
+.chat-msg b { margin-right: 4px; }
+.chat-msg.system { color: var(--muted); font-style: italic; }
+.chat input { font-size: 12px; padding: 7px 9px; }
+.sidebar .hint { display: none; }
+
+/* reações e laser */
+.react-bar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 3; display: flex; gap: 2px;
+  background: rgba(0, 0, 0, .55); padding: 3px 6px; border-radius: 999px; opacity: 0; transition: opacity .15s; }
+.tile:hover .react-bar { opacity: 1; }
+.tile.thumb .react-bar { display: none; }
+.react-bar button { border: none; background: none; padding: 2px 4px; font-size: 18px; line-height: 1; border-radius: 8px; }
+.react-bar button:hover { background: rgba(255, 255, 255, .15); transform: scale(1.15); }
+.float-emoji { position: absolute; bottom: 12%; z-index: 4; font-size: 42px; pointer-events: none;
+  animation: floatUp 2.2s ease-out forwards; text-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
+.float-emoji small { display: block; font-size: 11px; text-align: center; color: #fff; }
+@keyframes floatUp { 0% { transform: translateY(0) scale(.6); opacity: 0; } 15% { opacity: 1; transform: translateY(-20px) scale(1.1); }
+  100% { transform: translateY(-220px) scale(1); opacity: 0; } }
+.laser { position: absolute; z-index: 5; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+  border: 3px solid #fff; background: var(--c); pointer-events: none; transition: left .05s linear, top .05s linear;
+  box-shadow: 0 0 14px 5px var(--c); }
+.laser span { position: absolute; left: 18px; top: 12px; font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap;
+  background: var(--c); padding: 1px 6px; border-radius: 6px; }
+.side-links { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: 11px; padding-bottom: 18px; }
 .side-links .link-btn { text-align: left; font-size: 12px; }
 
 /* ---------- palco ---------- */

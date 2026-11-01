@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; media-src 'self' blob: mediastream:">
+  <title>Tela Amigos - sobreposição</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font: 12px "Segoe UI", sans-serif; color: #fff; }
+    video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .cam { position: absolute; right: 2.5%; bottom: 6%; width: 24%; aspect-ratio: 16/9; border-radius: 8px; overflow: hidden;
+      border: 2px solid rgba(255,255,255,.85); display: none; }
+    .cam video { object-fit: cover; }
+    /* barra no topo: arrasta a janela; botões aparecem com o mouse em cima */
+    .bar { position: absolute; top: 0; left: 0; right: 0; height: 30px; display: flex; align-items: center; gap: 6px;
+      padding: 0 6px 0 10px; background: linear-gradient(rgba(0,0,0,.75), transparent); opacity: 0; transition: opacity .15s;
+      -webkit-app-region: drag; }
+    body:hover .bar { opacity: 1; }
+    .bar .name { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar button { -webkit-app-region: no-drag; border: none; background: rgba(255,255,255,.15); color: #fff; border-radius: 6px;
+      padding: 3px 8px; font: inherit; cursor: pointer; }
+    .bar button:hover { background: rgba(255,255,255,.3); }
+    .locked-hint { position: absolute; bottom: 6px; left: 8px; font-size: 11px; background: rgba(0,0,0,.6); padding: 2px 8px;
+      border-radius: 6px; display: none; }
+    body.locked .locked-hint { display: block; }
+    body.locked .bar { display: none; }
+  </style>
+</head>
+<body>
+  <video id="main" autoplay playsinline muted></video>
+  <div class="cam" id="camBox"><video id="cam" autoplay playsinline muted></video></div>
+  <div class="bar">
+    <span class="name" id="name">Tela Amigos</span>
+    <button id="less" title="Mais transparente">−</button>
+    <button id="more" title="Menos transparente">+</button>
+    <button id="lock" title="Travar: o mouse passa através da janela (Ctrl+Shift+O destrava)">Travar</button>
+    <button id="close" title="Fechar">✕</button>
+  </div>
+  <div class="locked-hint">Travada · Ctrl+Shift+O destrava</div>
+<script>
+  let opacity = 1;
+  // chamado pela janela principal com os streams do amigo
+  window.setup = ({ stream, cam, name }) => {
+    document.getElementById('name').textContent = name;
+    document.title = `${name} - Tela Amigos`;
+    document.getElementById('main').srcObject = stream;
+    const camBox = document.getElementById('camBox');
+    camBox.style.display = cam ? 'block' : 'none';
+    if (cam) document.getElementById('cam').srcObject = cam;
+  };
+  const setOpacity = (v) => { opacity = Math.max(0.25, Math.min(1, v)); window.overlayApi.opacity(opacity); };
+  document.getElementById('less').onclick = () => setOpacity(opacity - 0.15);
+  document.getElementById('more').onclick = () => setOpacity(opacity + 0.15);
+  document.getElementById('lock').onclick = () => window.overlayApi.lock(true);
+  document.getElementById('close').onclick = () => window.close();
+  window.overlayApi.onLocked((locked) => document.body.classList.toggle('locked', locked));
+</script>
+</body>
+</html>

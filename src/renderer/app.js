@@ -107,7 +107,7 @@ async function saveDiagnostics() {
 // Tons curtos gerados na hora (sem arquivos). Volume baixo para não atrapalhar o jogo/voz.
 const Sfx = (() => {
   let ctx = null;
-  const tones = { join: [660, 880], leave: [700, 470], share: [523, 659, 784] };
+  const tones = { join: [660, 880], leave: [700, 470], share: [523, 659, 784], chat: [990] };
   return {
     play(kind) {
       if (localStorage.getItem('sounds') === '0') return;
@@ -395,6 +395,11 @@ function onRelay(from, data) {
         peer.sharing = data.sharing;
         peer.hasAudio = data.audio;
         peer.sourceName = data.sourceName || '';
+        const hadCam = peer.hasCam;
+        peer.hasCam = !!data.cam;
+        if (data.screenId) { peer.remoteScreenId = data.screenId; peer.remoteCamId = data.camId; resolveTracks(peer); }
+        if (peer.hasCam && !hadCam && !data.sharing) toast(`${peer.name} ligou a câmera`);
+        if ((data.sharing || peer.hasCam) && !state.order.includes(peer.id)) state.order.push(peer.id);
         if (data.sharing && !was) {
           toast(`${peer.name} começou a compartilhar`);
           Sfx.play('share');
@@ -416,6 +421,19 @@ function onRelay(from, data) {
       break;
     case 'health':
       peer.health = { cpu: !!data.cpu };
+      break;
+    case 'chat':
+      addChat(peer.name, String(data.text || '').slice(0, 300));
+      if (!document.hasFocus()) Sfx.play('chat');
+      break;
+    case 'react':
+      if (typeof data.emoji === 'string' && data.emoji.length <= 8) showReaction(String(data.target), data.emoji, peer.name);
+      break;
+    case 'point':
+      if (Number.isFinite(data.x) && Number.isFinite(data.y)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y);
+      break;
+    case 'point-end':
+      hideLaser(String(data.target), peer.id);
       break;
   }
 }
@@ -441,11 +459,23 @@ function createPeer(id, name) {
     statsPrev: null,
     stats: null,
   };
+  // cada trilha num "stream" identificado: quem recebe sabe o que é tela e o que é câmera
+  peer.screenMS = new MediaStream();
+  peer.camMS = new MediaStream();
   peer.vT = pc.addTransceiver('video', {
     direction: 'sendonly',
+    streams: [peer.screenMS],
     sendEncodings: [{ maxBitrate: s.bitrate * 1e6, maxFramerate: Number(s.fps) }],
   });
-  peer.aT = pc.addTransceiver('audio', { direction: 'sendonly' });
+  peer.aT = pc.addTransceiver('audio', { direction: 'sendonly', streams: [peer.screenMS] });
+  // câmera: canal criado desde já (vazio); ligar a câmera só preenche, sem renegociar
+  peer.cT = pc.addTransceiver('video', {
+    direction: 'sendonly',
+    streams: [peer.camMS],
+    sendEncodings: [{ maxBitrate: 2_500_000, maxFramerate: 30 }],
+  });
+  peer.camStream = new MediaStream();   // câmera recebida deste amigo
+  peer.videoTracks = new Map();         // id do stream -> trilha de vídeo recebida
   setCodec(peer, state.share && state.share.direct ? 'native' : s.codec);
   // transform ligado desde o início (antes de negociar); fica em "deixa passar" até o modo nativo
   window.NativeVideo.attach(peer.vT.sender, id);
@@ -463,10 +493,16 @@ function createPeer(id, name) {
     if (candidate && !isIPv6Candidate(candidate)) sendRelay(id, { kind: 'ice', candidate: demoteVpnCandidate(candidate.toJSON()) });
   };
   pc.ontrack = (e) => {
-    const st = peer.remoteStream;
-    for (const t of st.getTracks()) if (t.kind === e.track.kind) st.removeTrack(t);
-    st.addTrack(e.track);
-    if (peer.tile) peer.tile.video.srcObject = st;
+    if (e.track.kind === 'audio') {
+      const st = peer.remoteStream;
+      for (const t of st.getAudioTracks()) st.removeTrack(t);
+      st.addTrack(e.track);
+    } else {
+      // vídeo: tela ou câmera? decide em resolveTracks (o amigo informa os ids no "state")
+      const sid = (e.streams && e.streams[0] && e.streams[0].id) || `sem-id-${peer.videoTracks.size}`;
+      peer.videoTracks.set(sid, e.track);
+    }
+    resolveTracks(peer);
   };
   pc.onconnectionstatechange = () => {
     peer.conn = pc.connectionState;
@@ -593,6 +629,7 @@ function removePeer(id) {
   if (!peer) return;
   peer.pc.close();
   window.NativeVideo.remove(id);
+  closeOverlay(id);
   if (peer.tile) peer.tile.el.remove();
   state.peers.delete(id);
   state.order = state.order.filter((x) => x !== id);
@@ -602,12 +639,39 @@ function removePeer(id) {
 }
 
 function sendState(to) {
+  const peer = state.peers.get(to);
   sendRelay(to, {
     kind: 'state',
     sharing: !!state.share,
     audio: !!(state.share && state.share.audio),
     sourceName: state.share ? state.share.sourceName : '',
+    cam: !!state.camera,
+    // ids dos streams desta conexão: quem recebe separa tela de câmera
+    screenId: peer ? peer.screenMS.id : null,
+    camId: peer ? peer.camMS.id : null,
   });
+}
+
+// Decide qual trilha de vídeo recebida é a tela e qual é a câmera
+function resolveTracks(peer) {
+  let screen = null, cam = null;
+  if (peer.remoteScreenId || peer.remoteCamId) {
+    screen = peer.videoTracks.get(peer.remoteScreenId) || null;
+    cam = peer.videoTracks.get(peer.remoteCamId) || null;
+  } else if (peer.videoTracks.size) {
+    screen = [...peer.videoTracks.values()][0]; // amigo em versão antiga: só tela
+  }
+  const st = peer.remoteStream;
+  if (screen && !st.getVideoTracks().includes(screen)) {
+    for (const t of st.getVideoTracks()) st.removeTrack(t);
+    st.addTrack(screen);
+  }
+  const cs = peer.camStream;
+  if (cam && !cs.getVideoTracks().includes(cam)) {
+    for (const t of cs.getVideoTracks()) cs.removeTrack(t);
+    cs.addTrack(cam);
+  }
+  if (peer.tile) updateTileMedia(peer.id);
 }
 
 // Ajusta o que eu envio para cada amigo conforme o que ele está vendo:
@@ -641,6 +705,9 @@ async function doApplySendParams(peer) {
   window.NativeVideo.setMode(peer.id, native, !!wantVideo && peer.pc.connectionState === 'connected');
   if (vSender.track !== wantVideo) await vSender.replaceTrack(wantVideo).catch(() => {});
   if (aSender.track !== wantAudio) await aSender.replaceTrack(wantAudio).catch(() => {});
+  // câmera (independe de estar compartilhando a tela)
+  const wantCam = state.camera && level !== 'off' ? state.camera.track : null;
+  if (peer.cT.sender.track !== wantCam) await peer.cT.sender.replaceTrack(wantCam).catch(() => {});
   if (!share) return;
 
   const s = share.settings;
@@ -1049,6 +1116,184 @@ async function applyAdjust() {
   await startShare();
 }
 
+// ------------------------------------------------------------------ chat, reações e laser
+function nameHue(name) {
+  let h = 0;
+  for (const ch of String(name || '?').trim().toLowerCase()) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return h % 360;
+}
+const ownerKey = (id) => (id === 'me' ? state.myId : id); // id da pessoa dona da tela (na sala)
+const tileByOwner = (target) => (target === state.myId ? meTile : (state.peers.get(target) || {}).tile);
+
+function addChat(name, text, system = false) {
+  const log = $('#chat-log');
+  const div = document.createElement('div');
+  div.className = `chat-msg${system ? ' system' : ''}`;
+  if (!system) {
+    const b = document.createElement('b');
+    b.style.color = `hsl(${nameHue(name)}, 70%, 65%)`;
+    b.textContent = name;
+    div.appendChild(b);
+  }
+  div.appendChild(document.createTextNode(text));
+  log.appendChild(div);
+  while (log.children.length > 200) log.firstChild.remove();
+  log.scrollTop = log.scrollHeight;
+}
+
+function sendChat() {
+  const input = $('#chat-input');
+  const text = input.value.trim().slice(0, 300);
+  if (!text) return;
+  input.value = '';
+  sendRelay(null, { kind: 'chat', text });
+  addChat(state.myName, text);
+}
+
+function showReaction(target, emoji, from) {
+  const tile = tileByOwner(target);
+  if (!tile || !tile.el.isConnected) return;
+  const e = document.createElement('div');
+  e.className = 'float-emoji';
+  e.style.left = `${15 + Math.random() * 70}%`;
+  e.textContent = emoji;
+  const s = document.createElement('small');
+  s.textContent = from;
+  e.appendChild(s);
+  tile.el.appendChild(e);
+  setTimeout(() => e.remove(), 2300);
+}
+
+// posição do vídeo de verdade dentro da tela (descontando as faixas pretas)
+function videoBox(tile) {
+  const v = tile.video;
+  const r = v.getBoundingClientRect();
+  const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+  const s = Math.min(r.width / vw, r.height / vh);
+  const w = vw * s, h = vh * s;
+  return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
+}
+
+function showLaser(target, fromId, name, x, y) {
+  const color = `hsl(${nameHue(name)}, 85%, 55%)`;
+  const tile = tileByOwner(target);
+  if (tile && tile.el.isConnected) {
+    tile.lasers = tile.lasers || {};
+    let l = tile.lasers[fromId];
+    if (!l) {
+      l = document.createElement('div');
+      l.className = 'laser';
+      const tag = document.createElement('span');
+      tag.textContent = name;
+      l.appendChild(tag);
+      tile.el.appendChild(l);
+      tile.lasers[fromId] = l;
+    }
+    l.style.setProperty('--c', color);
+    const b = videoBox(tile), er = tile.el.getBoundingClientRect();
+    l.style.left = `${b.left - er.left + x * b.width}px`;
+    l.style.top = `${b.top - er.top + y * b.height}px`;
+    clearTimeout(l.timer);
+    l.timer = setTimeout(() => hideLaser(target, fromId), 1500);
+  }
+  // apontaram para a MINHA tela: mostra também no meu monitor, por cima do jogo
+  if (target === state.myId && fromId !== 'me' && state.share && state.share.source &&
+      state.share.source.type === 'screen' && localStorage.getItem('laserDesk') !== '0') {
+    window.native.pointer({ displayId: state.share.source.displayId, id: fromId, x, y, color, name });
+  }
+}
+
+function hideLaser(target, fromId) {
+  const tile = tileByOwner(target);
+  if (tile && tile.lasers && tile.lasers[fromId]) {
+    tile.lasers[fromId].remove();
+    delete tile.lasers[fromId];
+  }
+  if (target === state.myId) window.native.pointerHide(fromId);
+}
+
+// liga reações e laser numa tela (de um amigo ou a sua)
+function attachInteractions(tile, id) {
+  const bar = document.createElement('div');
+  bar.className = 'react-bar';
+  for (const emoji of ['😂', '🔥', '👍', '😮', '💀', '❤️']) {
+    const b = document.createElement('button');
+    b.textContent = emoji;
+    b.title = 'Reagir';
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const target = ownerKey(id);
+      sendRelay(null, { kind: 'react', target, emoji });
+      showReaction(target, emoji, state.myName);
+    };
+    b.ondblclick = (e) => e.stopPropagation();
+    bar.appendChild(b);
+  }
+  tile.el.appendChild(bar);
+
+  if (id === 'me') return; // laser só na tela dos outros
+  // laser: segure o botão DIREITO do mouse sobre a tela do amigo
+  let on = false, last = 0;
+  const point = (e) => {
+    const now = performance.now();
+    if (now - last < 33) return; // ~30 por segundo
+    last = now;
+    const b = videoBox(tile);
+    const x = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - b.top) / b.height));
+    const target = ownerKey(id);
+    sendRelay(null, { kind: 'point', target, x, y });
+    showLaser(target, 'me', state.myName, x, y);
+  };
+  tile.el.addEventListener('contextmenu', (e) => e.preventDefault());
+  tile.el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 2) return;
+    on = true;
+    tile.el.setPointerCapture(e.pointerId);
+    point(e);
+  });
+  tile.el.addEventListener('pointermove', (e) => { if (on) point(e); });
+  const end = (e) => {
+    if (!on || (e.button !== undefined && e.button !== 2 && e.type === 'pointerup')) return;
+    on = false;
+    const target = ownerKey(id);
+    sendRelay(null, { kind: 'point-end', target });
+    hideLaser(target, 'me');
+  };
+  tile.el.addEventListener('pointerup', end);
+  tile.el.addEventListener('pointercancel', end);
+}
+
+// ------------------------------------------------------------------ sobreposição (por cima do jogo)
+// Abre uma janelinha sempre por cima com a tela do amigo. A janela é do mesmo app, então
+// recebe o próprio stream (sem decodificar de novo nem gastar banda extra).
+const overlayWins = new Map(); // id do amigo -> janela
+function openOverlay(id) {
+  const old = overlayWins.get(id);
+  if (old && !old.closed) { old.focus(); return; }
+  const p = state.peers.get(id);
+  if (!p) return;
+  const w = window.open('overlay.html', `overlay-${id}`);
+  if (!w) { toast('Não consegui abrir a sobreposição.', 'error'); return; }
+  overlayWins.set(id, w);
+  const feed = () => {
+    if (w.closed) return;
+    if (typeof w.setup !== 'function') { setTimeout(feed, 100); return; }
+    w.setup({
+      stream: p.sharing ? p.remoteStream : p.camStream,
+      cam: p.sharing && p.hasCam ? p.camStream : null,
+      name: p.name,
+    });
+  };
+  feed();
+  toast('Sobreposição aberta. "Travar" deixa o mouse atravessar; Ctrl+Shift+O destrava.');
+}
+function closeOverlay(id) {
+  const w = overlayWins.get(id);
+  if (w && !w.closed) w.close();
+  overlayWins.delete(id);
+}
+
 // ------------------------------------------------------------------ saúde da transmissão
 // A cada 2 s:
 //  - quem transmite: detecta o PC no limite e liga o "modo leve" (30 fps, até 720p) sozinho;
@@ -1203,6 +1448,7 @@ function enterRoom() {
 async function leaveRoom() {
   state.leaving = true;
   await stopShare();
+  if (state.camera) { state.camera.track.stop(); state.camera = null; $('#btn-camera').textContent = 'Câmera'; $('#btn-camera').classList.remove('active'); }
   for (const id of [...state.peers.keys()]) removePeer(id);
   // "Sair" não fecha mais a sala de quem hospeda (ela fica aberta em segundo plano)
   clearInterval(heartbeat);
@@ -1242,6 +1488,7 @@ const ICONS = {
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.5C4.3 9 3 12 3 12s4 6 9 6a9 9 0 0 0 4.2-1"/></svg>',
   vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+  overlay: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="14" height="12" rx="2"/><rect x="9" y="3" width="13" height="10" rx="2" class="fill"/></svg>',
   corner: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="5" width="8" height="6" rx="1" class="fill"/></svg>',
 };
 
@@ -1283,6 +1530,14 @@ function makeTile(id) {
 
   const tile = { el, video, label, stats: document.createElement('div') };
   tile.stats.className = 'tile-stats';
+  // bolha da câmera (estilo streamer), aparece quando a pessoa transmite tela + câmera
+  tile.camBox = document.createElement('div');
+  tile.camBox.className = 'cam-pip hidden';
+  tile.camVideo = document.createElement('video');
+  tile.camVideo.autoplay = true;
+  tile.camVideo.playsInline = true;
+  tile.camVideo.muted = true;
+  tile.camBox.appendChild(tile.camVideo);
 
   if (!isMe) {
     // volume lembrado pelo NOME do amigo (o id muda a cada vez que ele entra);
@@ -1330,6 +1585,7 @@ function makeTile(id) {
   actions.append(
     iconButton('focus', 'Focar nesta tela / voltar para a grade', () => toggleFocus(id)),
     iconButton('pip', 'Picture-in-picture (janela flutuante)', () => togglePip(id)),
+    ...(isMe ? [] : [iconButton('overlay', 'Sobreposição: janelinha por cima do jogo', () => openOverlay(id))]),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
   );
   if (!isMe) {
@@ -1346,7 +1602,8 @@ function makeTile(id) {
   }));
   actions.append(iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)));
   bar.append(grip, label, actions);
-  el.append(video, tile.stats, bar);
+  el.append(video, tile.camBox, tile.stats, bar);
+  attachInteractions(tile, id);
 
   // duplo clique: em tela cheia sai dela; na tela em foco volta para a grade; senão foca
   el.ondblclick = () => {
@@ -1413,24 +1670,95 @@ function showVolumeOverlay(el, v) {
 function getTile(id) {
   if (id === 'me') {
     if (!meTile) meTile = makeTile('me');
-    if (state.share && meTile.video.srcObject !== state.share.preview) meTile.video.srcObject = state.share.preview;
-    setTileLabel(meTile, state.myName, `Você — ${state.share ? state.share.sourceName : ''}`);
+    updateTileMedia('me');
+    const what = state.share ? state.share.sourceName : 'Câmera';
+    setTileLabel(meTile, state.myName, `Você — ${what}`);
     return meTile;
   }
   const peer = state.peers.get(id);
-  if (!peer.tile) {
-    peer.tile = makeTile(id);
-    peer.tile.video.srcObject = peer.remoteStream;
-  }
-  setTileLabel(peer.tile, peer.name, peer.name + (peer.sourceName ? ` — ${peer.sourceName}` : ''));
+  if (!peer.tile) peer.tile = makeTile(id);
+  updateTileMedia(id);
+  const what = peer.sharing ? peer.sourceName : 'Câmera';
+  setTileLabel(peer.tile, peer.name, peer.name + (what ? ` — ${what}` : ''));
   peer.tile.vol.style.display = peer.hasAudio ? '' : 'none';
   return peer.tile;
 }
 
+// Tela + câmera: a tela ocupa tudo e a câmera fica numa bolha no canto (estilo streamer).
+// Só câmera: a câmera ocupa a tela toda.
+function updateTileMedia(id) {
+  let tile, screen, cam, sharing, hasCam;
+  if (id === 'me') {
+    tile = meTile;
+    sharing = !!state.share; hasCam = !!state.camera;
+    screen = sharing ? state.share.preview : null;
+    cam = hasCam ? state.camera.stream : null;
+  } else {
+    const p = state.peers.get(id);
+    if (!p) return;
+    tile = p.tile;
+    sharing = !!p.sharing; hasCam = !!p.hasCam;
+    screen = p.remoteStream;
+    cam = p.camStream;
+  }
+  if (!tile) return;
+  const main = sharing ? screen : cam;
+  if (main && tile.video.srcObject !== main) tile.video.srcObject = main;
+  const showBubble = sharing && hasCam;
+  tile.camBox.classList.toggle('hidden', !showBubble);
+  if (showBubble && tile.camVideo.srcObject !== cam) tile.camVideo.srcObject = cam;
+  if (showBubble && tile.camVideo.paused) tile.camVideo.play().catch(() => {});
+  if (showBubble) placeCamBubble(tile);
+}
+
+// bolha da câmera no canto inferior direito da IMAGEM (não do quadro, que tem faixas pretas)
+function placeCamBubble(tile) {
+  if (!tile || tile.camBox.classList.contains('hidden') || !tile.el.isConnected) return;
+  const b = videoBox(tile), er = tile.el.getBoundingClientRect();
+  if (!b.width) return;
+  const w = b.width * 0.24;
+  tile.camBox.style.width = `${w}px`;
+  tile.camBox.style.left = `${b.left - er.left + b.width - w - b.width * 0.02}px`;
+  tile.camBox.style.top = `${b.top - er.top + b.height - (w * 9) / 16 - b.height * 0.04}px`;
+  tile.camBox.style.right = 'auto';
+  tile.camBox.style.bottom = 'auto';
+}
+function placeAllCamBubbles() {
+  if (meTile) placeCamBubble(meTile);
+  for (const p of state.peers.values()) placeCamBubble(p.tile);
+}
+window.addEventListener('resize', () => requestAnimationFrame(placeAllCamBubbles));
+setInterval(placeAllCamBubbles, 1000); // a imagem pode mudar de tamanho (troca de resolução)
+
 function isSharing(id) {
-  if (id === 'me') return !!state.share;
+  if (id === 'me') return !!state.share || !!state.camera;
   const p = state.peers.get(id);
-  return !!(p && p.sharing);
+  return !!(p && (p.sharing || p.hasCam));
+}
+
+// ------------------------------------------------------------------ câmera
+async function toggleCamera() {
+  if (state.camera) {
+    state.camera.track.stop();
+    state.camera = null;
+  } else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      });
+      state.camera = { stream, track: stream.getVideoTracks()[0] };
+      state.camera.track.contentHint = 'motion';
+    } catch (e) {
+      toast(`Não consegui abrir a câmera: ${e.message}`, 'error');
+      return;
+    }
+  }
+  if (state.camera && !state.order.includes('me')) state.order.unshift('me');
+  $('#btn-camera').classList.toggle('active', !!state.camera);
+  $('#btn-camera').textContent = state.camera ? 'Desligar câmera' : 'Câmera';
+  for (const peer of state.peers.values()) { applySendParams(peer); sendState(peer.id); }
+  render();
 }
 
 function setFocus(id) {
@@ -1740,6 +2068,10 @@ function initRoomUi() {
   $('#btn-leave').onclick = leaveRoom;
   $('#btn-close-room').onclick = closeRoomForEveryone;
   $('#btn-adjust').onclick = openAdjust;
+  $('#btn-camera').onclick = toggleCamera;
+  $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+  $('#opt-laserdesk').checked = localStorage.getItem('laserDesk') !== '0';
+  $('#opt-laserdesk').onchange = () => localStorage.setItem('laserDesk', $('#opt-laserdesk').checked ? '1' : '0');
   $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));
   $('#opt-gamehide').checked = localStorage.getItem('gamehide') !== '0';
   $('#opt-gamehide').onchange = () => { localStorage.setItem('gamehide', $('#opt-gamehide').checked ? '1' : '0'); render(); };
