@@ -101,6 +101,9 @@ static class Program
                         video = null;
                         SendJson(new { type = "video-stopped" });
                         break;
+                    case "video-diag":
+                        SendJson(new { type = "video-diag", info = VideoStreamer.Diagnose() });
+                        break;
                     case "video-key":
                         video?.RequestKeyFrame();
                         break;

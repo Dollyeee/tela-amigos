@@ -34,8 +34,10 @@ function toast(text, kind = '') {
   el.className = `toast ${kind}`;
   el.textContent = text;
   $('#toasts').appendChild(el);
-  setTimeout(() => el.classList.add('out'), 3500);
-  setTimeout(() => el.remove(), 4000);
+  const ms = kind === 'error' ? 12000 : 3500; // erros ficam mais tempo (dá para ler/tirar print)
+  el.onclick = () => el.remove();
+  setTimeout(() => el.classList.add('out'), ms);
+  setTimeout(() => el.remove(), ms + 500);
 }
 
 function fmtMbps(bps) { return `${(bps / 1e6).toFixed(1)} Mb/s`; }

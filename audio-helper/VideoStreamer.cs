@@ -116,10 +116,139 @@ sealed unsafe class VideoStreamer : IDisposable
     {
         // cada etapa com nome: "erro não especificado" sozinho não ajuda a descobrir o problema
         Step("iniciar Media Foundation", () => MediaFactory.MFStartup(false).CheckError());
+
+        // Tenta cada combinação (encoder, placa) até uma funcionar. Em PCs com vídeo integrado
+        // ativo, a "primeira placa" do Windows pode ser a integrada enquanto o encoder é o da
+        // NVIDIA/AMD: misturar as duas dá E_FAIL ("erro não especificado").
+        var attempts = BuildAttempts();
+        if (attempts.Count == 0) throw new Exception("Nenhum encoder H.264 por hardware encontrado na placa de vídeo");
+        var errors = new List<string>();
+        foreach (var (encIndex, adapter) in attempts)
+        {
+            try
+            {
+                // teste: simula a primeira combinação falhando (como a placa errada no PC do amigo)
+                if (errors.Count == 0 && Environment.GetEnvironmentVariable("TELA_TEST_FAILFIRST") == "1")
+                    throw new Exception("falha simulada (teste)");
+                StartWith(encIndex, adapter, target, maxW, maxH);
+                if (errors.Count > 0) Program.SendJson(new { type = "warn", message = $"Captura nativa funcionou na tentativa {errors.Count + 1}: {adapter.Desc}" });
+                return;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"[{adapter.Desc}] {ex.Message}");
+                ReleaseAll();
+            }
+        }
+        throw new Exception(string.Join(" | ", errors));
+    }
+
+    /// Diagnóstico: placas, encoders e a ordem em que seriam tentados.
+    public static object Diagnose()
+    {
+        MediaFactory.MFStartup(false).CheckError();
+        var v = new VideoStreamer(60, 1000);
+        var adapters = ListAdapters();
+        var encoders = v.ListEncoders();
+        return new
+        {
+            adapters = adapters.Select(a => new { a.Desc, vendor = $"{a.VendorId:X4}", vramMB = a.Vram / 1048576, luid = a.Luid }),
+            encoders = encoders.Select(e => new { e.Index, e.Name, vendor = $"{e.VendorId:X4}", luid = e.Luid }),
+            attempts = v.BuildAttempts().Select(t => $"{encoders[t.encIndex].Name} + {t.adapter.Desc}"),
+        };
+    }
+
+    record AdapterInfo(long Luid, uint VendorId, string Desc, ulong Vram);
+    record EncoderInfo(int Index, string Name, long Luid, uint VendorId);
+
+    static readonly Guid MFT_ENUM_HARDWARE_VENDOR_ID = new("3aecb0cc-035b-4bcc-8185-2b8d551ef3af");
+
+    static List<AdapterInfo> ListAdapters()
+    {
+        var list = new List<AdapterInfo>();
+        using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
+        for (uint i = 0; factory.EnumAdapters1(i, out var a).Success; i++)
+        {
+            using (a)
+            {
+                var d = a.Description1;
+                if (d.VendorId == 0x1414) continue; // "Microsoft Basic Render Driver" (software)
+                long l = ((long)d.Luid.HighPart << 32) | d.Luid.LowPart;
+                list.Add(new AdapterInfo(l, d.VendorId, d.Description.Trim(), (ulong)d.DedicatedVideoMemory));
+            }
+        }
+        return list;
+    }
+
+    List<EncoderInfo> ListEncoders()
+    {
+        var result = new List<EncoderInfo>();
+        var arr = EnumEncoderActivates(out uint count);
+        for (int i = 0; i < count; i++)
+        {
+            using var a = new IMFActivate(Marshal.ReadIntPtr(arr, i * IntPtr.Size));
+            long luid = 0; uint vendor = 0; string name = "H.264 HW";
+            try { luid = (long)a.GetUInt64(MFT_ENUM_ADAPTER_LUID); } catch { }
+            try { name = a.GetAllocatedString(MFT_FRIENDLY_NAME); } catch { }
+            try
+            {
+                var v = a.GetAllocatedString(MFT_ENUM_HARDWARE_VENDOR_ID); // ex.: "VEN_10DE"
+                if (v.StartsWith("VEN_")) vendor = Convert.ToUInt32(v[4..], 16);
+            }
+            catch { }
+            result.Add(new EncoderInfo(i, name, luid, vendor));
+        }
+        Marshal.FreeCoTaskMem(arr);
+        return result;
+    }
+
+    static IntPtr EnumEncoderActivates(out uint count)
+    {
+        var input = new RegisterTypeInfo { GuidMajorType = MediaType_Video, GuidSubtype = VideoFormat_NV12 };
+        var output = new RegisterTypeInfo { GuidMajorType = MediaType_Video, GuidSubtype = VideoFormat_H264 };
+        MediaFactory.MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER,
+            (uint)(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter),
+            input, output, out IntPtr arr, out count);
+        return arr;
+    }
+
+    /// Ordem das tentativas: encoder + placa com o mesmo LUID; depois placas do mesmo fabricante
+    /// (a com mais memória primeiro); por último qualquer combinação.
+    List<(int encIndex, AdapterInfo adapter)> BuildAttempts()
+    {
+        var adapters = ListAdapters().OrderByDescending(a => a.Vram).ToList();
+        var encoders = ListEncoders();
+        var attempts = new List<(int, AdapterInfo)>();
+        void Add(int e, AdapterInfo a) { if (!attempts.Any(x => x.Item1 == e && x.Item2.Luid == a.Luid)) attempts.Add((e, a)); }
+        foreach (var e in encoders.Where(e => e.Luid != 0))
+            foreach (var a in adapters.Where(a => a.Luid == e.Luid)) Add(e.Index, a);
+        foreach (var e in encoders.Where(e => e.VendorId != 0))
+            foreach (var a in adapters.Where(a => a.VendorId == e.VendorId)) Add(e.Index, a);
+        foreach (var e in encoders)
+            foreach (var a in adapters) Add(e.Index, a);
+        return attempts;
+    }
+
+    void StartWith(int encIndex, AdapterInfo adapter, VideoTarget target, int maxW, int maxH)
+    {
         IMFActivate activate = null!;
-        long luid = 0;
-        Step("procurar encoder H.264 da placa de vídeo", () => (activate, luid) = FindHardwareEncoder());
-        Step("abrir a placa de vídeo", () => CreateDevice(luid));
+        Step("abrir o encoder H.264", () =>
+        {
+            var arr = EnumEncoderActivates(out uint count);
+            for (int i = 0; i < count; i++)
+            {
+                var a = new IMFActivate(Marshal.ReadIntPtr(arr, i * IntPtr.Size));
+                if (i == encIndex)
+                {
+                    activate = a;
+                    try { EncoderName = a.GetAllocatedString(MFT_FRIENDLY_NAME); } catch { EncoderName = "H.264 HW"; }
+                }
+                else a.Dispose();
+            }
+            Marshal.FreeCoTaskMem(arr);
+            if (activate == null) throw new Exception("encoder sumiu da lista");
+        });
+        Step($"abrir a placa de vídeo ({adapter.Desc})", () => CreateDevice(adapter.Luid));
         Step("iniciar a captura da tela/janela", () => StartCapture(target));
 
         // tamanho de saída: cabe em maxW x maxH mantendo proporção, sempre par
@@ -195,9 +324,24 @@ sealed unsafe class VideoStreamer : IDisposable
         Log("request access");
         try { GraphicsCaptureAccess.RequestAccessAsync(GraphicsCaptureAccessKind.Borderless).AsTask().Wait(1500); } catch { }
 
-        item = target.Type == "window"
-            ? CreateItem(window: new IntPtr(target.Hwnd), monitor: IntPtr.Zero)
-            : CreateItem(window: IntPtr.Zero, monitor: MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2));
+        if (target.Type == "window")
+        {
+            try
+            {
+                item = CreateItem(window: new IntPtr(target.Hwnd), monitor: IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                // algumas janelas (jogos em tela cheia exclusiva, anticheat) não deixam capturar:
+                // captura o monitor onde a janela está
+                item = CreateItem(window: IntPtr.Zero, monitor: MonitorFromWindow(new IntPtr(target.Hwnd), 2));
+                Program.SendJson(new { type = "warn", message = $"Não deu para capturar só a janela ({ex.Message}); capturando o monitor dela." });
+            }
+        }
+        else
+        {
+            item = CreateItem(window: IntPtr.Zero, monitor: MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2));
+        }
         Log("item ok");
         poolSize = item.Size;
         framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 3, poolSize);
@@ -605,8 +749,6 @@ sealed unsafe class VideoStreamer : IDisposable
     {
         running = false;
         tickThread?.Join(1000);
-        try { session?.Dispose(); } catch { }
-        try { framePool?.Dispose(); } catch { }
         try
         {
             encoder?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero);
@@ -616,24 +758,45 @@ sealed unsafe class VideoStreamer : IDisposable
         }
         catch { }
         eventThread?.Join(1000);
+        ReleaseAll();
+    }
+
+    /// Libera tudo o que uma tentativa de início criou (também usado entre tentativas que falham).
+    void ReleaseAll()
+    {
+        try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch { }
+        try { session?.Dispose(); } catch { }
+        try { framePool?.Dispose(); } catch { }
+        session = null!; framePool = null!; item = null!;
         if (codecApi != IntPtr.Zero) { Marshal.Release(codecApi); codecApi = IntPtr.Zero; }
         lock (gpuLock)
         {
-            vpIn?.Dispose(); vp?.Dispose(); vpEnum?.Dispose();
-            foreach (var v in vpOut) v?.Dispose();
-            foreach (var t in nv12) t?.Dispose();
-            latest?.Dispose();
+            try { vpIn?.Dispose(); vp?.Dispose(); vpEnum?.Dispose(); } catch { }
+            for (int i = 0; i < Ring; i++)
+            {
+                try { vpOut[i]?.Dispose(); nv12[i]?.Dispose(); } catch { }
+                vpOut[i] = null!; nv12[i] = null!;
+            }
+            try { latest?.Dispose(); } catch { }
+            vpIn = null; vp = null; vpEnum = null; latest = null; latestW = latestH = 0;
         }
         try { events?.Dispose(); } catch { }
         try { encoder?.Dispose(); } catch { }
-        deviceManager?.Dispose();
-        videoContext?.Dispose(); videoDevice?.Dispose();
-        context?.Dispose(); device?.Dispose();
+        try { deviceManager?.Dispose(); } catch { }
+        events = null!; encoder = null!; deviceManager = null!;
+        try { (winrtDevice as IDisposable)?.Dispose(); } catch { }
+        winrtDevice = null!;
+        try { videoContext?.Dispose(); videoDevice?.Dispose(); } catch { }
+        try { context?.Dispose(); device?.Dispose(); } catch { }
+        videoContext = null!; videoDevice = null!; context = null!; device = null!;
+        sequenceHeader = null;
+        Volatile.Write(ref capturedFrames, 0);
     }
 
     // ================================================================ interop
     [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
     [DllImport("d3d11.dll")] static extern int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
     [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
     [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
