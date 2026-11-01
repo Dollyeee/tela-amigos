@@ -82,6 +82,21 @@ window.Sdp = (() => {
     const extras = caps.codecs.filter((c) => /rtx|red|ulpfec|flexfec/i.test(c.mimeType));
     return h265.length ? [...h265, ...extras] : null;
   }
+  // Só AV1: modo nativo direto com o AV1 do helper (placas RTX 40 / RX 7000 / Arc)
+  function av1OnlyPreferences() {
+    const caps = RTCRtpReceiver.getCapabilities('video');
+    if (!caps) return null;
+    const av1 = caps.codecs.filter((c) => /av1/i.test(c.mimeType) && !/profile=1/.test(c.sdpFmtpLine || ''));
+    const extras = caps.codecs.filter((c) => /rtx|red|ulpfec|flexfec/i.test(c.mimeType));
+    return av1.length ? [...av1, ...extras] : null;
+  }
+  // decodifico AV1 pela placa de vídeo? (por software, 1080p60 pesa demais com jogo aberto)
+  let av1Hw = false;
+  if (window.VideoDecoder) {
+    VideoDecoder.isConfigSupported({ codec: 'av01.0.09M.08', codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: 'prefer-hardware' })
+      .then((r) => { av1Hw = !!(r && r.supported); }).catch(() => {});
+  }
+  const hasAV1Hw = () => av1Hw && !!(RTCRtpReceiver.getCapabilities('video') || { codecs: [] }).codecs.some((c) => /av1/i.test(c.mimeType));
   const hasH265 = () => !!(RTCRtpReceiver.getCapabilities('video') || { codecs: [] }).codecs.some((c) => /h265/i.test(c.mimeType));
 
   // Só H.264 com packetization-mode=1 (permite fragmentar quadros grandes), baseline primeiro,
@@ -97,5 +112,5 @@ window.Sdp = (() => {
     return h264.length ? [...h264, ...extras] : null;
   }
 
-  return { munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, hasH265 };
+  return { munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw };
 })();

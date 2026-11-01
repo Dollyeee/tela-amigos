@@ -9,7 +9,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = 47911; // porta de teste (nunca a da sala de verdade)
-const TIMEOUT_MS = 120000;
+const TIMEOUT_MS = 180000;
 const electronPath = require(path.join(ROOT, 'node_modules', 'electron'));
 const { createSignalingServer } = require(path.join(ROOT, 'src', 'signaling'));
 
@@ -89,7 +89,7 @@ const scriptA = common + `
         hardwareAcceleration: 'prefer-hardware', latencyMode: 'realtime', hevc: { format: 'annexb' } });
       let fn = 0;
       const t0 = performance.now();
-      setInterval(() => {
+      window.hevcIv = setInterval(() => {
         const vf = new VideoFrame(c, { timestamp: Math.round((performance.now() - t0) * 1000) });
         enc.encode(vf, { keyFrame: fn++ % 30 === 0 });
         vf.close();
@@ -98,6 +98,52 @@ const scriptA = common + `
       Object.assign(state.share, { native: true, direct: true, codec: 'hevc', width: 1280, height: 720 });
       for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
     }
+    // "Nativa direta" em AV1: quadros AV1 (WebCodecs) com o alinhamento de keyframes do app
+    async function startSyntheticAv1() {
+      clearInterval(window.hevcIv); // o gerador H.265 da fase anterior não pode misturar quadros
+      let wantKey = true;
+      const ni = await window.NativeVideo.start({ inject: true, synthetic: true, codec: 'av1', width: 1280, height: 720, onKey: () => { wantKey = true; } });
+      const enc = new VideoEncoder({
+        output: (chunk) => {
+          const pkt = new Uint8Array(9 + chunk.byteLength);
+          pkt[0] = chunk.type === 'key' ? 1 : 0;
+          new DataView(pkt.buffer).setBigInt64(1, BigInt(chunk.timestamp), true);
+          chunk.copyTo(pkt.subarray(9));
+          ni.push(pkt);
+        },
+        error: (e) => log('ERRO encoder AV1 de teste ' + e.message),
+      });
+      enc.configure({ codec: 'av01.0.08M.08', width: 1280, height: 720, bitrate: 6e6, framerate: 30, latencyMode: 'realtime' });
+      const t0 = performance.now();
+      let fn = 0;
+      window.av1Iv = setInterval(() => {
+        const vf = new VideoFrame(c, { timestamp: Math.round((performance.now() - t0) * 1000) });
+        enc.encode(vf, { keyFrame: wantKey || ++fn % 240 === 0 }); wantKey = false;
+        vf.close();
+      }, 1000 / 30);
+      state.share.video = ni.track; state.share.preview = ni.preview; state.share.stream = new MediaStream([ni.track]);
+      Object.assign(state.share, { native: true, direct: true, codec: 'av1', width: 1280, height: 720 });
+      for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
+    }
+    const av1Iv = setInterval(async () => {
+      if (!/smoke-av1-pedido/.test($('#chat-log').textContent)) return;
+      clearInterval(av1Iv);
+      try { await startSyntheticAv1(); log('direta AV1 ligada'); sendRelay(null, { kind: 'chat', text: 'smoke-av1-ligada' }); }
+      catch (e) { log('ERRO direta AV1: ' + e.message); }
+    }, 300);
+    // 2ª tela sintética (960x540)
+    const s2Iv = setInterval(() => {
+      if (!/smoke-s2-pedido/.test($('#chat-log').textContent)) return;
+      clearInterval(s2Iv);
+      const c2 = document.createElement('canvas'); c2.width = 960; c2.height = 540;
+      const g2 = c2.getContext('2d'); let m = 0;
+      setInterval(() => { m++; g2.fillStyle = '#204060'; g2.fillRect(0, 0, 960, 540); g2.fillStyle = '#fff'; g2.font = '60px sans-serif'; g2.fillText('tela 2 · ' + m, 60, 280); }, 1000 / 30);
+      const t2 = c2.captureStream(30).getVideoTracks()[0];
+      state.share2 = { stream: new MediaStream([t2]), video: t2, sourceName: 'Tela 2 de teste', source: { id: 'teste2' } };
+      for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
+      render();
+      log('2ª tela ligada');
+    }, 300);
     const directIv = setInterval(async () => {
       if (!/smoke-direct-pedido/.test($('#chat-log').textContent)) return;
       clearInterval(directIv);
@@ -112,7 +158,7 @@ const scriptA = common + `
     window.inkCheck = () => inkSeen;
     setTimeout(async () => { for (const p of state.peers.values()) { let o = ''; (await p.pc.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') o += JSON.stringify({ sent: r.framesSent, enc: r.framesEncoded, w: r.frameWidth, lim: r.qualityLimitationReason }); }); log('envio ' + o + ' trilha=' + p.vT.sender.track + ' estado=' + track.readyState); } }, 8000);
     // espera o B terminar (ele sai da sala) ou o tempo acabar
-    await until(() => state.peers.size === 0, 100000, 'B terminar');
+    await until(() => state.peers.size === 0, 165000, 'B terminar');
     if (!window.inkCheck()) throw new Error('o desenho da caneta do B não chegou');
     log('A OK');
   } catch (e) { log('FALHOU A: ' + e.message); }
@@ -212,6 +258,43 @@ const scriptB = common + `
     const f = /: (TelaAmigos-diagnostico-Teste A-[^ |]+\.txt)/.exec(toastsD());
     console.log('SMOKEDIAG ' + (f ? f[1] : '?'));
     log('diagnóstico do amigo chegou: ' + (f ? f[1] : '?'));
+    // resolução escolhida por quem assiste: 480p só para mim
+    setResMode(peer().id, '480');
+    const inMain = async () => { let v2 = null; (await peer().pc.getStats()).forEach((r) => { if (r.type === 'inbound-rtp' && r.kind === 'video' && (!v2 || r.framesDecoded > v2.framesDecoded)) v2 = r; }); return v2; };
+    await until(async () => { const x = await inMain(); return x && x.frameHeight > 0 && x.frameHeight <= 480; }, 15000, 'receber em 480p');
+    log('resolução escolhida ok (' + (await inMain()).frameHeight + 'p)');
+    setResMode(peer().id, 'auto');
+    await until(async () => (await inMain()).frameHeight === 720, 15000, 'voltar ao original');
+    // foto da tela
+    const shot = await takeShot(peer().id);
+    if (!shot) throw new Error('foto não salvou');
+    console.log('SMOKESHOT ' + shot);
+    log('foto salva');
+    // histórico da qualidade
+    await until(() => (state.hist.get('Teste A') || []).length >= 3, 15000, 'histórico juntar pontos');
+    openHistory(peer().id);
+    const hc = $('#hist-canvas');
+    const hr = hc.getBoundingClientRect();
+    hc.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: hr.right - 30, clientY: hr.top + 60 }));
+    if (!/fps/.test($('#hist-summary').textContent) || $('#hist-tip').classList.contains('hidden') || !/fps/.test($('#hist-tip').textContent)) {
+      throw new Error('histórico não desenhou: ' + $('#hist-summary').textContent + ' | ' + $('#hist-tip').textContent);
+    }
+    log('histórico: ' + $('#hist-summary').textContent);
+    closeHistory();
+    // 2ª tela: chega na bolha do canto; trocar põe ela grande (e o A passa a mandar em qualidade cheia)
+    sendRelay(null, { kind: 'chat', text: 'smoke-s2-pedido' });
+    await until(() => peer().share2 && peer().tile.s2.video.videoWidth > 0, 20000, 'receber a 2ª tela');
+    if (peer().iWant2 !== 'thumb') throw new Error('2ª tela deveria vir como miniatura: ' + peer().iWant2);
+    log('2ª tela chegou (' + peer().tile.s2.video.videoWidth + 'x' + peer().tile.s2.video.videoHeight + ') no canto');
+    swapScreens(peer().id);
+    if (peer().tile.video.srcObject !== peer().screen2Stream || peer().iWant2 !== 'full' || peer().iWant !== 'thumb') throw new Error('troca de telas não aplicou');
+    await until(() => peer().tile.video.videoWidth === 960, 10000, 'mostrar a 2ª tela grande');
+    swapScreens(peer().id);
+    if (peer().tile.video.srcObject !== peer().remoteStream || peer().iWant !== 'full') throw new Error('não voltou para a 1ª tela');
+    toggleS2Bubble(peer().id);
+    if (peer().iWant2 !== 'off' || !peer().tile.s2.box.classList.contains('hidden')) throw new Error('esconder a 2ª tela não aplicou');
+    toggleS2Bubble(peer().id);
+    log('2ª tela: trocar e esconder ok');
     // "Nativa direta" em H.265
     sendRelay(null, { kind: 'chat', text: 'smoke-direct-pedido' });
     await until(() => /smoke-direct-ligada/.test($('#chat-log').textContent), 15000, 'A ligar a direta em H.265');
@@ -227,6 +310,21 @@ const scriptB = common + `
       throw new Error('direta H.265 não chegou certo: ' + JSON.stringify({ codec: dcodec, w: d1.frameWidth, h: d1.frameHeight, quadros3s: got }));
     }
     log('direta H.265 ok: ' + d1.frameWidth + 'x' + d1.frameHeight + ', ' + got + ' quadros em 3 s, ' + dcodec);
+    // "Nativa direta" em AV1 (nosso keyframe só vai em lugar de keyframe do Chromium)
+    sendRelay(null, { kind: 'chat', text: 'smoke-av1-pedido' });
+    await until(() => /smoke-av1-ligada/.test($('#chat-log').textContent), 15000, 'A ligar a direta em AV1');
+    let acodec = '?', a0 = null;
+    await until(async () => {
+      const x = await inV();
+      (await peer().pc.getStats()).forEach((r) => { if (x && r.type === 'codec' && r.id === x.codecId) acodec = r.mimeType; });
+      if (/av1/i.test(acodec) && x.frameWidth === 1280) { a0 = x; return true; }
+      return false;
+    }, 15000, 'receber AV1 1280x720');
+    await sleep(3000);
+    const a1 = await inV();
+    const gotA = a1.framesDecoded - a0.framesDecoded;
+    if (gotA < 70) throw new Error('direta AV1 com poucos quadros: ' + gotA + ' em 3 s');
+    log('direta AV1 ok: ' + a1.frameWidth + 'x' + a1.frameHeight + ', ' + gotA + ' quadros em 3 s, ' + acodec + ', dec ' + a1.decoderImplementation);
     log('B OK');
   } catch (e) {
     const p = [...state.peers.values()][0];
@@ -260,6 +358,8 @@ function runInstance(name, script) {
     for (const l of parts) {
       const f = /SMOKEFILE (.*)$/.exec(l);
       if (f) { files.push(f[1].trim()); continue; }
+      const sh = /SMOKESHOT (.*)$/.exec(l);
+      if (sh) { files.push('shot:' + sh[1].trim()); continue; }
       const dg = /SMOKEDIAG (.*)$/.exec(l);
       if (dg) { diags.push(dg[1].trim()); continue; }
       const m = /SMOKE (.*)$/.exec(l);
@@ -286,7 +386,17 @@ async function main() {
   const all = [...a.lines, ...b.lines];
   const errors = all.filter((l) => /^ERRO|^FALHOU/.test(l));
   // a gravação precisa ser um MP4 de verdade (caixa "ftyp" no começo, "moof" = fragmentado)
-  for (const f of b.files) {
+  for (const f0 of b.files.filter((x) => x.startsWith('shot:'))) {
+    const f = f0.slice(5);
+    try {
+      const buf = fs.readFileSync(f);
+      const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+      if (buf.readUInt32BE(0) !== 0x89504e47 || w !== 1280 || h !== 720) errors.push(`foto errada: ${w}x${h}`);
+      else console.log(`  foto válida (${w}x${h}, ${Math.round(buf.length / 1000)} KB)`);
+      fs.unlinkSync(f);
+    } catch (e) { errors.push(`foto ilegível: ${e.message}`); }
+  }
+  for (const f of b.files.filter((x) => !x.startsWith('shot:'))) {
     try {
       const head = fs.readFileSync(f).subarray(0, 64 * 1024);
       if (head.toString('latin1', 4, 8) !== 'ftyp' || !head.includes('moof')) errors.push(`gravação não parece MP4: ${f}`);

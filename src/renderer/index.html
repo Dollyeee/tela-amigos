@@ -73,6 +73,7 @@
         <button id="btn-stats" class="ghost" title="Mostrar estatísticas (S)">Estatísticas</button>
         <button id="btn-camera" class="ghost" title="Liga a câmera. Com tela + câmera, ela aparece no canto da sua tela (estilo streamer)">Câmera</button>
         <button id="btn-share" class="primary">Compartilhar tela</button>
+        <button id="btn-share2" class="ghost hidden" title="Transmite mais uma tela ou janela (30 fps). Aparece no canto da sua tela principal; cada amigo pode trocar ou esconder">+ 2ª tela</button>
         <button id="btn-adjust" class="ghost hidden" title="Mudar qualidade sem parar de compartilhar">Ajustes</button>
         <button id="btn-stop" class="danger hidden">Parar</button>
         <button id="btn-leave" class="ghost" title="Sai da sala; se você hospeda, a sala continua aberta">Sair</button>
@@ -207,11 +208,26 @@
     </div>
   </div>
 
+  <!-- ============ HISTÓRICO DA QUALIDADE ============ -->
+  <div id="hist-modal" class="modal hidden">
+    <div class="modal-card hist-card">
+      <header class="modal-head"><h2 id="hist-title">Qualidade</h2><button id="hist-close" class="ghost">Fechar</button></header>
+      <div class="hist-body">
+        <p id="hist-summary" class="hist-summary"></p>
+        <div class="hist-legend muted">
+          <span><i class="sw good"></i>● bom</span><span><i class="sw warn"></i>▲ atenção</span><span><i class="sw bad"></i>■ ruim</span>
+          <span><i class="sw fz"></i>travada</span><span>· passe o mouse para ver a causa de cada momento</span>
+        </div>
+        <div class="hist-wrap"><canvas id="hist-canvas"></canvas><div id="hist-tip" class="hist-tip hidden"></div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============ MODAL COMPARTILHAR ============ -->
   <div id="share-modal" class="modal hidden">
     <div class="modal-card">
       <header class="modal-head">
-        <h2>O que compartilhar</h2>
+        <h2 id="share-title">O que compartilhar</h2>
         <div class="tabs">
           <button data-tab="screen" class="seg active">Telas</button>
           <button data-tab="window" class="seg">Janelas</button>
@@ -256,7 +272,7 @@
         <label class="field">
           <span>Codec</span>
           <select id="opt-codec">
-            <option value="auto" selected>Automático (H.265 se os dois tiverem, senão H.264)</option>
+            <option value="auto" selected>Automático (H.265 se os dois tiverem, senão H.264; na Nativa direta, AV1 se todos tiverem placa nova)</option>
             <option value="H265">H.265 / HEVC (melhor qualidade por Mb/s)</option>
             <option value="H264">H.264 (mais compatível)</option>
             <option value="VP9">VP9</option>

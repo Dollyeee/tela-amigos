@@ -115,8 +115,8 @@ static class Program
                             double F(string k, double d) => cr.TryGetProperty(k, out var e) ? Math.Clamp(e.GetDouble(), 0, 1) : d;
                             target = target with { CropX = F("x", 0), CropY = F("y", 0), CropW = Math.Max(0.05, F("w", 1)), CropH = Math.Max(0.05, F("h", 1)) };
                         }
-                        bool hevc = root.TryGetProperty("codec", out var vc) && vc.GetString() == "hevc";
-                        var v = new VideoStreamer(root.GetProperty("fps").GetInt32(), root.GetProperty("kbps").GetInt32(), hevc);
+                        string vcodec = root.TryGetProperty("codec", out var vc) ? vc.GetString() ?? "h264" : "h264";
+                        var v = new VideoStreamer(root.GetProperty("fps").GetInt32(), root.GetProperty("kbps").GetInt32(), vcodec);
                         try
                         {
                             v.Start(target, root.GetProperty("maxWidth").GetInt32(), root.GetProperty("maxHeight").GetInt32());

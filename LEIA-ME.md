@@ -28,6 +28,12 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **Sala sobrevive à atualização**: o instalador fecha tudo que roda da pasta do app; se a sua sala estava aberta, ela reabre sozinha quando o app volta (os amigos reconectam sozinhos).
 - **Zoom**: Ctrl + rodinha aproxima a tela de um amigo no ponto do mouse (até 600%); arraste para mover; ✕ ou Ctrl+0 volta.
 - **Atraso por amigo**: botão de relógio na tela dele: *Automático* (mínimo, +0,15 s com jogo pesado), *Atraso mínimo* (jogar junto) ou *Imagem lisa* (+0,35 s, para rede instável). Fica salvo por amigo.
+- **2ª tela**: transmitindo, clique em **+ 2ª tela** e escolha outra tela ou janela (30 fps). Ela aparece no canto da sua tela principal; cada amigo arrasta, troca com a principal (⇄ ou duplo clique) ou esconde (✕), e só recebe enquanto ela está à vista.
+- **Resolução por amigo**: botão de resolução na tela dele: *Automático* (original; cai para 720p sozinho se o seu PC apertar), *Original*, 1080p, 720p ou 480p. Quem transmite reduz só para você (na *Nativa direta* o vídeo é o mesmo para todos).
+- **Foto da tela**: botão de câmera (ou tecla P na tela em foco) salva a imagem na resolução que está chegando em Imagens\Tela Amigos e copia para colar no Discord.
+- **Histórico da qualidade**: botão de gráfico na tela do amigo mostra os últimos 10 min (fps, Mb/s, ping, travadas e a causa de cada momento ao passar o mouse). Também vai no diagnóstico.
+- **Bandeja**: o ícone ganha uma bolinha vermelha quando você está ao vivo e verde quando um amigo está; o menu mostra quem está na sala e clicar num amigo ao vivo abre a tela dele.
+- **AV1 na Nativa direta**: se você e todos os amigos tiverem placa que decodifica AV1 (RTX 30/40, RX 6000/7000, Intel Arc) e a sua codificar (RTX 40, RX 7000, Arc), a Nativa direta usa AV1 (mais qualidade pelo mesmo Mb/s); senão H.265 ou H.264.
 - **Diagnóstico do amigo com um clique**: passe o mouse no nome dele na lista e clique em 🩺; o diagnóstico dele chega na sua Área de Trabalho.
 - **Abrir com o Windows** e **Entrar sozinho na última sala** (Opções): o app abre só na bandeja e entra na sala de antes (quem hospeda reabre a própria).
 - **Registro de problemas**: tudo fica em `%APPDATA%\Tela Amigos\logs`; se a tela do app cair, ela recarrega sozinha.

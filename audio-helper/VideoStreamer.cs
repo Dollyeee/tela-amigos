@@ -38,6 +38,7 @@ sealed unsafe class VideoStreamer : IDisposable
     static readonly Guid VideoFormat_NV12 = new("3231564E-0000-0010-8000-00AA00389B71");
     static readonly Guid VideoFormat_H264 = new("34363248-0000-0010-8000-00AA00389B71");
     static readonly Guid VideoFormat_HEVC = new("43564548-0000-0010-8000-00AA00389B71"); // 'HEVC'
+    static readonly Guid VideoFormat_AV1 = new("31305641-0000-0010-8000-00AA00389B71");  // 'AV01'
     static readonly Guid MFT_CATEGORY_VIDEO_ENCODER = new("f79eac7d-e545-4387-bdee-d647d7bde42a");
     static readonly Guid TRANSFORM_ASYNC_UNLOCK = new("e5666d6b-3422-4eb6-a421-da7db1f8e207");
     static readonly Guid MFT_ENUM_ADAPTER_LUID = new("1d39518c-e220-4da8-a07f-ba172552d6b1");
@@ -118,16 +119,20 @@ sealed unsafe class VideoStreamer : IDisposable
     // dele, então pula tudo até o próximo keyframe (e pede um)
     volatile bool dropUntilKey;
 
-    // H.265 (HEVC): mesma imagem com bem menos bits; só quando todos que assistem decodificam
-    readonly bool hevc;
-    Guid OutSubtype => hevc ? VideoFormat_HEVC : VideoFormat_H264;
-    public string Codec => hevc ? "hevc" : "h264";
+    // H.265 (HEVC): mesma imagem com bem menos bits; só quando todos que assistem decodificam.
+    // AV1: ainda melhor (placas RTX 40 / RX 7000 / Intel Arc codificam); idem
+    readonly string codec;
+    bool hevc => codec == "hevc";
+    bool av1 => codec == "av1";
+    Guid OutSubtype => av1 ? VideoFormat_AV1 : hevc ? VideoFormat_HEVC : VideoFormat_H264;
+    public string Codec => codec;
+    string CodecLabel => av1 ? "AV1" : hevc ? "H.265" : "H.264";
 
-    public VideoStreamer(int fps, int bitrateKbps, bool hevc = false)
+    public VideoStreamer(int fps, int bitrateKbps, string codec = "h264")
     {
         this.fps = fps;
         this.bitrateKbps = bitrateKbps;
-        this.hevc = hevc;
+        this.codec = codec == "hevc" || codec == "av1" ? codec : "h264";
     }
     Action? droppedHandler;
 
@@ -141,7 +146,7 @@ sealed unsafe class VideoStreamer : IDisposable
         // ativo, a "primeira placa" do Windows pode ser a integrada enquanto o encoder é o da
         // NVIDIA/AMD: misturar as duas dá E_FAIL ("erro não especificado").
         var attempts = BuildAttempts();
-        if (attempts.Count == 0) throw new Exception($"Nenhum encoder {(hevc ? "H.265" : "H.264")} por hardware encontrado na placa de vídeo");
+        if (attempts.Count == 0) throw new Exception($"Nenhum encoder {CodecLabel} por hardware encontrado na placa de vídeo");
         var errors = new List<string>();
         foreach (var (encIndex, adapter) in attempts)
         {
@@ -178,7 +183,8 @@ sealed unsafe class VideoStreamer : IDisposable
             adapters = adapters.Select(a => new { a.Desc, vendor = $"{a.VendorId:X4}", vramMB = a.Vram / 1048576, luid = a.Luid }),
             encoders = encoders.Select(e => new { e.Index, e.Name, vendor = $"{e.VendorId:X4}", luid = e.Luid }),
             attempts = v.BuildAttempts().Select(t => $"{encoders[t.encIndex].Name} + {t.adapter.Desc}"),
-            hevcEncoders = new VideoStreamer(60, 1000, true).ListEncoders().Select(e => e.Name),
+            hevcEncoders = new VideoStreamer(60, 1000, "hevc").ListEncoders().Select(e => e.Name),
+            av1Encoders = new VideoStreamer(60, 1000, "av1").ListEncoders().Select(e => e.Name),
         };
     }
 
@@ -256,7 +262,7 @@ sealed unsafe class VideoStreamer : IDisposable
     void StartWith(int encIndex, AdapterInfo adapter, VideoTarget target, int maxW, int maxH)
     {
         IMFActivate activate = null!;
-        Step($"abrir o encoder {(hevc ? "H.265" : "H.264")}", () =>
+        Step($"abrir o encoder {CodecLabel}", () =>
         {
             var arr = EnumEncoderActivates(OutSubtype, out uint count);
             for (int i = 0; i < count; i++)
@@ -565,9 +571,9 @@ sealed unsafe class VideoStreamer : IDisposable
         // Formato de saída: tenta o completo (High + cores BT.709); se o encoder recusar,
         // tenta versões mais simples antes de desistir.
         var outErrors = new List<string>();
-        // H.264: 100 High, 77 Main. H.265: 1 = Main (8 bits 4:2:0)
-        var profiles = hevc
-            ? new[] { (1u, true), (1u, false), (0u, false) }
+        // H.264: 100 High, 77 Main. H.265: 1 = Main (8 bits 4:2:0). AV1: 1 = Main 4:2:0 8 bits
+        var profiles = hevc || av1
+            ? new[] { (1u, true), (1u, false), (0u, true), (0u, false) }
             : new[] { (100u, true), (100u, false), (77u, false), (0u, false) };
         foreach (var (profile, colors) in profiles)
         {
@@ -744,15 +750,24 @@ sealed unsafe class VideoStreamer : IDisposable
         try
         {
             var data = new ReadOnlySpan<byte>((void*)ptr, len);
-            // keyframe sem os parâmetros (SPS no H.264, VPS no H.265): coloca na frente
-            bool needHeader = key && sequenceHeader != null && !(hevc ? HasHevcNal(data, 32) : HasNal(data, 7));
-            int total = 1 + 8 + (needHeader ? sequenceHeader!.Length : 0) + len;
+            // keyframe sem os parâmetros (SPS no H.264, VPS no H.265, sequence header no AV1): coloca na frente
+            byte[]? header = sequenceHeader;
+            if (av1 && header != null && header.Length > 4 && (header[0] & 0x80) != 0) header = header[4..]; // av1C -> OBUs
+            bool needHeader = key && header != null && !(av1 ? HasObu(data, 1) : hevc ? HasHevcNal(data, 32) : HasNal(data, 7));
+            int total = 1 + 8 + (needHeader ? header!.Length : 0) + len;
             byte[] packet = new byte[total];
             packet[0] = (byte)(key ? 1 : 0);
             BitConverter.TryWriteBytes(packet.AsSpan(1), time100ns / 10); // microssegundos
             int off = 9;
-            if (needHeader) { sequenceHeader!.CopyTo(packet, off); off += sequenceHeader.Length; }
-            data.CopyTo(packet.AsSpan(off));
+            if (needHeader)
+            {
+                // AV1: o "temporal delimiter" (se houver) tem que continuar sendo o primeiro OBU
+                int td = av1 && len >= 2 && ((data[0] >> 3) & 0xF) == 2 ? 2 : 0;
+                data[..td].CopyTo(packet.AsSpan(off)); off += td;
+                header!.CopyTo(packet, off); off += header.Length;
+                data[td..].CopyTo(packet.AsSpan(off));
+            }
+            else data.CopyTo(packet.AsSpan(off));
             Program.Send(3, packet);
 
             Interlocked.Increment(ref statFrames);
@@ -765,6 +780,25 @@ sealed unsafe class VideoStreamer : IDisposable
             }
         }
         finally { buffer.Unlock(); }
+    }
+
+    // AV1 (formato "low overhead": cada OBU com tamanho): procura um OBU do tipo pedido
+    static bool HasObu(ReadOnlySpan<byte> d, int obuType)
+    {
+        int i = 0;
+        for (int n = 0; n < 16 && i < d.Length; n++)
+        {
+            byte h = d[i];
+            int type = (h >> 3) & 0xF;
+            if (type == obuType) return true;
+            bool ext = (h & 4) != 0, hasSize = (h & 2) != 0;
+            if (!hasSize) return false;
+            int p = i + 1 + (ext ? 1 : 0);
+            long size = 0; int shift = 0;
+            while (p < d.Length) { byte b = d[p++]; size |= (long)(b & 0x7F) << shift; shift += 7; if ((b & 0x80) == 0 || shift > 56) break; }
+            i = (int)Math.Min(int.MaxValue, p + size);
+        }
+        return false;
     }
 
     static bool HasHevcNal(ReadOnlySpan<byte> d, int nalType)

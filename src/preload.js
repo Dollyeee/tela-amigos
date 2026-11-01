@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('native', {
   captureSources: (type) => ipcRenderer.invoke('capture:sources', type),
   captureSelect: (id) => ipcRenderer.invoke('capture:select', id),
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  saveShot: (buffer, name) => ipcRenderer.invoke('shot:save', buffer, name),
   appVersion: () => ipcRenderer.invoke('app:version'),
   recovered: () => ipcRenderer.invoke('app:recovered'),
   installUpdate: () => ipcRenderer.invoke('update:install'),

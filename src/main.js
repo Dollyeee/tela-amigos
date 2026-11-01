@@ -584,6 +584,21 @@ function videosDir() {
   return TEST_HIDDEN ? path.join(app.getPath('userData'), 'videos') : path.join(app.getPath('videos'), 'Tela Amigos');
 }
 
+// ---- foto da tela: PNG em Imagens\Tela Amigos e copiada para colar (Discord etc.) ----
+ipcMain.handle('shot:save', (_e, buffer, name) => {
+  const buf = Buffer.from(buffer);
+  if (buf.length < 8 || buf.readUInt32BE(0) !== 0x89504e47) throw new Error('imagem inválida');
+  const dir = TEST_HIDDEN ? path.join(app.getPath('userData'), 'fotos') : path.join(app.getPath('pictures'), 'Tela Amigos');
+  fs.mkdirSync(dir, { recursive: true });
+  const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _()-]/gu, '').slice(0, 40) || 'tela';
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const file = path.join(dir, `foto-${safe}-${stamp}.png`);
+  fs.writeFileSync(file, buf);
+  // no teste automático não mexe na área de transferência de quem está usando o PC
+  if (!TEST_HIDDEN) { try { clipboard.writeImage(nativeImage.createFromBuffer(buf)); } catch (e) { console.warn('copiar foto:', e.message); } }
+  return file;
+});
+
 // Gravação longa: a interface manda pedaços do MP4 conforme codifica; vão direto para o disco
 const recFiles = new Map(); // handle -> { fd, file }
 let recSeq = 0;
@@ -772,13 +787,60 @@ ipcMain.on('ink:show', (_e, p) => {
 // ---- ícone na bandeja: status da sala e atalhos ----
 let tray = null;
 let trayStatus = { room: '', people: [], sharing: false };
+// ícone com bolinha: vermelha = você ao vivo, verde = algum amigo ao vivo
+const trayIcons = {};
+function trayIcon(kind) {
+  if (trayIcons[kind]) return trayIcons[kind];
+  const base = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'icon.png'));
+  let img = base.resize({ width: 32, height: 32, quality: 'best' });
+  if (kind !== 'none') {
+    const bmp = Buffer.from(img.toBitmap()); // BGRA
+    const [r, g, b] = kind === 'me' ? [0xd0, 0x3b, 0x3b] : [0x0c, 0xc3, 0x0c];
+    const cx = 24.5, cy = 24.5, rad = 7.5;
+    for (let y = 0; y < 32; y++) {
+      for (let x = 0; x < 32; x++) {
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        if (d > rad + 0.5) continue;
+        const i = (y * 32 + x) * 4;
+        const ring = d > rad - 2; // anel escuro: a bolinha aparece em barra clara ou escura
+        const a = Math.max(0, Math.min(1, rad + 0.5 - d));
+        const [cr, cg, cb] = ring ? [0x16, 0x18, 0x1f] : [r, g, b];
+        bmp[i] = Math.round(cb * a + bmp[i] * (1 - a));
+        bmp[i + 1] = Math.round(cg * a + bmp[i + 1] * (1 - a));
+        bmp[i + 2] = Math.round(cr * a + bmp[i + 2] * (1 - a));
+        bmp[i + 3] = Math.max(bmp[i + 3], Math.round(255 * a));
+      }
+    }
+    img = nativeImage.createFromBitmap(bmp, { width: 32, height: 32 });
+  }
+  trayIcons[kind] = img.resize({ width: 16, height: 16, quality: 'best' });
+  trayIcons[kind].addRepresentation({ scaleFactor: 2, width: 32, height: 32, buffer: img.toPNG() });
+  return trayIcons[kind];
+}
 function updateTray() {
   if (!tray) return;
   const s = trayStatus;
+  const people = (s.people || []).map((p) => (typeof p === 'string' ? { name: p, live: false } : p));
+  const live = people.filter((p) => p.live);
+  const kind = s.sharing ? 'me' : live.length ? 'friend' : 'none';
+  try { tray.setImage(trayIcon(kind)); } catch (e) { console.warn('ícone da bandeja:', e.message); }
   tray.setToolTip(s.room
-    ? `Tela Amigos — sala ${s.room}${s.people.length ? `: ${s.people.join(', ')}` : ''}${s.sharing ? ' · você está ao vivo' : ''}`
+    ? (`Tela Amigos — sala ${s.room}${people.length ? `: ${people.map((p) => p.name).join(', ')}` : ''}` +
+      `${s.sharing ? ' · você está ao vivo' : ''}${live.length ? ` · ao vivo: ${live.map((p) => p.name).join(', ')}` : ''}`).slice(0, 127)
     : 'Tela Amigos');
+  const roomItems = s.room ? [
+    { label: `Sala ${s.room}${s.sharing ? ' · você está ao vivo' : ''}`, enabled: false },
+    ...(people.length
+      ? people.map((p) => ({
+          label: `${p.live ? '🟢' : '⚪'} ${p.name}${p.live ? ' — ao vivo (clique para assistir)' : ''}`,
+          enabled: p.live,
+          click: () => { ipcMain.emit('window:show'); toRenderer('hotkey', `focus:${p.name}`); },
+        }))
+      : [{ label: 'Ninguém mais na sala', enabled: false }]),
+    { type: 'separator' },
+  ] : [];
   tray.setContextMenu(Menu.buildFromTemplate([
+    ...roomItems,
     { label: 'Abrir Tela Amigos', click: () => ipcMain.emit('window:show') },
     { type: 'separator' },
     { label: s.sharing ? 'Parar de transmitir (Ctrl+Shift+S)' : 'Transmitir (Ctrl+Shift+S)', click: () => toRenderer('hotkey', 'share') },
@@ -794,11 +856,10 @@ ipcMain.on('window:show', () => {
   win.show();
   win.focus();
 });
-ipcMain.on('tray:status', (_e, s) => { trayStatus = s; updateTray(); });
+ipcMain.on('tray:status', (_e, s) => { trayStatus = s && typeof s === 'object' ? s : trayStatus; updateTray(); });
 
 function setupTray() {
-  const icon = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'icon.png')).resize({ width: 16, height: 16 });
-  tray = new Tray(icon);
+  tray = new Tray(trayIcon('none'));
   tray.on('click', () => ipcMain.emit('window:show'));
   updateTray();
 }

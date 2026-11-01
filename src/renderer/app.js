@@ -24,6 +24,8 @@ const state = {
   meMini: localStorage.getItem('meMini') !== '0', // sua prévia no canto (padrão)
   leaving: false,
   share: null,           // { stream, video, audio, settings, sourceName }
+  share2: null,          // 2ª tela (captura do Chromium): { stream, video, sourceName, source }
+  hist: new Map(),       // nome do amigo -> histórico de qualidade (últimos 10 min)
   settings: {
     res: '1080', fps: 60, mode: 'motion', codec: 'auto', bitrate: 20, audio: 'all-except', engine: 'native',
   },
@@ -84,12 +86,19 @@ async function buildRendererDiag() {
   lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} modoLeve=${!!state.lightMode}` : ''}`);
   if (state.nativeStats) lines.push(`helper=${safeJson(state.nativeStats)}`);
   lines.push(`jogando=${!!state.gaming} (${state.gamingExe || ''})`);
+  if (state.share2) lines.push(`segundaTela="${state.share2.sourceName}"`);
   for (const p of state.peers.values()) {
     lines.push('');
     lines.push(`--- ${p.name} (id ${p.id}) conn=${p.pc.connectionState} ice=${p.pc.iceConnectionState} sinal=${p.pc.signalingState} ` +
       `compartilhando=${p.sharing} rota=${p.route || '?'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
       `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant} uploadMedido=${p.upMbps || '?'}Mb/s ` +
-      `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} codecDireta=${state.share ? state.share.codec : '-'}`);
+      `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} av1=${p.av1} codecDireta=${state.share ? state.share.codec : '-'} ` +
+      `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'}`);
+    const h = state.hist.get(p.name);
+    if (h && h.length) {
+      lines.push(`  histórico (${h.length} pontos, 2 s cada; t fps Mb/s ping perda% travadas causa):`);
+      for (const x of h.slice(-150)) lines.push(`    ${new Date(x.t).toLocaleTimeString()} ${x.fps} ${x.mbps.toFixed(1)} ${x.rtt ?? '?'} ${(x.loss * 100).toFixed(1)} ${x.fz} ${x.level}${x.short ? ' ' + x.short : ''}`);
+    }
     try {
       const rep = await p.pc.getStats();
       rep.forEach((r) => {
@@ -497,8 +506,17 @@ function onRelay(from, data) {
         peer.sharing = data.sharing;
         peer.hasAudio = data.audio;
         peer.h265 = !!data.h265;
-        // "Nativa direta" em H.265 e entrou alguém que não decodifica: volta para H.264
-        if (state.share && state.share.direct && state.share.codec === 'hevc' && !peer.h265) restartDirectCodec(peer.name);
+        peer.av1 = !!data.av1;
+        // "Nativa direta" em AV1/H.265 e entrou alguém que não decodifica: troca de codec
+        const dc = state.share && state.share.direct ? state.share.codec : null;
+        if ((dc === 'hevc' && !peer.h265) || (dc === 'av1' && !peer.av1)) restartDirectCodec(peer.name, dc);
+        // 2ª tela
+        const had2 = peer.share2;
+        peer.share2 = !!data.share2 && !!data.sharing;
+        peer.share2Name = String(data.share2Name || '').slice(0, 120);
+        if (data.s2Id) peer.remoteS2Id = data.s2Id;
+        if (peer.share2 && !had2) toast(`${peer.name} adicionou uma 2ª tela (aparece no canto da tela dele; ⇄ troca)`);
+        if (!peer.share2 && peer.tile) peer.tile.swapped = false;
         peer.sourceName = data.sourceName || '';
         const hadCam = peer.hasCam;
         peer.hasCam = !!data.cam;
@@ -522,11 +540,17 @@ function onRelay(from, data) {
       break;
     case 'want':
       peer.theyWant = data.level;
+      peer.theyWantH = Number(data.maxH) > 0 ? Number(data.maxH) : 0; // resolução que ele escolheu (0 = original)
       applySendParams(peer);
       refreshBudget();
       break;
+    case 'want2':
+      peer.theyWant2 = ['off', 'thumb', 'full'].includes(data.level) ? data.level : 'off';
+      applySendParams(peer);
+      break;
     case 'health':
       peer.health = {
+        direct: !!data.direct,
         cpu: !!data.cpu, gaming: !!data.gaming,
         cap: Number.isFinite(data.cap) ? data.cap : null, target: Number.isFinite(data.target) ? data.target : null,
       };
@@ -610,6 +634,15 @@ function createPeer(id, name) {
     streams: [peer.camMS],
     sendEncodings: [{ maxBitrate: 2_500_000, maxFramerate: 30 }],
   });
+  // 2ª tela: também criada desde já (vazia); quem tem versão antiga simplesmente ignora
+  peer.s2MS = new MediaStream();
+  peer.s2T = pc.addTransceiver('video', {
+    direction: 'sendonly',
+    streams: [peer.s2MS],
+    sendEncodings: [{ maxBitrate: 8_000_000, maxFramerate: 30 }],
+  });
+  peer.screen2Stream = new MediaStream(); // 2ª tela recebida deste amigo
+  peer.theyWant2 = 'off';
   // canal de dados (combinado dos dois lados, id fixo): teste de conexão e "assistir junto"
   try {
     peer.dc = pc.createDataChannel('tela', { negotiated: true, id: 7 });
@@ -619,7 +652,7 @@ function createPeer(id, name) {
   } catch (e) { console.warn('canal de dados:', e.message); }
   peer.camStream = new MediaStream();   // câmera recebida deste amigo
   peer.videoTracks = new Map();         // id do stream -> trilha de vídeo recebida
-  setCodec(peer, state.share && state.share.direct ? (state.share.codec === 'hevc' ? 'native-h265' : 'native') : s.codec);
+  setCodec(peer, state.share && state.share.direct ? directCodecMode(state.share.codec) : s.codec);
   // transform ligado desde o início (antes de negociar); fica em "deixa passar" até o modo nativo
   window.NativeVideo.attach(peer.vT.sender, id);
 
@@ -663,11 +696,13 @@ function createPeer(id, name) {
   render();
 }
 
+function directCodecMode(codec) { return codec === 'av1' ? 'native-av1' : codec === 'hevc' ? 'native-h265' : 'native'; }
 function setCodec(peer, codec) {
   peer.codecMode = codec;
   const prefs = codec === 'native' ? window.Sdp.h264OnlyPreferences()
     : codec === 'native-h265' ? window.Sdp.h265OnlyPreferences()
-      : window.Sdp.codecPreferences(codec);
+      : codec === 'native-av1' ? window.Sdp.av1OnlyPreferences()
+        : window.Sdp.codecPreferences(codec);
   try { if (prefs) peer.vT.setCodecPreferences(prefs); } catch (e) { console.warn('codec', e); }
 }
 
@@ -803,6 +838,10 @@ function sendState(to) {
     screenId: peer ? peer.screenMS.id : null,
     camId: peer ? peer.camMS.id : null,
     h265: window.Sdp.hasH265(), // decodifico H.265? (decide o codec da "Nativa direta")
+    av1: window.Sdp.hasAV1Hw(), // decodifico AV1 pela placa?
+    share2: !!state.share2,
+    share2Name: state.share2 ? state.share2.sourceName : '',
+    s2Id: peer ? peer.s2MS.id : null,
   });
 }
 
@@ -824,6 +863,12 @@ function resolveTracks(peer) {
   if (cam && !cs.getVideoTracks().includes(cam)) {
     for (const t of cs.getVideoTracks()) cs.removeTrack(t);
     cs.addTrack(cam);
+  }
+  const s2 = peer.remoteS2Id ? peer.videoTracks.get(peer.remoteS2Id) : null;
+  const ss = peer.screen2Stream;
+  if (s2 && !ss.getVideoTracks().includes(s2)) {
+    for (const t of ss.getVideoTracks()) ss.removeTrack(t);
+    ss.addTrack(s2);
   }
   if (peer.tile) updateTileMedia(peer.id);
 }
@@ -850,10 +895,13 @@ async function doApplySendParams(peer) {
 
   // modo nativo: o vídeo precisa sair em H.264 e passar pelo transform que injeta nossos quadros
   const native = !!(share && share.direct); // envio direto do H.264 nativo
-  const codecMode = native ? (share.codec === 'hevc' ? 'native-h265' : 'native') : state.settings.codec;
+  const codecMode = native ? directCodecMode(share.codec) : state.settings.codec;
   if (peer.codecMode !== codecMode) {
     setCodec(peer, codecMode);
     negotiate(peer);
+    // o 1º keyframe pode sair ainda no codec antigo (renegociação em andamento) e quem assiste
+    // ficaria esperando outro: pede mais alguns logo depois da troca
+    if (native) for (const ms of [800, 1800, 3500]) setTimeout(() => { if (state.share && state.share.direct) window.Helper.videoKey(); }, ms);
   }
   // antes de trocar a trilha: assim o primeiro quadro já é tratado no modo certo
   window.NativeVideo.setMode(peer.id, native, !!wantVideo && peer.pc.connectionState === 'connected');
@@ -862,6 +910,24 @@ async function doApplySendParams(peer) {
   // câmera (independe de estar compartilhando a tela)
   const wantCam = state.camera && level !== 'off' ? state.camera.track : null;
   if (peer.cT.sender.track !== wantCam) await peer.cT.sender.replaceTrack(wantCam).catch(() => {});
+  // 2ª tela: só para quem pediu (miniatura no canto ou trocada para a principal)
+  const s2 = state.share2;
+  const want2 = s2 && share && level !== 'off' ? peer.theyWant2 || 'off' : 'off';
+  const wantS2 = want2 !== 'off' ? s2.video : null;
+  if (peer.s2T.sender.track !== wantS2) await peer.s2T.sender.replaceTrack(wantS2).catch(() => {});
+  if (wantS2) {
+    try {
+      const p2 = peer.s2T.sender.getParameters();
+      if (!p2.encodings || !p2.encodings.length) p2.encodings = [{}];
+      const h2 = s2.video.getSettings().height || 1080;
+      const e2 = p2.encodings[0];
+      if (want2 === 'thumb') { e2.scaleResolutionDownBy = Math.max(1, h2 / 540); e2.maxBitrate = 1_500_000; }
+      else { e2.scaleResolutionDownBy = 1; e2.maxBitrate = Math.round(Math.min(12, Math.max(4, perPeerMbps(share.settings.bitrate, peer) * 0.5)) * 1e6); }
+      e2.maxFramerate = 30;
+      p2.degradationPreference = 'maintain-resolution';
+      await peer.s2T.sender.setParameters(p2);
+    } catch (e) { console.warn('2ª tela setParameters', e); }
+  }
   if (!share) return;
 
   const s = share.settings;
@@ -881,12 +947,13 @@ async function doApplySendParams(peer) {
       enc.maxFramerate = 30;
     } else if (state.lightMode) {
       // PC no limite: 30 fps e no máximo 720p para não engasgar
-      enc.scaleResolutionDownBy = Math.max(1, height / 720);
-      enc.maxBitrate = perPeerMbps(s.bitrate, peer) * 1e6;
+      enc.scaleResolutionDownBy = Math.max(1, height / Math.min(720, peer.theyWantH || 720));
+      enc.maxBitrate = capBitrateForHeight(perPeerMbps(s.bitrate, peer), peer.theyWantH) * 1e6;
       enc.maxFramerate = Math.min(30, Number(s.fps));
     } else {
-      enc.scaleResolutionDownBy = 1;
-      enc.maxBitrate = perPeerMbps(s.bitrate, peer) * 1e6;
+      // quem assiste pode escolher uma resolução menor (PC fraco, economizar): só para ele
+      enc.scaleResolutionDownBy = peer.theyWantH ? Math.max(1, height / peer.theyWantH) : 1;
+      enc.maxBitrate = capBitrateForHeight(perPeerMbps(s.bitrate, peer), peer.theyWantH) * 1e6;
       enc.maxFramerate = Number(s.fps);
     }
     enc.priority = 'high';
@@ -925,6 +992,11 @@ function perPeerMbps(settingMbps, peer) {
   // mostra uma ligação claramente fraca com esse amigo
   if (peer && peer.upMbps && peer.upMbps < 30) v = Math.min(v, Math.floor(peer.upMbps * 0.75));
   return Math.max(3, v);
+}
+// resolução menor pedida por quem assiste: não precisa de tantos bits (sobra upload para os outros)
+function capBitrateForHeight(mbps, h) {
+  if (!h) return mbps;
+  return Math.min(mbps, h <= 480 ? 6 : h <= 720 ? 12 : h <= 1080 ? 30 : mbps);
 }
 // "Nativa direta": o mesmo vídeo vai para todos -> o menor teto entre quem assiste
 function directMbps(settingMbps) {
@@ -1018,7 +1090,12 @@ function updateEngineFields() {
   $('#opt-codec').closest('.field').classList.toggle('hidden', direct); // direto é sempre H.264
 }
 
-async function openShareModal() {
+async function openShareModal(second = false) {
+  state.pickSecond = second === true;
+  $('#share-modal').classList.toggle('second', state.pickSecond);
+  $('#share-title').textContent = state.pickSecond ? 'Escolha a 2ª tela' : 'O que compartilhar';
+  $('#share-note').textContent = state.pickSecond
+    ? 'A 2ª tela vai a 30 fps e aparece no canto da sua tela principal para os amigos (cada um pode trocar).' : '';
   $('#share-modal').classList.remove('hidden');
   const s = state.settings;
   $('#opt-engine').value = s.engine || 'native';
@@ -1029,7 +1106,7 @@ async function openShareModal() {
   $('#opt-codec').value = s.codec;
   $('#opt-bitrate').value = s.bitrate;
   $('#opt-bitrate-label').textContent = `${s.bitrate} Mbps`;
-  $('#btn-start-share').textContent = state.share ? 'Trocar' : 'Compartilhar';
+  $('#btn-start-share').textContent = state.pickSecond ? 'Transmitir como 2ª tela' : state.share ? 'Trocar' : 'Compartilhar';
   selectedSource = null;
   updateRegionUi();
   $('#btn-start-share').disabled = true;
@@ -1169,6 +1246,7 @@ function readSettings() {
 let shareBusy = false;
 async function startShare(overrides) {
   if (shareBusy || !selectedSource) return; // evita dois inícios ao mesmo tempo (duplo clique)
+  if (state.pickSecond && !$('#share-modal').classList.contains('hidden') && !(overrides && !(overrides instanceof Event))) { await startSecond(selectedSource); return; }
   shareBusy = true;
   try {
     await startShareInner(overrides && !(overrides instanceof Event) ? overrides : null);
@@ -1202,20 +1280,27 @@ async function startShareInner(overrides) {
       state.nativeKbps = directMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
       baseRtt = Infinity;
       lastCut = 0;
-      // direta: H.265 se eu e TODOS os amigos decodificamos (e o codec não estiver fixo em H.264)
+      // direta: AV1 se eu e TODOS os amigos temos placa que decodifica AV1 (e a minha codifica);
+      // senão H.265 se todos decodificam; senão H.264
+      const peersNow = [...state.peers.values()];
+      const wantAv1 = direct && (settings.codec === 'auto' || settings.codec === 'AV1') && !settings.forceH264 && !settings.noAv1 &&
+        !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && window.Sdp.hasAV1Hw() && peersNow.every((p) => p.av1);
       const wantHevc = direct && settings.codec !== 'H264' && !settings.forceH264 && window.Sdp.hasH265() &&
-        [...state.peers.values()].every((p) => p.h265);
+        peersNow.every((p) => p.h265);
+      const codecs = [wantAv1 && 'av1', wantHevc && 'hevc', 'h264'].filter(Boolean);
       const opts = {
         sourceId: src.id, displayId: src.displayId, inject: direct, crop: src.crop || null,
         fps: settings.fps, kbps: direct ? state.nativeKbps : 50000, maxWidth: maxW, maxHeight: maxH,
-        codec: wantHevc ? 'hevc' : 'h264',
       };
-      try {
-        nativeInfo = window.__testNative ? await window.__testNative(opts) : await window.NativeVideo.start(opts);
-      } catch (e) {
-        if (!wantHevc) throw e;
-        console.warn('H.265 nativo falhou, usando H.264:', e.message);
-        nativeInfo = await window.NativeVideo.start({ ...opts, codec: 'h264' });
+      for (let i = 0; i < codecs.length && !nativeInfo; i++) {
+        try {
+          const o = { ...opts, codec: codecs[i] };
+          nativeInfo = window.__testNative ? await window.__testNative(o) : await window.NativeVideo.start(o);
+        } catch (e) {
+          if (i === codecs.length - 1) throw e;
+          if (codecs[i] === 'av1') state.noAv1Encoder = /Nenhum encoder/.test(e.message); // placa sem AV1: não tenta de novo
+          console.warn(`${codecs[i]} nativo falhou, tentando ${codecs[i + 1]}:`, e.message);
+        }
       }
       video = nativeInfo.track;
       if (!direct) video.contentHint = settings.mode; // "Prioridade" vale também no modo adaptativo
@@ -1291,6 +1376,8 @@ async function startShareInner(overrides) {
   window.Helper.gameWatch(true).catch(() => {}); // esconder a prévia quando estiver jogando
   $('#btn-stop').classList.remove('hidden');
   $('#btn-adjust').classList.remove('hidden');
+  $('#btn-share2').classList.remove('hidden');
+  updateShare2Button();
 
   for (const peer of state.peers.values()) {
     applySendParams(peer); // ajusta codec/renegocia se precisar
@@ -1742,7 +1829,7 @@ const INK_LIFE = 8000;
 function showInk(target, fromId, name, segs) {
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   const tile = tileByOwner(target);
-  if (tile && tile.el.isConnected) {
+  if (tile && tile.el.isConnected && !tile.swapped) { // trocada: a imagem grande é a 2ª tela
     trailLayer(tile);
     const t = performance.now();
     for (const [x1, y1, x2, y2] of segs) tile.trailLines.push({ x1, y1, x2, y2, color, t, life: INK_LIFE, from: fromId });
@@ -1798,6 +1885,7 @@ function attachPen(tile, id) {
   };
   tile.el.addEventListener('pointerdown', (e) => {
     if (!tile.pen || e.button !== 0 || e.target.closest('.tile-bar, .react-bar, .pen-tools, .cam-pip')) return;
+    if (tile.swapped) { swappedHint(); return; }
     e.preventDefault();
     e.stopPropagation();
     drawing = true;
@@ -1835,7 +1923,7 @@ function sendToMyDesktop(target, fromId, kind = 'hand') {
 function showLaser(target, fromId, name, x, y, drawing = false) {
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   const tile = tileByOwner(target);
-  if (tile && tile.el.isConnected) {
+  if (tile && tile.el.isConnected && !tile.swapped) {
     tile.lasers = tile.lasers || {};
     let l = tile.lasers[fromId];
     if (!l) {
@@ -1877,7 +1965,7 @@ function showPress(target, fromId, name, x, y) {
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   showLaser(target, fromId, name, x, y);
   const tile = tileByOwner(target);
-  if (tile && tile.el.isConnected) {
+  if (tile && tile.el.isConnected && !tile.swapped) {
     const l = tile.lasers && tile.lasers[fromId];
     if (l) { l.classList.remove('pressing'); void l.offsetWidth; l.classList.add('pressing'); }
     const b = videoBox(tile), er = tile.el.getBoundingClientRect();
@@ -1953,6 +2041,7 @@ function attachInteractions(tile, id) {
   };
   tile.el.addEventListener('contextmenu', (e) => e.preventDefault());
   tile.el.addEventListener('pointerdown', (e) => {
+    if (e.button === 2 && (tile.swapped || e.target.closest('.cam-pip'))) { if (tile.swapped) swappedHint(); return; }
     if (e.button === 2) {
       on = true; moved = false;
       downAt = { x: e.clientX, y: e.clientY };
@@ -2282,7 +2371,7 @@ async function healthLoop() {
     }
     // a causa certa para o indicador dos amigos: PC no limite, captura abaixo do alvo, jogando
     const capFps = ns && state.share.native ? ns.captureFps : null;
-    sendRelay(null, { kind: 'health', cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (state.share.settings && state.share.settings.fps) || 60), gaming: !!state.gaming });
+    sendRelay(null, { kind: 'health', direct: !!state.share.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (state.share.settings && state.share.settings.fps) || 60), gaming: !!state.gaming });
   }
 
   for (const peer of state.peers.values()) {
@@ -2300,7 +2389,7 @@ async function healthLoop() {
     peer.qprev = {
       t: performance.now(), lost: v.packetsLost || 0, recv: v.packetsReceived || 0, fz: v.freezeCount || 0,
       fRecv: v.framesReceived || 0, fDec: v.framesDecoded || 0, decT: v.totalDecodeTime || 0,
-      shown: pq ? pq.totalVideoFrames : 0, pdrop: pq ? pq.droppedVideoFrames : 0,
+      shown: pq ? pq.totalVideoFrames : 0, pdrop: pq ? pq.droppedVideoFrames : 0, bytes: v.bytesReceived || 0,
     };
     if (!prev) continue;
     const q = peer.qprev, dt = (q.t - prev.t) / 1000 || 2;
@@ -2337,6 +2426,17 @@ async function healthLoop() {
     }
     if (loss > 0.05 || fps < badFps || freezes >= 2) level = 'bad';
     peer.quality = { level, reason };
+    // histórico (gráfico de qualidade): um ponto a cada ~2 s, últimos 10 min, guardado pelo nome
+    let hist = state.hist.get(peer.name);
+    if (!hist) { hist = []; state.hist.set(peer.name, hist); }
+    hist.push({
+      t: Date.now(), fps: Math.round(fps), mbps: Math.max(0, ((q.bytes - prev.bytes) * 8) / dt / 1e6),
+      rtt: rtt != null ? Math.round(rtt * 1000) : null, loss, fz: Math.max(0, freezes), level, short, reason,
+      h: v.frameHeight || 0, thumb,
+    });
+    if (hist.length > 300) hist.splice(0, hist.length - 300);
+    if (histOpen === peer.id) drawHistory();
+    autoResolution(peer, mineBad && !thumb, level === 'good', v.frameHeight || 0);
     const t = peer.tile;
     if (t.qdot) {
       t.qdot.className = `qdot ${level}`;
@@ -2412,13 +2512,15 @@ function cycleLatency(id) {
 // Entrou alguém sem H.265 durante a "Nativa direta" em H.265: reinicia em H.264 (o vídeo direto
 // é o mesmo para todos, então precisa ser um codec que todos decodificam)
 let restartingCodec = false;
-async function restartDirectCodec(who) {
+async function restartDirectCodec(who, from = 'hevc') {
   if (restartingCodec || !state.share) return;
   restartingCodec = true;
   try {
-    toast(`${who} não decodifica H.265: a sua transmissão passou para H.264.`);
+    toast(from === 'av1'
+      ? `${who} não tem placa que decodifica AV1: a sua transmissão trocou de codec.`
+      : `${who} não decodifica H.265: a sua transmissão passou para H.264.`);
     selectedSource = state.share.source;
-    await startShare({ engine: 'native-direct', forceH264: true, autoDirect: state.share.autoDirect });
+    await startShare({ engine: 'native-direct', noAv1: true, forceH264: from === 'hevc', autoDirect: state.share.autoDirect });
   } finally { restartingCodec = false; }
 }
 
@@ -2469,6 +2571,7 @@ async function stopShare() {
     if (meTile) meTile.el.classList.remove('replaying');
   }
   share.video.onended = null;
+  stopSecond(true);
   if (share.native) await window.NativeVideo.stop();
   else share.stream.getTracks().forEach((t) => t.stop());
   if (share.audio) await window.HelperAudio.stop();
@@ -2482,6 +2585,7 @@ async function stopShare() {
   state.lightMode = false;
   $('#btn-stop').classList.add('hidden');
   $('#btn-adjust').classList.add('hidden');
+  $('#btn-share2').classList.add('hidden');
   $('#adjust-panel').classList.add('hidden');
   render();
 }
@@ -2551,6 +2655,10 @@ const ICONS = {
   vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
   latency: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></svg>',
+  shot: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  res: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15V9l3 3 3-3v6M16 9v6"/></svg>',
+  chart: '<svg viewBox="0 0 24 24"><path d="M4 4v16h16"/><path d="M7 15l4-5 3 3 5-6"/></svg>',
+  screen2: '<svg viewBox="0 0 24 24"><rect x="2" y="4" width="13" height="10" rx="1.5"/><rect x="9" y="10" width="13" height="10" rx="1.5" class="fill"/></svg>',
   pen: '<svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg>',
   playpause: '<svg viewBox="0 0 24 24"><path d="M4 5l8 7-8 7z" class="fill"/><path d="M15 5v14M20 5v14"/></svg>',
   record: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/><circle cx="9.5" cy="12" r="2.5" class="fill"/></svg>',
@@ -2564,6 +2672,7 @@ function iconButton(icon, title, onClick) {
   const b = document.createElement('button');
   b.className = 'icon-btn';
   b.title = title;
+  b.dataset.icon = icon;
   b.innerHTML = ICONS[icon];
   b.onclick = (e) => { e.stopPropagation(); onClick(b); };
   return b;
@@ -2599,16 +2708,30 @@ function makeTile(id) {
   const tile = { el, video, label, stats: document.createElement('div') };
   tile.stats.className = 'tile-stats';
   // bolha da câmera (estilo streamer), aparece quando a pessoa transmite tela + câmera
-  tile.camBox = document.createElement('div');
-  tile.camBox.className = 'cam-pip hidden';
-  tile.camVideo = document.createElement('video');
-  tile.camVideo.autoplay = true;
-  tile.camVideo.playsInline = true;
-  tile.camVideo.muted = true;
-  tile.camBox.appendChild(tile.camVideo);
-  tile.camBox.title = 'Arraste para mover · rodinha muda o tamanho · duplo clique volta ao canto';
-  tile.camKey = `campos:${isMe ? state.myName : ((state.peers.get(id) || {}).name || id)}`;
-  attachCamDrag(tile);
+  const ownerName = isMe ? state.myName : ((state.peers.get(id) || {}).name || id);
+  tile.cam = makeBubble(tile, 'cam', `campos:${ownerName}`, CAM_DEFAULT, 'Arraste para mover · rodinha muda o tamanho · duplo clique volta ao canto');
+  tile.camBox = tile.cam.box;
+  tile.camVideo = tile.cam.video;
+  // bolha da 2ª tela: ⇄ troca com a principal, ✕ esconde (para de receber)
+  tile.s2 = makeBubble(tile, 's2', `s2pos:${ownerName}`, S2_DEFAULT, 'Arraste para mover · rodinha muda o tamanho · duplo clique troca com a tela principal');
+  {
+    const tag = document.createElement('div');
+    tag.className = 'pip-tools';
+    const lbl = document.createElement('span');
+    tile.s2Label = lbl;
+    const swap = document.createElement('button');
+    swap.textContent = '⇄';
+    swap.title = 'Trocar com a tela principal';
+    swap.onclick = (e) => { e.stopPropagation(); swapScreens(id); };
+    const close = document.createElement('button');
+    close.textContent = '✕';
+    close.title = 'Esconder a 2ª tela (botão na barra mostra de novo)';
+    close.onclick = (e) => { e.stopPropagation(); toggleS2Bubble(id); };
+    for (const b of [swap, close]) { b.onpointerdown = (e) => e.stopPropagation(); b.ondblclick = (e) => e.stopPropagation(); }
+    tag.append(lbl, swap, close);
+    tile.s2.box.appendChild(tag);
+    tile.s2.onDouble = () => swapScreens(id);
+  }
 
   if (!isMe) {
     // volume lembrado pelo NOME do amigo (o id muda a cada vez que ele entra);
@@ -2679,6 +2802,10 @@ function makeTile(id) {
     iconButton('clip', 'Salvar clipe dos últimos 30 s (Ctrl+Shift+C)', () => saveClip(id)),
     iconButton('record', 'Gravar esta tela (sem limite de tempo) / parar e salvar', () => toggleRecording(id)),
     ...(isMe ? [] : [(tile.latBtn = iconButton('latency', 'Atraso: Automático (clique para trocar)', () => cycleLatency(id)))]),
+    ...(isMe ? [] : [(tile.resBtn = iconButton('res', 'Resolução que você recebe: Automático', (b) => openResMenu(id, b)))]),
+    ...(isMe ? [] : [iconButton('chart', 'Histórico da qualidade (últimos 10 min)', () => openHistory(id))]),
+    (tile.s2Btn = iconButton('screen2', 'Mostrar/esconder a 2ª tela', () => toggleS2Bubble(id))),
+    iconButton('shot', 'Foto desta tela (salva em Imagens\\Tela Amigos e copia para colar)', () => takeShot(id)),
     (tile.penBtn = iconButton('pen', 'Caneta: desenhar nesta tela (os traços ficam alguns segundos para todos)', () => setPen(tile, id, !tile.pen))),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
   );
@@ -2700,9 +2827,17 @@ function makeTile(id) {
     localStorage.setItem('meMini', state.meMini ? '1' : '0');
     render();
   }));
+  // tela estreita (várias na grade): os botões menos usados vão para o "⋯"
+  for (const b of actions.querySelectorAll('.icon-btn')) if (OPT_ICONS.has(b.dataset.icon)) b.classList.add('opt');
+  const more = document.createElement('button');
+  more.className = 'icon-btn more-btn';
+  more.title = 'Mais opções';
+  more.textContent = '⋯';
+  more.onclick = (e) => { e.stopPropagation(); openMoreMenu(actions, more); };
+  actions.append(more);
   actions.append(iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)));
   bar.append(grip, label, actions);
-  el.append(video, tile.camBox, tile.stats, bar);
+  el.append(video, tile.s2.box, tile.camBox, tile.stats, bar);
   attachInteractions(tile, id);
   attachZoom(tile);
 
@@ -2843,15 +2978,16 @@ function getTile(id) {
   if (id === 'me') {
     if (!meTile) meTile = makeTile('me');
     updateTileMedia('me');
-    const what = state.share ? state.share.sourceName : 'Câmera';
+    const what = state.share ? (meTile.swapped && state.share2 ? `2ª tela: ${state.share2.sourceName}` : state.share.sourceName) : 'Câmera';
     setTileLabel(meTile, state.myName, `Você — ${what}`);
     return meTile;
   }
   const peer = state.peers.get(id);
   if (!peer.tile) peer.tile = makeTile(id);
   updateTileMedia(id);
-  const what = peer.sharing ? peer.sourceName : 'Câmera';
+  const what = peer.sharing ? (peer.tile.swapped ? `2ª tela: ${peer.share2Name}` : peer.sourceName) : 'Câmera';
   setTileLabel(peer.tile, peer.name, peer.name + (what ? ` — ${what}` : ''));
+  updateResButton(peer);
   peer.tile.vol.style.display = peer.hasAudio ? '' : 'none';
   return peer.tile;
 }
@@ -2859,12 +2995,13 @@ function getTile(id) {
 // Tela + câmera: a tela ocupa tudo e a câmera fica numa bolha no canto (estilo streamer).
 // Só câmera: a câmera ocupa a tela toda.
 function updateTileMedia(id) {
-  let tile, screen, cam, sharing, hasCam;
+  let tile, screen, cam, sharing, hasCam, screen2 = null, name2 = '';
   if (id === 'me') {
     tile = meTile;
     sharing = !!state.share; hasCam = !!state.camera;
     screen = sharing ? state.share.preview : null;
     cam = hasCam ? state.camera.stream : null;
+    if (sharing && state.share2) { screen2 = state.share2.stream; name2 = state.share2.sourceName; }
   } else {
     const p = state.peers.get(id);
     if (!p) return;
@@ -2872,28 +3009,57 @@ function updateTileMedia(id) {
     sharing = !!p.sharing; hasCam = !!p.hasCam;
     screen = p.remoteStream;
     cam = p.camStream;
+    if (sharing && p.share2) { screen2 = p.screen2Stream; name2 = p.share2Name; }
   }
   if (!tile) return;
-  const main = sharing ? screen : cam;
+  if (!screen2) tile.swapped = false;
+  const swapped = !!tile.swapped;
+  const main = sharing ? (swapped ? screen2 : screen) : cam;
   if (main && tile.video.srcObject !== main) tile.video.srcObject = main;
   if (tile.audio) tile.audio.setStream(sharing ? screen : null); // som da tela (com reforço/nivelador)
   const showBubble = sharing && hasCam;
   tile.camBox.classList.toggle('hidden', !showBubble);
   if (showBubble && tile.camVideo.srcObject !== cam) tile.camVideo.srcObject = cam;
   if (showBubble && tile.camVideo.paused) tile.camVideo.play().catch(() => {});
-  if (showBubble) placeCamBubble(tile);
+  // 2ª tela no canto (ou a 1ª, se trocou)
+  const show2 = !!screen2 && !tile.s2Hidden;
+  const other = swapped ? screen : screen2;
+  tile.s2.box.classList.toggle('hidden', !show2);
+  tile.s2Btn.classList.toggle('hidden', !screen2);
+  tile.s2Btn.classList.toggle('active', show2);
+  tile.el.classList.toggle('swapped', swapped);
+  if (show2 && tile.s2.video.srcObject !== other) tile.s2.video.srcObject = other;
+  if (show2 && tile.s2.video.paused) tile.s2.video.play().catch(() => {});
+  if (tile.s2Label) tile.s2Label.textContent = swapped ? '1ª tela' : `2ª tela${name2 ? ` · ${name2}` : ''}`;
+  placeCamBubble(tile);
 }
 
-// Posição da câmera dentro da IMAGEM (não do quadro, que tem faixas pretas), em frações:
-// x/y = canto superior esquerdo, w = largura. Cada um arruma do seu jeito; fica salvo por amigo.
+// Bolhas no canto da tela (câmera e 2ª tela). Posição dentro da IMAGEM (não do quadro, que tem
+// faixas pretas), em frações: x/y = canto superior esquerdo, w = largura. Cada um arruma do seu
+// jeito; fica salvo por amigo.
 const CAM_DEFAULT = { x: 0.74, y: 0.70, w: 0.24 };
-function camPos(tile) {
-  if (!tile.camPos) {
-    try { tile.camPos = JSON.parse(localStorage.getItem(tile.camKey)) || { ...CAM_DEFAULT }; } catch { tile.camPos = { ...CAM_DEFAULT }; }
-  }
-  return tile.camPos;
+const S2_DEFAULT = { x: 0.02, y: 0.05, w: 0.26 };
+function makeBubble(tile, kind, key, def, title) {
+  const box = document.createElement('div');
+  box.className = `cam-pip ${kind}-pip hidden`;
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = true;
+  box.appendChild(video);
+  box.title = title;
+  const bub = { box, video, key, def, pos: null, onDouble: null };
+  attachBubbleDrag(tile, bub);
+  return bub;
 }
-// mantém a câmera inteira dentro da imagem
+function camPos(tile) { return bubblePos(tile.cam); } // clipes/gravação desenham a câmera junto
+function bubblePos(bub) {
+  if (!bub.pos) {
+    try { bub.pos = JSON.parse(localStorage.getItem(bub.key)) || { ...bub.def }; } catch { bub.pos = { ...bub.def }; }
+  }
+  return bub.pos;
+}
+// mantém a bolha inteira dentro da imagem
 function clampCam(tile, p, b) {
   const hFrac = (p.w * b.width * 9 / 16) / b.height;
   p.w = Math.max(0.1, Math.min(0.5, p.w));
@@ -2901,24 +3067,29 @@ function clampCam(tile, p, b) {
   p.y = Math.max(0, Math.min(1 - hFrac, p.y));
   return p;
 }
-function placeCamBubble(tile) {
-  if (!tile || tile.camBox.classList.contains('hidden') || !tile.el.isConnected) return;
+function placeBubble(tile, bub) {
+  if (!tile || !bub || bub.box.classList.contains('hidden') || !tile.el.isConnected) return;
   const b = videoBox(tile), er = tile.el.getBoundingClientRect();
   if (!b.width) return;
-  const p = clampCam(tile, camPos(tile), b);
+  const p = clampCam(tile, bubblePos(bub), b);
   const w = b.width * p.w;
-  tile.camBox.style.width = `${w}px`;
-  tile.camBox.style.left = `${b.left - er.left + p.x * b.width}px`;
-  tile.camBox.style.top = `${b.top - er.top + p.y * b.height}px`;
-  tile.camBox.style.right = 'auto';
-  tile.camBox.style.bottom = 'auto';
+  bub.box.style.width = `${w}px`;
+  bub.box.style.left = `${b.left - er.left + p.x * b.width}px`;
+  bub.box.style.top = `${b.top - er.top + p.y * b.height}px`;
+  bub.box.style.right = 'auto';
+  bub.box.style.bottom = 'auto';
+}
+function placeCamBubble(tile) {
+  if (!tile) return;
+  placeBubble(tile, tile.cam);
+  placeBubble(tile, tile.s2);
 }
 
-// arrastar (botão esquerdo), redimensionar (rodinha), duplo clique volta ao padrão
-function attachCamDrag(tile) {
-  const box = tile.camBox;
+// arrastar (botão esquerdo), redimensionar (rodinha), duplo clique (volta ao padrão ou ação da bolha)
+function attachBubbleDrag(tile, bub) {
+  const box = bub.box;
   let drag = null;
-  const save = () => localStorage.setItem(tile.camKey, JSON.stringify(tile.camPos));
+  const save = () => localStorage.setItem(bub.key, JSON.stringify(bub.pos));
   box.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -2931,11 +3102,11 @@ function attachCamDrag(tile) {
   box.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const b = videoBox(tile);
-    const p = camPos(tile);
+    const p = bubblePos(bub);
     p.x = (e.clientX - drag.dx - b.left) / b.width;
     p.y = (e.clientY - drag.dy - b.top) / b.height;
     clampCam(tile, p, b);
-    placeCamBubble(tile);
+    placeBubble(tile, bub);
   });
   const end = () => {
     if (!drag) return;
@@ -2943,7 +3114,7 @@ function attachCamDrag(tile) {
     box.classList.remove('dragging');
     // encaixa no canto se soltar perto da borda
     const b = videoBox(tile);
-    const p = camPos(tile);
+    const p = bubblePos(bub);
     const hFrac = (p.w * b.width * 9 / 16) / b.height;
     const m = 0.02, snap = 0.06;
     if (p.x < snap) p.x = m;
@@ -2951,7 +3122,7 @@ function attachCamDrag(tile) {
     if (p.y < snap) p.y = m * 2;
     if (1 - hFrac - p.y < snap) p.y = 1 - hFrac - m * 2;
     clampCam(tile, p, b);
-    placeCamBubble(tile);
+    placeBubble(tile, bub);
     save();
   };
   box.addEventListener('pointerup', end);
@@ -2960,18 +3131,19 @@ function attachCamDrag(tile) {
     e.preventDefault();
     e.stopPropagation(); // não mexe no volume da tela
     const b = videoBox(tile);
-    const p = camPos(tile);
+    const p = bubblePos(bub);
     const oldW = p.w;
     p.w = Math.max(0.1, Math.min(0.5, p.w + (e.deltaY < 0 ? 0.02 : -0.02)));
     p.x -= (p.w - oldW) / 2; // cresce a partir do centro
     clampCam(tile, p, b);
-    placeCamBubble(tile);
+    placeBubble(tile, bub);
     save();
   }, { passive: false });
   box.addEventListener('dblclick', (e) => {
     e.stopPropagation();
-    tile.camPos = { ...CAM_DEFAULT };
-    placeCamBubble(tile);
+    if (bub.onDouble) { bub.onDouble(); return; }
+    bub.pos = { ...bub.def };
+    placeBubble(tile, bub);
     save();
   });
 }
@@ -3141,21 +3313,33 @@ function render() {
   document.querySelectorAll('.layout-switch .seg').forEach((b) => b.classList.toggle('active', b.dataset.layout === state.layout));
   $('#btn-stats').classList.toggle('active', state.showStats);
 
-  // diz a cada amigo em que qualidade quero receber a tela dele
+  // diz a cada amigo em que qualidade quero receber a tela dele (e a 2ª tela, se houver)
   for (const peer of state.peers.values()) {
     let level = 'full';
     // só câmera também precisa ser recebida (antes cortava a câmera de quem não compartilhava a tela)
     if ((!peer.sharing && !peer.hasCam) || state.hidden.has(peer.id)) level = 'off';
     else if (focusMode && peer.id !== focus && state.pipId !== peer.id) level = 'thumb';
-    if (peer.iWant !== level) {
+    const t = peer.tile;
+    let level2 = 'off';
+    if (peer.share2 && level !== 'off' && t && !t.s2Hidden) {
+      if (t.swapped) { level2 = level; level = 'thumb'; } // a 2ª tela está grande; a 1ª vai para o canto
+      else level2 = 'thumb';
+    }
+    const maxH = wantedMaxH(peer);
+    if (peer.iWant !== level || peer.iWantH !== maxH) {
       peer.iWant = level;
-      sendRelay(peer.id, { kind: 'want', level });
+      peer.iWantH = maxH;
+      sendRelay(peer.id, { kind: 'want', level, maxH });
+    }
+    if (peer.iWant2 !== level2) {
+      peer.iWant2 = level2;
+      sendRelay(peer.id, { kind: 'want2', level: level2 });
     }
   }
   renderPeople();
 
   // status no ícone da bandeja (só manda quando muda)
-  const tray = { room: state.hostIp || '', people: [...state.peers.values()].map((p) => p.name), sharing: !!state.share };
+  const tray = { room: state.hostIp || '', people: [...state.peers.values()].map((p) => ({ name: p.name, live: !!p.sharing })), sharing: !!state.share };
   const key = safeJson(tray);
   if (key !== lastTrayKey) { lastTrayKey = key; window.native.trayStatus(tray); }
 }
@@ -3225,6 +3409,340 @@ function renderPeople() {
     extra.appendChild(db);
     row(p.name, status, extra);
   }
+}
+
+// ------------------------------------------------------------------ 2ª tela
+// Quem transmite pode mandar mais uma tela/janela (captura do Chromium, até 1080p30). Ela aparece
+// no canto da tela principal; cada um que assiste pode trocar (⇄) ou esconder (só recebe se mostrar).
+async function startSecond(src) {
+  state.pickSecond = false;
+  $('#share-modal').classList.remove('second');
+  if (!state.share) { toast('Comece a transmitir a tela principal antes da 2ª.', 'error'); return; }
+  if (state.share.source && state.share.source.id === src.id && !state.share.source.crop) {
+    toast('Essa já é a sua tela principal: escolha outra tela ou janela.', 'error');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: src.id, maxWidth: 1920, maxHeight: 1080, maxFrameRate: 30 } },
+    });
+  } catch (e) {
+    toast(`Não foi possível capturar a 2ª tela: ${e.message}`, 'error');
+    return;
+  }
+  stopSecond(true);
+  const video = stream.getVideoTracks()[0];
+  video.contentHint = 'detail';
+  state.share2 = { stream, video, sourceName: src.name, source: src };
+  video.onended = () => stopSecond();
+  $('#share-modal').classList.add('hidden');
+  updateShare2Button();
+  for (const peer of state.peers.values()) { applySendParams(peer); sendState(peer.id); }
+  render();
+  toast('2ª tela no ar: aparece no canto da sua tela para os amigos.');
+}
+function stopSecond(silent = false) {
+  const s2 = state.share2;
+  if (!s2) return;
+  state.share2 = null;
+  s2.video.onended = null;
+  s2.stream.getTracks().forEach((t) => t.stop());
+  if (meTile) meTile.swapped = false;
+  updateShare2Button();
+  if (!silent) {
+    for (const peer of state.peers.values()) { applySendParams(peer); sendState(peer.id); }
+    render();
+  }
+}
+function updateShare2Button() {
+  const b = $('#btn-share2');
+  b.textContent = state.share2 ? 'Parar 2ª tela' : '+ 2ª tela';
+  b.classList.toggle('active', !!state.share2);
+}
+function swapScreens(id) {
+  const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+  if (!tile) return;
+  tile.swapped = !tile.swapped;
+  tile.s2Hidden = false;
+  if (tile.resetZoom) tile.resetZoom();
+  render();
+  updateTileMedia(id);
+}
+function toggleS2Bubble(id) {
+  const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+  if (!tile) return;
+  if (tile.swapped) { tile.swapped = false; tile.s2Hidden = false; } // volta a 1ª para o lugar
+  else tile.s2Hidden = !tile.s2Hidden;
+  render();
+  updateTileMedia(id);
+}
+let swappedHintAt = 0;
+function swappedHint() {
+  if (Date.now() - swappedHintAt < 4000) return;
+  swappedHintAt = Date.now();
+  toast('A mãozinha e a caneta funcionam na tela principal (⇄ no canto para voltar).');
+}
+
+// ------------------------------------------------------------------ foto da tela
+// Pega o quadro atual na resolução que está chegando (sem a compressão de um print da janela),
+// salva em Imagens\Tela Amigos e copia para colar no Discord.
+async function takeShot(id) {
+  const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+  const v = tile && tile.video;
+  if (!v || !v.videoWidth) { toast('Essa tela ainda não tem imagem.', 'error'); return; }
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth;
+  c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  if (!blob) { toast('Não consegui gerar a foto.', 'error'); return; }
+  tile.el.classList.remove('flash');
+  void tile.el.offsetWidth;
+  tile.el.classList.add('flash');
+  try {
+    const file = await window.native.saveShot(await blob.arrayBuffer(), tileName(id) + (tile.swapped ? ' (2a tela)' : ''));
+    toast(`Foto ${c.width}x${c.height} salva em Imagens\\Tela Amigos e copiada (Ctrl+V para colar).`);
+    console.log('foto salva', file);
+    return file;
+  } catch (e) {
+    toast(`Falha ao salvar a foto: ${e.message}`, 'error');
+  }
+}
+
+// ------------------------------------------------------------------ resolução que eu recebo
+// Por amigo (guardado pelo nome): Automático (original; cai para 720p sozinho se o MEU PC não
+// der conta de decodificar/desenhar), Original, 1080p, 720p ou 480p. Quem transmite reduz só
+// para mim (na "Nativa direta" o vídeo é um só para todos, então vale a resolução dele).
+const RES_MODES = { auto: 'Automático', orig: 'Original', 1080: '1080p', 720: '720p', 480: '480p' };
+function resMode(peer) { const m = localStorage.getItem(`res:${peer.name}`); return m in RES_MODES ? m : 'auto'; }
+function wantedMaxH(peer) {
+  const m = resMode(peer);
+  if (m === 'auto') return peer.autoResCap || 0;
+  return m === 'orig' ? 0 : Number(m);
+}
+function updateResButton(peer) {
+  const t = peer.tile;
+  if (!t || !t.resBtn) return;
+  const m = resMode(peer);
+  t.resBtn.classList.toggle('active', m !== 'auto' || !!peer.autoResCap);
+  t.resBtn.title = `Resolução que você recebe: ${RES_MODES[m]}${m === 'auto' && peer.autoResCap ? ` (agora ${peer.autoResCap}p: seu PC estava ocupado)` : ''}`;
+}
+function setResMode(id, mode) {
+  const peer = state.peers.get(id);
+  if (!peer) return;
+  localStorage.setItem(`res:${peer.name}`, mode);
+  peer.autoResCap = 0;
+  peer.resStrikes = 0;
+  updateResButton(peer);
+  render();
+  const direct = peer.health && peer.health.direct;
+  toast(direct && mode !== 'auto' && mode !== 'orig'
+    ? `${peer.name} está na "Nativa direta": a resolução é a mesma para todos (a escolha vale quando ele sair dela).`
+    : `Tela de ${peer.name}: ${RES_MODES[mode]}.`);
+}
+// automático: seu PC não está dando conta (quadros não desenhados, decodificação lenta) por ~6 s
+// -> pede 720p; depois de ~2 min tudo bem, volta ao original
+function autoResolution(peer, mineBad, good, frameH) {
+  if (resMode(peer) !== 'auto' || (peer.health && peer.health.direct)) return;
+  if (!peer.autoResCap) {
+    peer.resStrikes = mineBad ? (peer.resStrikes || 0) + 1 : 0;
+    if (peer.resStrikes >= 3 && frameH > 760) {
+      peer.autoResCap = 720;
+      peer.resGood = 0;
+      toast(`Seu PC está ocupado: recebendo a tela de ${peer.name} em 720p para não travar (botão de resolução na tela dele).`);
+      updateResButton(peer);
+      render();
+    }
+  } else {
+    peer.resGood = good ? (peer.resGood || 0) + 1 : 0;
+    if (peer.resGood >= 60) { peer.autoResCap = 0; peer.resStrikes = 0; updateResButton(peer); render(); }
+  }
+}
+const OPT_ICONS = new Set(['playpause', 'overlay', 'rec', 'clip', 'record', 'latency', 'res', 'chart', 'shot']);
+function openMoreMenu(actions, btn) {
+  const was = document.querySelector('.menu-pop');
+  closeMenus();
+  if (was && was.dataset.for === 'more') return;
+  const m = document.createElement('div');
+  m.className = 'menu-pop';
+  m.dataset.for = 'more';
+  for (const b of actions.querySelectorAll('.icon-btn.opt')) {
+    if (b.classList.contains('hidden')) continue;
+    const it = document.createElement('button');
+    it.className = 'menu-icon' + (b.classList.contains('active') ? ' on' : '');
+    it.innerHTML = b.innerHTML;
+    const t = document.createElement('span');
+    t.textContent = b.title;
+    it.appendChild(t);
+    it.onclick = (e) => { e.stopPropagation(); closeMenus(); b.click(); };
+    m.appendChild(it);
+  }
+  m.onpointerdown = (e) => e.stopPropagation();
+  m.ondblclick = (e) => e.stopPropagation();
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - m.offsetWidth - 8, r.right - m.offsetWidth))}px`;
+  m.style.top = `${Math.max(8, r.top - m.offsetHeight - 6)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', closeMenus, { once: true }), 0);
+}
+function closeMenus() { document.querySelectorAll('.menu-pop').forEach((m) => m.remove()); }
+function openResMenu(id, btn) {
+  const peer = state.peers.get(id);
+  if (!peer) return;
+  const was = document.querySelector('.menu-pop');
+  closeMenus();
+  if (was && was.dataset.for === `res:${id}`) return;
+  const m = document.createElement('div');
+  m.className = 'menu-pop';
+  m.dataset.for = `res:${id}`;
+  const head = document.createElement('div');
+  head.className = 'menu-head';
+  head.textContent = `Receber a tela de ${peer.name} em:`;
+  m.appendChild(head);
+  const cur = resMode(peer);
+  for (const k of ['auto', 'orig', '1080', '720', '480']) { // (Object.entries poria os números primeiro)
+    const label = RES_MODES[k];
+    const b = document.createElement('button');
+    b.className = k === cur ? 'on' : '';
+    b.textContent = (k === cur ? '✓ ' : '') + label + (k === 'auto' ? ' (cai para 720p se seu PC apertar)' : k === 'orig' ? ' (o que ele mandar)' : '');
+    b.onclick = (e) => { e.stopPropagation(); closeMenus(); setResMode(id, k); };
+    m.appendChild(b);
+  }
+  m.onpointerdown = (e) => e.stopPropagation();
+  m.ondblclick = (e) => e.stopPropagation();
+  document.body.appendChild(m);
+  // botão escondido no "⋯" (tela estreita): abre junto do "⋯"
+  const anchor = btn.offsetWidth ? btn : (btn.parentNode && btn.parentNode.querySelector('.more-btn')) || btn;
+  const r = anchor.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - m.offsetWidth - 8, r.right - m.offsetWidth))}px`;
+  m.style.top = `${Math.max(8, r.top - m.offsetHeight - 6)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', closeMenus, { once: true }), 0);
+}
+
+// ------------------------------------------------------------------ histórico da qualidade
+// Gráfico dos últimos 10 min de cada amigo: três painéis com o mesmo eixo de tempo (fps, Mb/s
+// e ping, cada um na sua escala), faixa de status em cima e marcas nas travadas. Passar o mouse
+// mostra os valores e a causa daquele momento.
+let histOpen = null, histHover = null;
+const HIST_COLORS = { line: '#3987e5', good: '#0ca30c', warn: '#fab219', bad: '#d03b3b', grid: 'rgba(255,255,255,0.07)', axis: '#8a90a2', text: '#e8eaf0' };
+function openHistory(id) {
+  const peer = state.peers.get(id);
+  if (!peer) return;
+  histOpen = id;
+  histHover = null;
+  $('#hist-title').textContent = `Qualidade da tela de ${peer.name} — últimos 10 min`;
+  $('#hist-modal').classList.remove('hidden');
+  drawHistory();
+}
+function closeHistory() { histOpen = null; $('#hist-modal').classList.add('hidden'); }
+function histSummary(h) {
+  if (!h.length) return 'Ainda sem dados: o histórico começa quando a tela dele está visível.';
+  const n = h.length, mins = Math.max(1, Math.round((h[n - 1].t - h[0].t) / 60000));
+  const fz = h.reduce((a, x) => a + x.fz, 0);
+  const bad = h.filter((x) => x.level !== 'good');
+  const causes = {};
+  for (const x of bad) if (x.short) causes[x.short] = (causes[x.short] || 0) + 1;
+  const top = Object.entries(causes).sort((a, b) => b[1] - a[1])[0];
+  const avg = (k) => h.reduce((a, x) => a + (x[k] || 0), 0) / n;
+  return `${mins} min · média ${Math.round(avg('fps'))} fps, ${avg('mbps').toFixed(1)} Mb/s · ${fz} travada${fz === 1 ? '' : 's'} · ` +
+    (bad.length ? `${Math.round((bad.length / n) * 100)}% do tempo com problema${top ? ` (mais: ${top[0]})` : ''}` : 'sem problemas');
+}
+function drawHistory() {
+  const peer = state.peers.get(histOpen);
+  if (!peer) { closeHistory(); return; }
+  const h = state.hist.get(peer.name) || [];
+  $('#hist-summary').textContent = histSummary(h);
+  const c = $('#hist-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const W = c.clientWidth, H = c.clientHeight;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const L = 44, R = 12, T = 6, STRIP = 8, GAP = 26;
+  const now = h.length ? h[h.length - 1].t : Date.now();
+  const t0 = now - 600000;
+  const x = (t) => L + ((t - t0) / 600000) * (W - L - R);
+  // faixa de status (bom / atenção / ruim)
+  for (let i = 0; i < h.length; i++) {
+    const a = x(h[i].t - 2000), b = x(h[i].t);
+    g.fillStyle = HIST_COLORS[h[i].level] || HIST_COLORS.good;
+    g.fillRect(Math.max(L, a), T, Math.max(1, b - a - 0.5), STRIP);
+  }
+  const panels = [
+    { key: 'fps', label: 'fps', max: Math.max(30, ...h.map((p) => p.fps)) },
+    { key: 'mbps', label: 'Mb/s', max: Math.max(5, ...h.map((p) => p.mbps)) },
+    { key: 'rtt', label: 'ping ms', max: Math.max(50, ...h.map((p) => p.rtt || 0)) },
+  ];
+  const top0 = T + STRIP + GAP, ph = (H - top0 - 22 - GAP * 2) / 3;
+  g.font = '11px system-ui, sans-serif';
+  panels.forEach((pn, i) => {
+    const y0 = top0 + i * (ph + GAP), y = (v) => y0 + ph - (v / pn.max) * ph;
+    pn.y = y; pn.y0 = y0;
+    g.strokeStyle = HIST_COLORS.grid; g.lineWidth = 1;
+    for (const f of [0, 0.5, 1]) { g.beginPath(); g.moveTo(L, Math.round(y0 + ph * f) + 0.5); g.lineTo(W - R, Math.round(y0 + ph * f) + 0.5); g.stroke(); }
+    g.fillStyle = HIST_COLORS.axis; g.textAlign = 'right'; g.textBaseline = 'middle';
+    g.fillText(String(Math.round(pn.max)), L - 6, y0 + 2);
+    g.fillText('0', L - 6, y0 + ph);
+    g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = HIST_COLORS.text;
+    g.fillText(pn.label, L + 4, y0 + 2);
+    g.strokeStyle = HIST_COLORS.line; g.lineWidth = 2; g.lineJoin = 'round';
+    g.beginPath();
+    let started = false;
+    for (const p of h) {
+      const v = p[pn.key];
+      if (v == null) { started = false; continue; }
+      if (!started) { g.moveTo(x(p.t), y(v)); started = true; } else g.lineTo(x(p.t), y(v));
+    }
+    g.stroke();
+  });
+  // travadas: marca vermelha atravessando os painéis
+  for (const p of h) {
+    if (!p.fz) continue;
+    const xx = Math.round(x(p.t)) + 0.5;
+    g.strokeStyle = HIST_COLORS.bad; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(xx, top0); g.lineTo(xx, top0 + 3 * ph + 2 * GAP); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = HIST_COLORS.bad;
+    g.beginPath(); g.arc(xx, panels[0].y(p.fps), 4, 0, Math.PI * 2); g.fill();
+  }
+  // eixo de tempo
+  g.fillStyle = HIST_COLORS.axis; g.textBaseline = 'alphabetic';
+  for (let m = 10; m >= 0; m -= 2) {
+    const xx = x(now - m * 60000);
+    g.textAlign = m === 10 ? 'left' : m === 0 ? 'right' : 'center';
+    g.fillText(m ? `-${m} min` : 'agora', xx, H - 4);
+  }
+  // linha-guia + caixinha com os valores do ponto mais próximo do mouse
+  const tip = $('#hist-tip');
+  if (histHover != null && h.length) {
+    let best = h[0];
+    for (const p of h) if (Math.abs(x(p.t) - histHover) < Math.abs(x(best.t) - histHover)) best = p;
+    const xx = Math.round(x(best.t)) + 0.5;
+    g.strokeStyle = 'rgba(232,234,240,0.5)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, top0 + 3 * ph + 2 * GAP); g.stroke();
+    for (const pn of panels) {
+      const v = best[pn.key];
+      if (v == null) continue;
+      g.fillStyle = HIST_COLORS.line; g.strokeStyle = '#16181f'; g.lineWidth = 2;
+      g.beginPath(); g.arc(xx, pn.y(v), 4, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+    const lvl = { good: '● bom', warn: '▲ atenção', bad: '■ ruim' }[best.level] || best.level;
+    tip.innerHTML = '';
+    const lines = [
+      new Date(best.t).toLocaleTimeString(),
+      `${best.fps} fps · ${best.mbps.toFixed(1)} Mb/s · ping ${best.rtt ?? '?'} ms`,
+      `perda ${(best.loss * 100).toFixed(1)}%${best.h ? ` · ${best.h}p` : ''}${best.thumb ? ' · miniatura' : ''}${best.fz ? ` · ${best.fz} travada(s)` : ''}`,
+      `${lvl}: ${best.reason}`,
+    ];
+    lines.forEach((t, i) => { const d = document.createElement('div'); d.textContent = t; if (i === 0) d.className = 'muted'; tip.appendChild(d); });
+    tip.classList.remove('hidden');
+    const tw = tip.offsetWidth;
+    tip.style.left = `${xx + 12 + tw > W ? xx - tw - 12 : xx + 12}px`;
+    tip.style.top = `${top0}px`;
+  } else tip.classList.add('hidden');
 }
 
 // ------------------------------------------------------------------ estatísticas
@@ -3322,7 +3840,10 @@ setInterval(updateStats, 1000);
 // ------------------------------------------------------------------ eventos de UI
 function initRoomUi() {
   window.Helper.onEvent(onHelperEvent);
-  $('#btn-share').onclick = openShareModal;
+  $('#btn-share').onclick = () => openShareModal();
+  $('#btn-share2').onclick = () => { if (state.share2) stopSecond(); else openShareModal(true); };
+  $('#hist-close').onclick = closeHistory;
+  $('#hist-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'hist-modal') closeHistory(); });
   $('#btn-stop').onclick = stopShare;
   $('#btn-leave').onclick = leaveRoom;
   $('#btn-close-room').onclick = closeRoomForEveryone;
@@ -3395,6 +3916,9 @@ function initRoomUi() {
       if (state.share) stopShare();
       else if (state.lastSource) { selectedSource = state.lastSource; startShare(); }
       else { window.native.focusWindow(); openShareModal(); }
+    } else if (action.startsWith('focus:')) { // clique no nome de um amigo no menu da bandeja
+      const p = [...state.peers.values()].find((x) => x.name === action.slice(6));
+      if (p && isSharing(p.id)) { state.hidden.delete(p.id); setFocus(p.id); }
     } else if (action === 'mute') {
       const tiles = [...state.peers.values()].map((p) => p.tile).filter(Boolean);
       const anyOn = tiles.some((t) => t.isMuted && !t.isMuted());
@@ -3441,6 +3965,8 @@ function initRoomUi() {
     if (e.key === 'Escape') {
       if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
       if (!$('#adjust-panel').classList.contains('hidden')) { $('#adjust-panel').classList.add('hidden'); return; }
+      if (!$('#hist-modal').classList.contains('hidden')) { closeHistory(); return; }
+      if (document.querySelector('.menu-pop')) { closeMenus(); return; }
       // caneta ligada em alguma tela: Esc desliga
       const penTiles = [meTile, ...[...state.peers.values()].map((p) => p.tile)].filter((t) => t && t.pen);
       if (penTiles.length) { for (const t of penTiles) setPen(t, t.el.dataset.id, false); return; }
@@ -3460,6 +3986,11 @@ function initRoomUi() {
     if (k === 'g') { state.layout = 'grid'; render(); }
     if (k === 'f') { state.layout = 'focus'; render(); }
     if (k === 's') $('#btn-stats').click();
+    if (k === 'p') { // foto da tela em foco (ou da única tela de amigo)
+      const ids = [...state.peers.keys()].filter((i) => isSharing(i) && !state.hidden.has(i));
+      const id = state.layout === 'focus' && state.focusId ? state.focusId : ids.length === 1 ? ids[0] : null;
+      if (id != null) takeShot(id); else toast('Foque numa tela (duplo clique) para tirar a foto com P.');
+    }
   });
 }
 
@@ -3498,6 +4029,14 @@ function initUpdates() {
     if (state.share) await stopShare();
     window.native.installUpdate();
   };
+}
+
+// histórico: passar o mouse mostra os valores
+{
+  const c = $('#hist-canvas');
+  c.addEventListener('pointermove', (e) => { histHover = e.clientX - c.getBoundingClientRect().left; drawHistory(); });
+  c.addEventListener('pointerleave', () => { histHover = null; drawHistory(); });
+  new ResizeObserver(() => { if (histOpen != null) drawHistory(); }).observe(c);
 }
 
 initLobby();
