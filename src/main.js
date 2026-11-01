@@ -471,7 +471,7 @@ function setupAutoUpdate() {
   ipcMain.handle('update:install', () => {
     quitting = true;
     if (helperHost) helperHost.postMessage({ type: 'quit' }); // para a captura com calma
-    setTimeout(() => autoUpdater.quitAndInstall(true, true), 1500);
+    setTimeout(() => { forceExitSoon(10000); autoUpdater.quitAndInstall(true, true); }, 1500);
   });
 }
 
@@ -759,16 +759,34 @@ function setupHotkeys() {
   updateTray();
 }
 ipcMain.handle('hotkeys:get', () => hotkeyResult);
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { if (app.isReady()) globalShortcut.unregisterAll(); });
+
+// Ao fechar, o processo TEM que terminar: se algo travar o encerramento (atualização, helper,
+// janela perdida), sai à força depois de alguns segundos. Um processo "zumbi" sem janela
+// segurava a trava de cópia única e o app parecia não abrir mais.
+let exitWatchdog = null;
+function forceExitSoon(ms = 6000) {
+  if (exitWatchdog) return;
+  exitWatchdog = setTimeout(() => { console.warn('encerramento travado: saindo à força'); app.exit(0); }, ms);
+}
+app.on('before-quit', () => forceExitSoon());
 
 // Uma cópia só: abrir de novo traz a janela existente para frente (duas cópias disputariam a
 // sala, a captura e o áudio). Perfis de teste (TELA_PROFILE) têm a própria trava.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  app.quit();
+  app.exit(0); // sai na hora (app.quit aqui disparava eventos antes de o app estar pronto)
 } else {
   app.on('second-instance', () => {
-    if (!win || win.isDestroyed()) return;
+    // esta cópia ficou sem janela (fechamento travado ou janela perdida): abre de novo
+    if (!win || win.isDestroyed()) {
+      console.warn('abriram o app de novo e esta cópia estava sem janela: recriando');
+      if (exitWatchdog) { clearTimeout(exitWatchdog); exitWatchdog = null; }
+      quitting = false;
+      if (!helperHost) startHelperHost();
+      createWindow();
+      return;
+    }
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
@@ -795,5 +813,6 @@ if (gotLock) app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   quitting = true;
   if (helperHost) helperHost.postMessage({ type: 'quit' });
+  forceExitSoon();
   app.quit();
 });
