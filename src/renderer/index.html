@@ -11,9 +11,15 @@
 
   <!-- ============ LOBBY ============ -->
   <section id="lobby" class="screen">
+    <div class="window-drag"></div>
     <div class="lobby-card">
-      <h1>Tela Amigos</h1>
-      <p class="muted">Compartilhamento de tela entre amigos, direto de PC para PC.</p>
+      <div class="lobby-head">
+        <img src="icon.png" alt="" class="lobby-logo">
+        <div>
+          <h1>Tela Amigos</h1>
+          <p class="muted">Compartilhe a tela com os amigos em 60 fps, direto de PC para PC.</p>
+        </div>
+      </div>
 
       <label class="field">
         <span>Seu nome</span>
@@ -54,7 +60,7 @@
   <section id="room" class="screen hidden">
     <header class="topbar">
       <div class="room-info">
-        <strong>Tela Amigos</strong>
+        <span class="app-brand"><img src="icon.png" alt="">Tela Amigos</span>
         <button id="btn-copy-ip" class="chip" title="Copiar IP da sala"></button>
       </div>
 

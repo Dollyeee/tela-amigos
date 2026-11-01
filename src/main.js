@@ -81,7 +81,12 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: '#0e0f13',
     title: 'Tela Amigos',
+    icon: path.join(__dirname, 'renderer', 'icon.png'),
     autoHideMenuBar: true,
+    // barra de título integrada: o topo do app vira a área de arrastar e os botões do Windows
+    // (minimizar/maximizar/fechar) ficam no canto, na cor do app
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0e0f13', symbolColor: '#c9cdd8', height: 56 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

@@ -1223,6 +1223,20 @@ function makeTile(id) {
   return tile;
 }
 
+// nome da tela com avatar e bolinha "ao vivo" (só refaz se mudou)
+function setTileLabel(tile, name, text) {
+  const key = `${name}|${text}`;
+  if (tile.labelKey === key) return;
+  tile.labelKey = key;
+  tile.label.innerHTML = '';
+  const t = document.createElement('span');
+  t.textContent = text;
+  const live = document.createElement('span');
+  live.className = 'live-dot';
+  live.title = 'ao vivo';
+  tile.label.append(avatar(name), t, live);
+}
+
 function showVolumeOverlay(el, v) {
   let o = el.querySelector('.vol-overlay');
   if (!o) {
@@ -1240,7 +1254,7 @@ function getTile(id) {
   if (id === 'me') {
     if (!meTile) meTile = makeTile('me');
     if (state.share && meTile.video.srcObject !== state.share.preview) meTile.video.srcObject = state.share.preview;
-    meTile.label.textContent = `Você — ${state.share ? state.share.sourceName : ''}`;
+    setTileLabel(meTile, state.myName, `Você — ${state.share ? state.share.sourceName : ''}`);
     return meTile;
   }
   const peer = state.peers.get(id);
@@ -1248,7 +1262,7 @@ function getTile(id) {
     peer.tile = makeTile(id);
     peer.tile.video.srcObject = peer.remoteStream;
   }
-  peer.tile.label.textContent = peer.name + (peer.sourceName ? ` — ${peer.sourceName}` : '');
+  setTileLabel(peer.tile, peer.name, peer.name + (peer.sourceName ? ` — ${peer.sourceName}` : ''));
   peer.tile.vol.style.display = peer.hasAudio ? '' : 'none';
   return peer.tile;
 }
@@ -1397,17 +1411,31 @@ function render() {
   renderPeople();
 }
 
+// avatar com a inicial e uma cor fixa calculada a partir do nome
+function avatar(name) {
+  const s = String(name || '?').trim();
+  let h = 0;
+  for (const ch of s.toLowerCase()) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  const el = document.createElement('span');
+  el.className = 'avatar';
+  el.style.background = `hsl(${h % 360}, 55%, 46%)`;
+  el.textContent = (s[0] || '?').toUpperCase();
+  return el;
+}
+
 function renderPeople() {
   const ul = $('#people');
   ul.innerHTML = '';
-  const row = (name, status, extra) => {
+  const row = (name, status, extra, avatarName) => {
     const li = document.createElement('li');
-    const dot = document.createElement('span');
-    dot.className = `dot ${status}`;
+    const av = avatar(avatarName || name);
+    const st = document.createElement('span');
+    st.className = `status ${status}`;
+    av.appendChild(st);
     const n = document.createElement('span');
     n.className = 'person-name';
     n.textContent = name;
-    li.append(dot, n);
+    li.append(av, n);
     if (extra) li.appendChild(extra);
     ul.appendChild(li);
   };
@@ -1425,7 +1453,7 @@ function renderPeople() {
     b.onclick = () => showTile('me');
     meExtra.appendChild(b);
   }
-  row(`${state.myName} (você)`, 'connected', meExtra);
+  row(`${state.myName} (você)`, 'connected', meExtra, state.myName);
 
   for (const p of state.peers.values()) {
     const extra = document.createElement('span');
@@ -1437,7 +1465,8 @@ function renderPeople() {
       extra.appendChild(b);
     }
     const status = p.conn === 'connected' ? 'connected' : p.conn === 'failed' ? 'failed' : 'connecting';
-    if (status !== 'connected') extra.appendChild(tag(status === 'failed' ? 'falhou' : 'conectando'));
+    // "conectando" já aparece na bolinha do avatar (amarela); só a falha merece etiqueta
+    if (status === 'failed') extra.appendChild(tag('falhou'));
     row(p.name, status, extra);
   }
 }

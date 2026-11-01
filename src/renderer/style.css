@@ -46,6 +46,27 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .lobby-card { width: min(720px, 92vw); background: var(--panel); border: 1px solid var(--line);
   border-radius: 16px; padding: 32px; display: flex; flex-direction: column; gap: 18px; }
 .lobby-card h1 { margin: 0; font-size: 28px; }
+.lobby-head { display: flex; align-items: center; gap: 16px; }
+.lobby-head p { margin-top: 4px; }
+.lobby-logo { width: 64px; height: 64px; filter: drop-shadow(0 8px 24px rgba(124, 108, 255, .35)); }
+
+/* avatares: inicial do nome numa cor fixa por pessoa */
+.avatar { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
+  font-size: 12px; font-weight: 700; color: #fff; position: relative; }
+.avatar .status { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid var(--panel); background: var(--warn); }
+.avatar .status.connected { background: var(--ok); }
+.avatar .status.failed { background: var(--danger); }
+.tile-name .avatar { width: 20px; height: 20px; font-size: 10px; display: inline-grid; vertical-align: middle; margin-right: 6px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 0 0 rgba(255, 77, 94, .6);
+  animation: pulse 1.6s infinite; display: inline-block; margin-left: 4px; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255, 77, 94, .55); } 70% { box-shadow: 0 0 0 7px rgba(255, 77, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 77, 94, 0); } }
+#people li { padding: 4px 6px; border-radius: 8px; flex-wrap: nowrap; }
+#people .person-name { flex: 1 1 auto; min-width: 60px; }
+#people li > span:last-child { flex-shrink: 0; display: flex; gap: 4px; }
+#people li:hover { background: var(--panel-2); }
+.tile { transition: border-color .15s, box-shadow .2s; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.tile.focused { box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
 .lobby-card p { margin: 0; }
 .lobby-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .lobby-box { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px;
@@ -55,8 +76,13 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 
 /* ---------- sala ---------- */
 #room { display: flex; flex-direction: column; }
-.topbar { display: flex; align-items: center; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--line);
-  background: var(--panel); }
+/* topo = barra de título: arrasta a janela; à direita fica espaço para os botões do Windows */
+.topbar { display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 150px 0 14px;
+  border-bottom: 1px solid var(--line); background: var(--bg); -webkit-app-region: drag; }
+.topbar button, .topbar input, .topbar select, .topbar .chip { -webkit-app-region: no-drag; }
+.window-drag { position: fixed; top: 0; left: 0; right: 150px; height: 56px; -webkit-app-region: drag; z-index: 1; }
+.app-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.app-brand img { width: 22px; height: 22px; }
 .room-info { display: flex; align-items: center; gap: 10px; flex: 1; }
 .chip { padding: 4px 10px; font-size: 12px; border-radius: 999px; color: var(--muted); }
 .top-actions { display: flex; gap: 8px; flex: 1; justify-content: flex-end; }
