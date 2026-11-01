@@ -137,3 +137,114 @@ window.ClipAudio = (() => {
 
   return { mixFor };
 })();
+
+// Som das telas dos amigos. O <video> só vai até 100%; aqui o áudio passa por Web Audio:
+//   fonte -> nivelador (sobe quem está baixo, nunca abaixa) -> volume (até 300%) -> limitador
+// O limitador segura os picos para o som aumentado não estourar/distorcer.
+window.TileAudio = (() => {
+  const TARGET_DB = -20;  // volume "normal" desejado (RMS)
+  const MAX_BOOST = 4;    // nivelador: no máximo 4x (+12 dB)
+  let ctx = null;
+  const all = new Set();
+  function context() {
+    if (!ctx) ctx = new AudioContext({ latencyHint: 'interactive' });
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    return ctx;
+  }
+
+  class TileAudio {
+    constructor() {
+      this.volume = 1;
+      this.muted = true;
+      this.stream = null;
+      this.track = null;
+      this.nodes = null;
+      this.level = null;  // volume médio medido (dB), só quando tem som
+      this.boost = 1;     // ganho atual do nivelador
+      this.failed = false;
+      all.add(this);
+    }
+
+    setStream(stream) { this.stream = stream; this.check(); }
+
+    // a trilha de áudio do amigo pode trocar (ele parou/voltou a transmitir)
+    check() {
+      const t = (this.stream && this.stream.getAudioTracks()[0]) || null;
+      if (t !== this.track) { this.track = t; this.rebuild(); }
+    }
+
+    rebuild() {
+      this.teardown();
+      if (!this.track || this.failed) return;
+      try {
+        const c = context();
+        const src = c.createMediaStreamSource(new MediaStream([this.track]));
+        const analyser = c.createAnalyser();
+        analyser.fftSize = 2048;
+        const agc = c.createGain();
+        agc.gain.value = this.boost;
+        const user = c.createGain();
+        user.gain.value = this.muted ? 0 : this.volume;
+        const limiter = c.createDynamicsCompressor();
+        limiter.threshold.value = -3;
+        limiter.knee.value = 3;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.002;
+        limiter.release.value = 0.15;
+        src.connect(analyser);
+        src.connect(agc);
+        agc.connect(user);
+        user.connect(limiter);
+        limiter.connect(c.destination);
+        this.nodes = { src, analyser, agc, user, limiter, buf: new Float32Array(analyser.fftSize) };
+      } catch (e) {
+        console.warn('áudio da tela (Web Audio indisponível, usando o volume normal)', e);
+        this.failed = true;
+        this.nodes = null;
+      }
+    }
+
+    set(volume, muted) {
+      this.volume = volume;
+      this.muted = muted;
+      if (this.nodes) this.nodes.user.gain.setTargetAtTime(muted ? 0 : volume, context().currentTime, 0.03);
+    }
+
+    // a cada 250 ms: mede o volume e ajusta o nivelador devagar (sem "bombear")
+    tick(leveler) {
+      this.check();
+      const n = this.nodes;
+      if (!n) return;
+      let target = 1;
+      if (leveler) {
+        n.analyser.getFloatTimeDomainData(n.buf);
+        let sum = 0;
+        for (let i = 0; i < n.buf.length; i++) sum += n.buf[i] * n.buf[i];
+        const db = 10 * Math.log10(sum / n.buf.length + 1e-12);
+        if (db > -55) this.level = this.level == null ? db : this.level * 0.92 + db * 0.08; // só conta quando tem som
+        if (this.level != null) target = Math.max(1, Math.min(MAX_BOOST, Math.pow(10, (TARGET_DB - this.level) / 20)));
+        else target = this.boost;
+      }
+      if (Math.abs(target - this.boost) > 0.01) {
+        this.boost = target;
+        n.agc.gain.setTargetAtTime(target, context().currentTime, 1.2);
+      }
+    }
+
+    teardown() {
+      if (!this.nodes) return;
+      try { this.nodes.src.disconnect(); } catch {}
+      try { this.nodes.limiter.disconnect(); } catch {}
+      this.nodes = null;
+    }
+
+    destroy() { this.teardown(); all.delete(this); }
+  }
+
+  setInterval(() => {
+    const leveler = localStorage.getItem('leveler') !== '0';
+    for (const a of all) a.tick(leveler);
+  }, 250);
+
+  return TileAudio;
+})();

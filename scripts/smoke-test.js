@@ -28,6 +28,7 @@ async function join(name) {
   // nunca captura o áudio do PC nos testes (process loopback mexe no serviço de áudio do Windows)
   localStorage.setItem('clipSys', '0');
   localStorage.setItem('mediactl', '0'); // nunca aperta tecla de mídia de verdade no teste
+  localStorage.setItem('gamehide', '0'); // um jogo aberto no PC não pode esconder a prévia do teste
   await sleep(800);
   $('#name').value = name;
   checkName();
@@ -48,7 +49,13 @@ const scriptA = common + `
     setInterval(() => { n++; g.fillStyle = 'hsl(' + (n * 3 % 360) + ',60%,40%)'; g.fillRect(0, 0, 1280, 720);
       g.fillStyle = '#fff'; g.font = '80px sans-serif'; g.fillText('quadro ' + n, 100, 360); }, 1000 / 30);
     const track = c.captureStream(30).getVideoTracks()[0];
-    state.share = { stream: new MediaStream([track]), video: track, audio: null, preview: new MediaStream([track]),
+    // áudio sintético BAIXO (tom de 440 Hz em ~-32 dB), só vai para a transmissão (não toca aqui)
+    const ac = new AudioContext();
+    const osc = ac.createOscillator(); const og = ac.createGain(); og.gain.value = 0.035;
+    const dest = ac.createMediaStreamDestination();
+    osc.connect(og); og.connect(dest); osc.start();
+    const atrack = dest.stream.getAudioTracks()[0];
+    state.share = { stream: new MediaStream([track]), video: track, audio: atrack, preview: new MediaStream([track]),
       settings: { ...state.settings, fps: 30 }, sourceName: 'Tela de teste', native: false, direct: false, width: 1280, height: 720 };
     if (!state.order.includes('me')) state.order.unshift('me');
     for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
@@ -88,6 +95,13 @@ const scriptB = common + `
     // selo de status (fps/ping)
     await until(() => /fps/.test(peer().tile.qtext.textContent), 15000, 'selo de status');
     log('selo "' + peer().tile.qtext.textContent + '"');
+    // som da tela: chega no Web Audio, continua mudo (nada sai nas caixas) e o nivelador reforça o tom baixo
+    const ta = peer().tile.audio;
+    await until(() => ta && ta.nodes && ta.boost > 1.8, 15000, 'nivelador reforçar o áudio baixo (boost=' + (ta && ta.boost) + ')');
+    if (!peer().tile.isMuted() || ta.nodes.user.gain.value !== 0) throw new Error('a tela deveria continuar muda');
+    log('nivelador: nível ' + ta.level.toFixed(1) + ' dB, reforço ' + ta.boost.toFixed(2) + 'x (mudo)');
+    peer().tile.setVolume(2.5); peer().tile.setMuted(true); // volume acima de 100% sem tocar nada
+    if (peer().tile.getVolume() !== 2.5) throw new Error('volume acima de 100% não aceito');
     // teste de conexão pelo canal de dados
     await runNetTest();
     const txt = $('#nettest-body').textContent;

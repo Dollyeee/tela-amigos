@@ -668,7 +668,7 @@ function removePeer(id) {
     renderReady();
     if (memberIds().every((m) => readyCheck.ready.has(m))) countdown();
   }, 0);
-  if (peer.tile) peer.tile.el.remove();
+  if (peer.tile) { peer.tile.el.remove(); if (peer.tile.audio) peer.tile.audio.destroy(); }
   state.peers.delete(id);
   state.order = state.order.filter((x) => x !== id);
   state.hidden.delete(id);
@@ -2294,40 +2294,57 @@ function makeTile(id) {
     const volKey = `vol:${peerName}`;
     const volWrap = document.createElement('div');
     volWrap.className = 'vol';
+    // volume de 0 a 300%: acima de 100% o som passa pelo Web Audio (TileAudio), com limitador
+    const MAXV = 3;
     const vol = document.createElement('input');
-    vol.type = 'range'; vol.min = 0; vol.max = 1; vol.step = 0.01;
-    vol.value = localStorage.getItem(volKey) ?? 1;
+    vol.type = 'range'; vol.min = 0; vol.max = MAXV; vol.step = 0.05;
     const pct = document.createElement('span');
     pct.className = 'vol-pct';
-    video.volume = Number(vol.value);
-    const muteBtn = iconButton('mute', 'Ativar/desativar som', () => {
-      video.muted = !video.muted;
-      refresh();
-    });
-    const refresh = () => {
-      muteBtn.innerHTML = video.muted ? ICONS.mute : ICONS.vol;
-      pct.textContent = video.muted ? 'mudo' : `${Math.round(video.volume * 100)}%`;
-      vol.value = video.volume;
+    tile.audio = new window.TileAudio();
+    let volume = Math.max(0, Math.min(MAXV, Number(localStorage.getItem(volKey) ?? 1) || 0));
+    let muted = true; // telas sempre abrem mutadas
+    // aplica no Web Audio; se ele falhar, volta para o volume do próprio vídeo (até 100%)
+    const apply = () => {
+      if (tile.audio && !tile.audio.failed) {
+        video.muted = true;
+        tile.audio.set(volume, muted);
+      } else {
+        video.muted = muted;
+        video.volume = Math.min(1, volume);
+      }
     };
+    tile.isMuted = () => muted;
+    tile.setMuted = (m) => { muted = m; apply(); refresh(); };
+    const muteBtn = iconButton('mute', 'Ativar/desativar som', () => tile.setMuted(!muted));
+    const refresh = () => {
+      muteBtn.innerHTML = muted ? ICONS.mute : ICONS.vol;
+      pct.textContent = muted ? 'mudo' : `${Math.round(volume * 100)}%`;
+      volWrap.classList.toggle('boost', !muted && volume > 1);
+      vol.value = volume;
+      vol.title = 'Volume (até 300%; acima de 100% é reforço)';
+    };
+    tile.getVolume = () => volume;
     tile.setVolume = (v) => {
-      video.volume = Math.max(0, Math.min(1, v));
-      video.muted = false;
-      localStorage.setItem(volKey, String(video.volume));
+      volume = Math.max(0, Math.min(MAXV, Math.round(v * 100) / 100));
+      muted = false;
+      localStorage.setItem(volKey, String(volume));
+      apply();
       refresh();
     };
     vol.oninput = () => tile.setVolume(Number(vol.value));
     vol.onclick = (e) => e.stopPropagation();
-    vol.ondblclick = (e) => e.stopPropagation();
+    vol.ondblclick = (e) => { e.stopPropagation(); tile.setVolume(1); }; // duplo clique: volta a 100%
     volWrap.append(muteBtn, vol, pct);
     tile.vol = volWrap;
     actions.appendChild(volWrap);
+    apply();
     refresh();
 
-    // rodinha do mouse sobre a tela: volume de 5 em 5%
+    // rodinha do mouse sobre a tela: volume de 5 em 5% (até 300%)
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
-      tile.setVolume(video.volume + (e.deltaY < 0 ? 0.05 : -0.05));
-      showVolumeOverlay(el, video.volume);
+      tile.setVolume(volume + (e.deltaY < 0 ? 0.05 : -0.05));
+      showVolumeOverlay(el, volume);
     }, { passive: false });
   }
   actions.append(
@@ -2420,7 +2437,7 @@ function showVolumeOverlay(el, v) {
     o.className = 'vol-overlay';
     el.appendChild(o);
   }
-  o.textContent = `Volume ${Math.round(v * 100)}%`;
+  o.textContent = `Volume ${Math.round(v * 100)}%${v > 1 ? ' (reforço)' : ''}`;
   o.classList.add('show');
   clearTimeout(o.timer);
   o.timer = setTimeout(() => o.classList.remove('show'), 900);
@@ -2463,6 +2480,7 @@ function updateTileMedia(id) {
   if (!tile) return;
   const main = sharing ? screen : cam;
   if (main && tile.video.srcObject !== main) tile.video.srcObject = main;
+  if (tile.audio) tile.audio.setStream(sharing ? screen : null); // som da tela (com reforço/nivelador)
   const showBubble = sharing && hasCam;
   tile.camBox.classList.toggle('hidden', !showBubble);
   if (showBubble && tile.camVideo.srcObject !== cam) tile.camVideo.srcObject = cam;
@@ -2914,6 +2932,8 @@ function initRoomUi() {
   $('#opt-laserdesk').onchange = () => localStorage.setItem('laserDesk', $('#opt-laserdesk').checked ? '1' : '0');
   $('#btn-region').onclick = () => pickRegion().catch((e) => toast(`Falha ao escolher a área: ${e.message}`, 'error'));
   $('#btn-region-clear').onclick = () => { if (selectedSource) delete selectedSource.crop; updateRegionUi(); };
+  $('#opt-leveler').checked = localStorage.getItem('leveler') !== '0';
+  $('#opt-leveler').onchange = () => localStorage.setItem('leveler', $('#opt-leveler').checked ? '1' : '0');
   $('#side-opts').open = localStorage.getItem('sideOpts') === '1';
   $('#side-opts').ontoggle = () => localStorage.setItem('sideOpts', $('#side-opts').open ? '1' : '0');
   $('#btn-ready').onclick = () => startReadyCheck();
@@ -2954,8 +2974,8 @@ function initRoomUi() {
       else { window.native.focusWindow(); openShareModal(); }
     } else if (action === 'mute') {
       const tiles = [...state.peers.values()].map((p) => p.tile).filter(Boolean);
-      const anyOn = tiles.some((t) => !t.video.muted);
-      for (const t of tiles) { t.video.muted = anyOn; if (t.vol) t.vol.querySelector('.icon-btn').innerHTML = anyOn ? ICONS.mute : ICONS.vol; }
+      const anyOn = tiles.some((t) => t.isMuted && !t.isMuted());
+      for (const t of tiles) if (t.setMuted) t.setMuted(anyOn);
       toast(anyOn ? 'Todas as telas mutadas.' : 'Som das telas de volta.');
     } else if (action === 'clip') {
       // salva clipe de todas as telas com replay ligado (ou da tela em foco, ligando o replay)

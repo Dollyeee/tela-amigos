@@ -368,3 +368,7 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .side-opts summary { cursor: pointer; font-size: 12px; color: var(--muted); user-select: none; }
 .side-opts summary:hover { color: #fff; }
 .side-opts[open] summary { margin-bottom: 2px; }
+
+/* volume acima de 100% (reforço) */
+.vol.boost input { accent-color: #ffb347; }
+.vol.boost .vol-pct { color: #ffcf80; }

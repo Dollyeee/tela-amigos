@@ -26,7 +26,8 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **Ajustes** durante a transmissão: qualidade muda na hora; resolução/FPS/captura sem parar.
 - Layouts **Grade** e **Foco** (miniaturas embaixo). Duplo clique foca/desfoca; **Esc** sai da tela cheia e do foco;
   arraste pela alça ⋮⋮ para reorganizar; picture-in-picture.
-- **Volume**: rodinha do mouse sobre a tela; lembrado por amigo; as telas abrem mutadas.
+- **Volume**: rodinha do mouse sobre a tela; vai até **300%** (acima de 100% fica laranja; duplo clique no controle volta a 100%); lembrado por amigo; as telas abrem mutadas.
+- **Nivelar volume das telas** (Opções, ligado por padrão): aumenta sozinho quem está baixo (até 4x), sem abaixar ninguém; um limitador evita estourar.
 - **Ocultar** a tela de alguém para de receber o vídeo/áudio dela.
 - **Áudio**: "Todo o som do PC, exceto Discord" ou "Só: <app>". O som deste app nunca é reenviado.
 - Sala resistente a quedas: reconecta sozinha sem derrubar as telas.
