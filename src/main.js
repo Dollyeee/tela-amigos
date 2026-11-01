@@ -300,7 +300,7 @@ function setupAutoUpdate() {
   autoUpdater.on('checking-for-update', () => { if (manual) toRenderer('update:status', { state: 'checking' }); });
   autoUpdater.on('update-available', (info) => toRenderer('update:status', { state: 'downloading', percent: 0, version: info.version }));
   autoUpdater.on('update-not-available', () => {
-    if (manual) toRenderer('update:status', { state: 'latest', version: app.getVersion() });
+    if (manual && !ready) toRenderer('update:status', { state: 'latest', version: app.getVersion() });
     manual = false;
   });
   autoUpdater.on('download-progress', (p) => toRenderer('update:status', { state: 'downloading', percent: Math.round(p.percent) }));
@@ -314,8 +314,11 @@ function setupAutoUpdate() {
     manual = false;
   });
 
+  // Continua procurando mesmo com uma versão já baixada: se saiu outra mais nova nesse meio
+  // tempo, baixa a mais nova (antes instalava a baixada e só depois achava a seguinte,
+  // indo de uma em uma).
   const check = (isManual = false) => {
-    if (ready) { toRenderer('update:status', { state: 'ready', version: ready }); return; }
+    if (ready && isManual) toRenderer('update:status', { state: 'ready', version: ready });
     if (isManual) manual = true;
     lastCheck = Date.now();
     autoUpdater.checkForUpdates().catch(() => {});
