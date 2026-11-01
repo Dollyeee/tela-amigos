@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('native', {
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   onUpdateStatus: (cb) => ipcRenderer.on('update:status', (_e, s) => cb(s)),
 
+  saveDiagnostics: (text) => ipcRenderer.invoke('diag:save', text),
+  focusWindow: () => ipcRenderer.invoke('window:focus'),
+  trayStatus: (s) => ipcRenderer.send('tray:status', s),
+  onHotkey: (cb) => ipcRenderer.on('hotkey', (_e, action) => cb(action)),
+
   audioAvailable: () => ipcRenderer.invoke('audio:available'),
   videoTarget: (opts) => ipcRenderer.invoke('video:target', opts),
   onHelperRestarted: (cb) => ipcRenderer.on('helper:restarted', () => cb()),

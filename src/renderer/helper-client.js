@@ -71,6 +71,8 @@ window.Helper = (() => {
     },
     videoStop: () => request({ cmd: 'video-stop' }, 'video-stopped'),
     videoKey: () => send({ cmd: 'video-key' }),
+    diag: () => request({ cmd: 'video-diag' }, 'video-diag', 8000),
+    gameWatch: (on) => request({ cmd: 'game-watch', on }, 'game-watch'),
     videoBitrate: (kbps) => send({ cmd: 'video-bitrate', kbps }),
     onPcm: (cb) => { onPcm = cb; },
     onVideo: (cb) => { onVideo = cb; },

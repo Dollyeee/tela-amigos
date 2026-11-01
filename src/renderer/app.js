@@ -50,6 +50,59 @@ function loadSettings() {
   try { Object.assign(state.settings, JSON.parse(localStorage.getItem('settings') || '{}')); } catch {}
 }
 
+// ------------------------------------------------------------------ registro (vai no diagnóstico)
+const appLog = [];
+for (const level of ['log', 'warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    appLog.push(`${new Date().toISOString()} [${level}] ${args.map((a) => (a && a.stack) || (typeof a === 'object' ? safeJson(a) : String(a))).join(' ')}`);
+    if (appLog.length > 600) appLog.shift();
+    orig(...args);
+  };
+}
+window.addEventListener('error', (e) => console.error('erro:', e.message, e.filename, e.lineno));
+window.addEventListener('unhandledrejection', (e) => console.error('promessa rejeitada:', e.reason));
+function safeJson(o) { try { return JSON.stringify(o); } catch { return String(o); } }
+
+// Junta tudo o que ajuda a achar um problema e salva na Área de Trabalho
+async function saveDiagnostics() {
+  const lines = [];
+  const s = state.share;
+  lines.push(`nome=${state.myName} id=${state.myId} sala=${state.hostIp} anfitriao=${!!state.isHost} layout=${state.layout}`);
+  lines.push(`config=${safeJson(state.settings)}`);
+  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} modoLeve=${!!state.lightMode}` : ''}`);
+  if (state.nativeStats) lines.push(`helper=${safeJson(state.nativeStats)}`);
+  lines.push(`jogando=${!!state.gaming} (${state.gamingExe || ''})`);
+  for (const p of state.peers.values()) {
+    lines.push('');
+    lines.push(`--- ${p.name} (id ${p.id}) conn=${p.pc.connectionState} ice=${p.pc.iceConnectionState} sinal=${p.pc.signalingState} ` +
+      `compartilhando=${p.sharing} rota=${p.route || '?'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
+      `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant}`);
+    try {
+      const rep = await p.pc.getStats();
+      rep.forEach((r) => {
+        if (r.type === 'inbound-rtp' || r.type === 'outbound-rtp' || r.type === 'remote-inbound-rtp' ||
+            (r.type === 'candidate-pair' && r.nominated)) {
+          const keep = ['kind', 'framesPerSecond', 'frameWidth', 'frameHeight', 'packetsLost', 'packetsReceived', 'packetsSent',
+            'nackCount', 'pliCount', 'freezeCount', 'framesDropped', 'keyFramesDecoded', 'qualityLimitationReason',
+            'encoderImplementation', 'decoderImplementation', 'currentRoundTripTime', 'availableOutgoingBitrate',
+            'fractionLost', 'roundTripTime', 'jitter', 'bytesReceived', 'bytesSent', 'state'];
+          const o = {};
+          for (const k of keep) if (r[k] !== undefined) o[k] = r[k];
+          lines.push(`  ${r.type}: ${safeJson(o)}`);
+        }
+      });
+    } catch {}
+  }
+  try {
+    const d = await window.Helper.diag();
+    lines.push('', `placas/encoders: ${safeJson(d.info || d)}`);
+  } catch {}
+  lines.push('', '===== registro =====', ...appLog);
+  const file = await window.native.saveDiagnostics(lines.join('\n'));
+  toast(`Diagnóstico salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}. Mande esse arquivo.`);
+}
+
 // ------------------------------------------------------------------ sons de aviso
 // Tons curtos gerados na hora (sem arquivos). Volume baixo para não atrapalhar o jogo/voz.
 const Sfx = (() => {
@@ -345,6 +398,13 @@ function onRelay(from, data) {
         if (data.sharing && !was) {
           toast(`${peer.name} começou a compartilhar`);
           Sfx.play('share');
+          // app em segundo plano (ex.: jogando): notificação do Windows
+          if (!document.hasFocus()) {
+            try {
+              const n = new Notification('Tela Amigos', { body: `${peer.name} começou a compartilhar a tela`, silent: true, icon: 'icon.png' });
+              n.onclick = () => window.native.focusWindow();
+            } catch {}
+          }
           if (!state.order.includes(peer.id)) state.order.push(peer.id);
         }
         render();
@@ -353,6 +413,9 @@ function onRelay(from, data) {
     case 'want':
       peer.theyWant = data.level;
       applySendParams(peer);
+      break;
+    case 'health':
+      peer.health = { cpu: !!data.cpu };
       break;
   }
 }
@@ -595,6 +658,11 @@ async function doApplySendParams(peer) {
       enc.scaleResolutionDownBy = Math.max(1, height / 360);
       enc.maxBitrate = 1_000_000;
       enc.maxFramerate = 30;
+    } else if (state.lightMode) {
+      // PC no limite: 30 fps e no máximo 720p para não engasgar
+      enc.scaleResolutionDownBy = Math.max(1, height / 720);
+      enc.maxBitrate = s.bitrate * 1e6;
+      enc.maxFramerate = Math.min(30, Number(s.fps));
     } else {
       enc.scaleResolutionDownBy = 1;
       enc.maxBitrate = s.bitrate * 1e6;
@@ -855,6 +923,8 @@ async function startShareInner(overrides) {
   if (!state.order.includes('me')) state.order.unshift('me');
   $('#share-modal').classList.add('hidden');
   $('#btn-share').textContent = 'Trocar tela';
+  state.lastSource = src; // Ctrl+Shift+S volta a transmitir esta tela
+  window.Helper.gameWatch(true).catch(() => {}); // esconder a prévia quando estiver jogando
   $('#btn-stop').classList.remove('hidden');
   $('#btn-adjust').classList.remove('hidden');
 
@@ -979,6 +1049,76 @@ async function applyAdjust() {
   await startShare();
 }
 
+// ------------------------------------------------------------------ saúde da transmissão
+// A cada 2 s:
+//  - quem transmite: detecta o PC no limite e liga o "modo leve" (30 fps, até 720p) sozinho;
+//    avisa os amigos para o indicador deles mostrar a causa certa
+//  - quem assiste: calcula a qualidade de cada tela (verde/amarelo/vermelho + motivo)
+state.lightMode = false;
+let cpuStrikes = 0, cpuSeenAt = 0;
+async function healthLoop() {
+  if (state.share && state.peers.size) {
+    let cpu = false;
+    for (const peer of state.peers.values()) {
+      if (!peer.vT.sender.track) continue;
+      try {
+        (await peer.vT.sender.getStats()).forEach((r) => {
+          if (r.type === 'outbound-rtp' && r.qualityLimitationReason === 'cpu') cpu = true;
+        });
+      } catch {}
+    }
+    const ns = state.nativeStats;
+    if (ns && state.share.native && ns.dropped > 6) cpu = true; // encoder do helper não dá conta
+    const now = Date.now();
+    if (cpu) { cpuStrikes++; cpuSeenAt = now; } else cpuStrikes = 0;
+    if (!state.lightMode && cpuStrikes >= 2) {
+      state.lightMode = true;
+      toast('Seu PC está no limite: modo leve ligado (30 fps, até 720p) para não travar.');
+      for (const peer of state.peers.values()) applySendParams(peer);
+    } else if (state.lightMode && now - cpuSeenAt > 20000) {
+      state.lightMode = false;
+      toast('Modo leve desligado: qualidade normal de volta.');
+      for (const peer of state.peers.values()) applySendParams(peer);
+    }
+    sendRelay(null, { kind: 'health', cpu: state.lightMode || cpu });
+  }
+
+  for (const peer of state.peers.values()) {
+    if (!peer.sharing || !peer.tile || state.hidden.has(peer.id)) continue;
+    let v = null, rtt = null;
+    try {
+      (await peer.pc.getStats()).forEach((r) => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video' && (!v || (r.bytesReceived || 0) > (v.bytesReceived || 0))) v = r;
+        if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
+      });
+    } catch { continue; }
+    if (!v) continue;
+    const prev = peer.qprev;
+    peer.qprev = { lost: v.packetsLost || 0, recv: v.packetsReceived || 0, fz: v.freezeCount || 0 };
+    if (!prev) continue;
+    const lostD = Math.max(0, peer.qprev.lost - prev.lost), recvD = Math.max(0, peer.qprev.recv - prev.recv);
+    const loss = lostD + recvD ? lostD / (lostD + recvD) : 0;
+    const freezes = peer.qprev.fz - prev.fz;
+    const fps = v.framesPerSecond || 0;
+    const thumb = peer.iWant === 'thumb';
+    const lowFps = thumb ? 12 : 40, badFps = thumb ? 5 : 15;
+    let level = 'good', reason = 'tudo certo';
+    if (peer.health && peer.health.cpu) { level = 'warn'; reason = `PC de ${peer.name} no limite (modo leve)`; }
+    if (loss > 0.01 || (rtt && rtt > 0.12) || fps < lowFps || freezes >= 1) {
+      level = 'warn';
+      reason = loss > 0.01 ? `rede perdendo pacotes (${(loss * 100).toFixed(1)}%)`
+        : rtt && rtt > 0.12 ? `atraso alto (${Math.round(rtt * 1000)} ms)`
+          : freezes ? 'travando' : `poucos quadros (${Math.round(fps)} fps)`;
+      if (peer.health && peer.health.cpu) reason = `PC de ${peer.name} no limite`;
+    }
+    if (loss > 0.05 || fps < badFps || freezes >= 2) level = 'bad';
+    peer.quality = { level, reason };
+    const dot = peer.tile.qdot;
+    if (dot) { dot.className = `qdot ${level}`; dot.title = `Qualidade: ${reason}`; }
+  }
+}
+setInterval(() => { healthLoop().catch(() => {}); }, 2000);
+
 // eventos do AudioHelper (estatísticas e fim da captura nativa)
 function onHelperEvent(msg) {
   if (msg.type === 'video-stats') state.nativeStats = msg;
@@ -987,6 +1127,16 @@ function onHelperEvent(msg) {
     stopShare();
   } else if (msg.type === 'video-warn') {
     toast(msg.message);
+  } else if (msg.type === 'game-state') {
+    const was = state.gaming;
+    state.gaming = !!msg.playing;
+    state.gamingExe = msg.exe || '';
+    if (state.gaming !== was && state.share && localStorage.getItem('gamehide') !== '0') {
+      toast(state.gaming
+        ? 'Jogo em tela cheia: sua prévia foi escondida para economizar (a transmissão continua).'
+        : 'Sua prévia voltou.');
+    }
+    render();
   } else if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
   }
@@ -1030,6 +1180,9 @@ async function stopShare() {
     sendState(peer.id);
   }
   $('#btn-share').textContent = 'Compartilhar tela';
+  window.Helper.gameWatch(false).catch(() => {});
+  state.gaming = false;
+  state.lightMode = false;
   $('#btn-stop').classList.add('hidden');
   $('#btn-adjust').classList.add('hidden');
   $('#adjust-panel').classList.add('hidden');
@@ -1179,6 +1332,13 @@ function makeTile(id) {
     iconButton('pip', 'Picture-in-picture (janela flutuante)', () => togglePip(id)),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
   );
+  if (!isMe) {
+    // bolinha de qualidade (verde/amarelo/vermelho) com o motivo ao passar o mouse
+    tile.qdot = document.createElement('span');
+    tile.qdot.className = 'qdot';
+    tile.qdot.title = 'Qualidade: medindo...';
+    el.appendChild(tile.qdot);
+  }
   if (isMe) actions.append(iconButton('corner', 'Minimizar para o canto / colocar na grade', () => {
     state.meMini = !state.meMini;
     localStorage.setItem('meMini', state.meMini ? '1' : '0');
@@ -1332,7 +1492,10 @@ function render() {
   }
   if (state.share && !state.order.includes('me')) state.order.unshift('me');
 
-  const allVisible = state.order.filter((id) => isSharing(id) && !state.hidden.has(id));
+  // jogando em tela cheia: a sua prévia some (economiza decodificação/desenho na placa)
+  const hideMeForGame = !!(state.gaming && state.share && localStorage.getItem('gamehide') !== '0');
+  if (state.share && state.share.native) window.NativeVideo.setPreview(!hideMeForGame && !state.hidden.has('me'));
+  const allVisible = state.order.filter((id) => isSharing(id) && !state.hidden.has(id) && !(id === 'me' && hideMeForGame));
   // sua prévia vira uma janelinha no canto quando há telas de amigos para ver
   const meMini = state.meMini && allVisible.includes('me') && allVisible.some((id) => id !== 'me');
   const visible = meMini ? allVisible.filter((id) => id !== 'me') : allVisible;
@@ -1409,7 +1572,13 @@ function render() {
     }
   }
   renderPeople();
+
+  // status no ícone da bandeja (só manda quando muda)
+  const tray = { room: state.hostIp || '', people: [...state.peers.values()].map((p) => p.name), sharing: !!state.share };
+  const key = safeJson(tray);
+  if (key !== lastTrayKey) { lastTrayKey = key; window.native.trayStatus(tray); }
 }
+let lastTrayKey = '';
 
 // avatar com a inicial e uma cor fixa calculada a partir do nome
 function avatar(name) {
@@ -1571,6 +1740,25 @@ function initRoomUi() {
   $('#btn-leave').onclick = leaveRoom;
   $('#btn-close-room').onclick = closeRoomForEveryone;
   $('#btn-adjust').onclick = openAdjust;
+  $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));
+  $('#opt-gamehide').checked = localStorage.getItem('gamehide') !== '0';
+  $('#opt-gamehide').onchange = () => { localStorage.setItem('gamehide', $('#opt-gamehide').checked ? '1' : '0'); render(); };
+  // teclas globais (funcionam com o jogo em primeiro plano)
+  window.native.onHotkey((action) => {
+    if ($('#room').classList.contains('hidden')) return;
+    if (action === 'share') {
+      if (state.share) stopShare();
+      else if (state.lastSource) { selectedSource = state.lastSource; startShare(); }
+      else { window.native.focusWindow(); openShareModal(); }
+    } else if (action === 'mute') {
+      const tiles = [...state.peers.values()].map((p) => p.tile).filter(Boolean);
+      const anyOn = tiles.some((t) => !t.video.muted);
+      for (const t of tiles) { t.video.muted = anyOn; if (t.vol) t.vol.querySelector('.icon-btn').innerHTML = anyOn ? ICONS.mute : ICONS.vol; }
+      toast(anyOn ? 'Todas as telas mutadas.' : 'Som das telas de volta.');
+    } else if (action === 'overlay-lock' && window.Overlay) {
+      window.Overlay.toggleLock();
+    }
+  });
   $('#opt-engine').onchange = updateEngineFields;
   $('#opt-sounds').checked = localStorage.getItem('sounds') !== '0';
   $('#opt-sounds').onchange = () => {

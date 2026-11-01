@@ -23,6 +23,7 @@ static class Program
     public const int Channels = 2;
     static Mixer? mixer;
     static VideoStreamer? video;
+    static GameWatcher? gameWatcher;
 
     // ---- saída: fila com escritor próprio; quem captura nunca fica preso esperando o app ler ----
     static readonly BlockingCollection<byte[]> outQueue = new(new ConcurrentQueue<byte[]>(), 400);
@@ -118,6 +119,11 @@ static class Program
                         video?.Dispose();
                         video = null;
                         SendJson(new { id, type = "video-stopped" });
+                        break;
+                    case "game-watch":
+                        gameWatcher?.Dispose();
+                        gameWatcher = root.TryGetProperty("on", out var on) && on.GetBoolean() ? new GameWatcher(selfPid) : null;
+                        SendJson(new { id, type = "game-watch", on = gameWatcher != null });
                         break;
                     case "video-diag":
                         SendJson(new { id, type = "video-diag", info = VideoStreamer.Diagnose() });

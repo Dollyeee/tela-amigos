@@ -1,7 +1,18 @@
 const {
   app, BrowserWindow, ipcMain, desktopCapturer, screen, clipboard, shell, session,
-  utilityProcess, MessageChannelMain,
+  utilityProcess, MessageChannelMain, Tray, Menu, globalShortcut, nativeImage,
 } = require('electron');
+
+// registro do processo principal (vai no diagnóstico)
+const mainLog = [];
+for (const level of ['log', 'warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    mainLog.push(`${new Date().toISOString()} [${level}] ${args.map((a) => (a && a.stack) || String(a)).join(' ')}`);
+    if (mainLog.length > 400) mainLog.shift();
+    orig(...args);
+  };
+}
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -338,6 +349,75 @@ function setupAutoUpdate() {
 
 ipcMain.handle('app:version', () => app.getVersion());
 
+// ---- diagnóstico: junta tudo num .txt na Área de Trabalho e mostra o arquivo ----
+ipcMain.handle('diag:save', async (_e, rendererText) => {
+  let gpu = '';
+  try { gpu = JSON.stringify(await app.getGPUInfo('basic'), null, 1).slice(0, 4000); } catch {}
+  const text = [
+    `Tela Amigos v${app.getVersion()} — diagnóstico ${new Date().toLocaleString('pt-BR')}`,
+    `Windows ${os.release()} · ${os.cpus()[0] && os.cpus()[0].model} · ${os.cpus().length} núcleos · RAM ${Math.round(os.totalmem() / 1e9)} GB`,
+    `Redes: ${JSON.stringify(localIPs())}`,
+    `Sala neste PC: ${JSON.stringify(await roomStatus())}`,
+    '', '===== interface =====', rendererText,
+    '', '===== processo principal =====', mainLog.join('\n'),
+    '', '===== placa de vídeo =====', gpu,
+  ].join('\n');
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  const file = path.join(app.getPath('desktop'), `TelaAmigos-diagnostico-${stamp}.txt`);
+  fs.writeFileSync(file, '﻿' + text, 'utf8'); // com BOM: acentos certos em qualquer editor
+  shell.showItemInFolder(file);
+  return file;
+});
+
+ipcMain.handle('window:focus', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
+// ---- ícone na bandeja: status da sala e atalhos ----
+let tray = null;
+let trayStatus = { room: '', people: [], sharing: false };
+function updateTray() {
+  if (!tray) return;
+  const s = trayStatus;
+  tray.setToolTip(s.room
+    ? `Tela Amigos — sala ${s.room}${s.people.length ? `: ${s.people.join(', ')}` : ''}${s.sharing ? ' · você está ao vivo' : ''}`
+    : 'Tela Amigos');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Abrir Tela Amigos', click: () => ipcMain.emit('window:show') },
+    { type: 'separator' },
+    { label: s.sharing ? 'Parar de transmitir (Ctrl+Shift+S)' : 'Transmitir (Ctrl+Shift+S)', click: () => toRenderer('hotkey', 'share') },
+    { label: 'Mutar/desmutar todos (Ctrl+Shift+M)', click: () => toRenderer('hotkey', 'mute') },
+    { type: 'separator' },
+    { label: 'Sair', click: () => { app.quit(); } },
+  ]));
+}
+ipcMain.on('window:show', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+ipcMain.on('tray:status', (_e, s) => { trayStatus = s; updateTray(); });
+
+function setupTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'icon.png')).resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.on('click', () => ipcMain.emit('window:show'));
+  updateTray();
+}
+
+// ---- teclas de atalho globais (funcionam com o jogo em primeiro plano) ----
+function setupHotkeys() {
+  const keys = { 'Control+Shift+S': 'share', 'Control+Shift+M': 'mute', 'Control+Shift+O': 'overlay-lock' };
+  for (const [accel, action] of Object.entries(keys)) {
+    try { globalShortcut.register(accel, () => toRenderer('hotkey', action)); } catch {}
+  }
+}
+app.on('will-quit', () => globalShortcut.unregisterAll());
+
 // Uma cópia só: abrir de novo traz a janela existente para frente (duas cópias disputariam a
 // sala, a captura e o áudio). Perfis de teste (TELA_PROFILE) têm a própria trava.
 const gotLock = app.requestSingleInstanceLock();
@@ -356,6 +436,8 @@ if (gotLock) app.whenReady().then(() => {
   installDisplayMediaHandler();
   startHelperHost();
   createWindow();
+  setupTray();
+  setupHotkeys();
   setupAutoUpdate();
 });
 
