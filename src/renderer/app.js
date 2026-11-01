@@ -1425,7 +1425,13 @@ async function saveClip(id) {
 const overlayWins = new Map(); // id do amigo -> janela
 function openOverlay(id) {
   const old = overlayWins.get(id);
-  if (old && !old.closed) { old.focus(); return; }
+  if (old && !old.closed) {
+    // já aberta: clicar de novo destrava (se estiver travada) e traz para frente
+    window.native.unlockOverlays();
+    old.focus();
+    toast('Sobreposição destravada.');
+    return;
+  }
   const p = state.peers.get(id);
   if (!p) return;
   const w = window.open('overlay.html', `overlay-${id}`);
@@ -1441,7 +1447,8 @@ function openOverlay(id) {
     });
   };
   feed();
-  toast('Sobreposição aberta. "Travar" deixa o mouse atravessar; Ctrl+Shift+O destrava.');
+  toast('Sobreposição aberta. "Travar" deixa o mouse atravessar; para destravar: o cadeado no canto dela, ' +
+    'o botão de sobreposição de novo ou o ícone da bandeja.');
 }
 function closeOverlay(id) {
   const w = overlayWins.get(id);
@@ -2316,6 +2323,15 @@ function initRoomUi() {
   $('#opt-laserdesk').checked = localStorage.getItem('laserDesk') !== '0';
   $('#opt-laserdesk').onchange = () => localStorage.setItem('laserDesk', $('#opt-laserdesk').checked ? '1' : '0');
   $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));
+  // mostra os atalhos que de fato ficaram valendo (outro programa pode ter "pegado" algum)
+  window.native.getHotkeys().then((k) => {
+    const names = { share: 'transmitir/parar', mute: 'mutar todos', 'overlay-lock': 'destravar sobreposição', clip: 'salvar clipe' };
+    const lines = Object.entries(names).map(([a, n]) => `${k[a] || '(ocupado por outro programa)'}: ${n}`);
+    const el = document.querySelector('.side-links span');
+    if (el) { el.textContent = 'Atalhos (passe o mouse)'; el.title = lines.join('\n'); }
+    const taken = Object.entries(k).filter(([, v]) => !v || v.includes('Alt'));
+    if (taken.length) console.warn('atalhos trocados/ocupados:', JSON.stringify(k));
+  }).catch(() => {});
   $('#opt-gamehide').checked = localStorage.getItem('gamehide') !== '0';
   $('#opt-gamehide').onchange = () => { localStorage.setItem('gamehide', $('#opt-gamehide').checked ? '1' : '0'); render(); };
   // teclas globais (funcionam com o jogo em primeiro plano)

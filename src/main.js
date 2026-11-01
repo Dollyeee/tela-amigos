@@ -408,13 +408,22 @@ ipcMain.handle('window:focus', () => {
 
 // ---- janelas de sobreposição ----
 const overlays = new Set();
+let overlayKey = 'Ctrl+Shift+O'; // atalho que de fato ficou registrado (pode cair no plano B)
 function setOverlayLock(w, locked) {
   if (!w || w.isDestroyed()) return;
   w.locked = locked;
   w.setIgnoreMouseEvents(locked, { forward: true }); // travada: cliques atravessam para o jogo
-  w.webContents.send('overlay:locked', locked);
+  w.webContents.send('overlay:locked', locked, overlayKey);
 }
 ipcMain.on('overlay:lock', (e, locked) => setOverlayLock(BrowserWindow.fromWebContents(e.sender), !!locked));
+// cadeado da janela travada: só enquanto o mouse está em cima dele a janela aceita clique
+ipcMain.on('overlay:hover-unlock', (e, over) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w.isDestroyed() || !w.locked) return;
+  w.setIgnoreMouseEvents(!over, { forward: true });
+});
+function unlockAllOverlays() { for (const w of overlays) setOverlayLock(w, false); }
+ipcMain.on('overlay:unlock-all', unlockAllOverlays);
 ipcMain.on('overlay:opacity', (e, v) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w) w.setOpacity(Math.max(0.25, Math.min(1, Number(v) || 1)));
@@ -511,6 +520,7 @@ function updateTray() {
     { type: 'separator' },
     { label: s.sharing ? 'Parar de transmitir (Ctrl+Shift+S)' : 'Transmitir (Ctrl+Shift+S)', click: () => toRenderer('hotkey', 'share') },
     { label: 'Mutar/desmutar todos (Ctrl+Shift+M)', click: () => toRenderer('hotkey', 'mute') },
+    { label: `Destravar sobreposições (${overlayKey})`, click: unlockAllOverlays },
     { type: 'separator' },
     { label: 'Sair', click: () => { app.quit(); } },
   ]));
@@ -531,13 +541,30 @@ function setupTray() {
 }
 
 // ---- teclas de atalho globais (funcionam com o jogo em primeiro plano) ----
+// Se outro programa já usa a tecla, o registro falha em silêncio: tenta um plano B e avisa
+// a interface quais atalhos ficaram valendo.
+const hotkeyResult = {};
 function setupHotkeys() {
-  const keys = { 'Control+Shift+S': 'share', 'Control+Shift+M': 'mute', 'Control+Shift+O': 'overlay-lock', 'Control+Shift+C': 'clip' };
-  for (const [accel, action] of Object.entries(keys)) {
+  const keys = {
+    share: ['Control+Shift+S', 'Control+Alt+S'],
+    mute: ['Control+Shift+M', 'Control+Alt+M'],
+    'overlay-lock': ['Control+Shift+O', 'Control+Alt+O'],
+    clip: ['Control+Shift+C', 'Control+Alt+C'],
+  };
+  for (const [action, options] of Object.entries(keys)) {
     const fn = action === 'overlay-lock' ? toggleOverlayLocks : () => toRenderer('hotkey', action);
-    try { globalShortcut.register(accel, fn); } catch {}
+    hotkeyResult[action] = null;
+    for (const accel of options) {
+      let ok = false;
+      try { ok = globalShortcut.register(accel, fn); } catch {}
+      if (ok) { hotkeyResult[action] = accel.replace('Control', 'Ctrl'); break; }
+    }
+    if (!hotkeyResult[action]) console.warn(`atalho de "${action}" ocupado por outro programa: ${options.join(' / ')}`);
   }
+  overlayKey = hotkeyResult['overlay-lock'] || 'o cadeado';
+  updateTray();
 }
+ipcMain.handle('hotkeys:get', () => hotkeyResult);
 app.on('will-quit', () => globalShortcut.unregisterAll());
 
 // Uma cópia só: abrir de novo traz a janela existente para frente (duas cópias disputariam a

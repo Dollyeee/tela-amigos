@@ -23,6 +23,11 @@
       border-radius: 6px; display: none; }
     body.locked .locked-hint { display: block; }
     body.locked .bar { display: none; }
+    /* travada: cadeado no canto; só ele recebe clique (o resto deixa o mouse atravessar) */
+    .unlock { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 8px; border: none;
+      background: rgba(0,0,0,.55); color: #fff; font-size: 16px; cursor: pointer; display: none; opacity: .55; }
+    .unlock:hover { opacity: 1; background: rgba(108,124,255,.9); }
+    body.locked .unlock { display: block; }
   </style>
 </head>
 <body>
@@ -35,7 +40,8 @@
     <button id="lock" title="Travar: o mouse passa através da janela (Ctrl+Shift+O destrava)">Travar</button>
     <button id="close" title="Fechar">✕</button>
   </div>
-  <div class="locked-hint">Travada · Ctrl+Shift+O destrava</div>
+  <div class="locked-hint" id="hint">Travada · cadeado ou Ctrl+Shift+O destrava</div>
+  <button class="unlock" id="unlock" title="Destravar">🔒</button>
 <script>
   let opacity = 1;
   // chamado pela janela principal com os streams do amigo
@@ -52,7 +58,15 @@
   document.getElementById('more').onclick = () => setOpacity(opacity + 0.15);
   document.getElementById('lock').onclick = () => window.overlayApi.lock(true);
   document.getElementById('close').onclick = () => window.close();
-  window.overlayApi.onLocked((locked) => document.body.classList.toggle('locked', locked));
+  window.overlayApi.onLocked((locked, key) => {
+    document.body.classList.toggle('locked', locked);
+    if (key) document.getElementById('hint').textContent = `Travada · cadeado ou ${key} destrava`;
+  });
+  // cadeado: com o mouse em cima, a janela volta a aceitar clique só enquanto ele estiver ali
+  const unlock = document.getElementById('unlock');
+  unlock.addEventListener('mouseenter', () => window.overlayApi.hoverUnlock(true));
+  unlock.addEventListener('mouseleave', () => window.overlayApi.hoverUnlock(false));
+  unlock.addEventListener('click', () => window.overlayApi.lock(false));
 </script>
 </body>
 </html>

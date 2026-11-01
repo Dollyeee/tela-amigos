@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('native', {
   pointer: (p) => ipcRenderer.send('pointer:show', p),
   pointerHide: (id) => ipcRenderer.send('pointer:hide', id),
   onHotkey: (cb) => ipcRenderer.on('hotkey', (_e, action) => cb(action)),
+  getHotkeys: () => ipcRenderer.invoke('hotkeys:get'),
+  unlockOverlays: () => ipcRenderer.send('overlay:unlock-all'),
 
   audioAvailable: () => ipcRenderer.invoke('audio:available'),
   videoTarget: (opts) => ipcRenderer.invoke('video:target', opts),
