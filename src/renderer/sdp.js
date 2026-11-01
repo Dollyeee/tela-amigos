@@ -74,6 +74,16 @@ window.Sdp = (() => {
     return [...first, ...caps.codecs.filter((c) => c.mimeType.toLowerCase() !== want)];
   }
 
+  // Só H.265 (mais os auxiliares): modo nativo direto com o HEVC do helper
+  function h265OnlyPreferences() {
+    const caps = RTCRtpReceiver.getCapabilities('video');
+    if (!caps) return null;
+    const h265 = caps.codecs.filter((c) => /h265/i.test(c.mimeType));
+    const extras = caps.codecs.filter((c) => /rtx|red|ulpfec|flexfec/i.test(c.mimeType));
+    return h265.length ? [...h265, ...extras] : null;
+  }
+  const hasH265 = () => !!(RTCRtpReceiver.getCapabilities('video') || { codecs: [] }).codecs.some((c) => /h265/i.test(c.mimeType));
+
   // Só H.264 com packetization-mode=1 (permite fragmentar quadros grandes), baseline primeiro,
   // mais os auxiliares (rtx/red/ulpfec). Usado no modo de vídeo nativo.
   function h264OnlyPreferences() {
@@ -87,5 +97,5 @@ window.Sdp = (() => {
     return h264.length ? [...h264, ...extras] : null;
   }
 
-  return { munge, codecPreferences, h264OnlyPreferences };
+  return { munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, hasH265 };
 })();

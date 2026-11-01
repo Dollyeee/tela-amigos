@@ -65,11 +65,47 @@ const scriptA = common + `
     state.share.settings.bitrate = 80;
     for (const p of state.peers.values()) applySendParams(p);
     await sleep(1500);
-    const enc = [...state.peers.values()][0].vT.sender.getParameters().encodings[0];
-    if (enc.maxBitrate !== 60e6) throw new Error('orçamento de upload não aplicado: maxBitrate=' + enc.maxBitrate);
-    log('orçamento ok (' + enc.maxBitrate / 1e6 + ' Mb/s para 1 amigo)');
+    const pB = [...state.peers.values()][0];
+    const enc = pB.vT.sender.getParameters().encodings[0];
+    const expected = perPeerMbps(80, pB) * 1e6;
+    if (enc.maxBitrate !== expected || expected > 80e6) throw new Error('orçamento de upload não aplicado: maxBitrate=' + enc.maxBitrate + ' esperado=' + expected);
+    log('orçamento ok (' + enc.maxBitrate / 1e6 + ' Mb/s para 1 amigo; orçamento ' + uploadBudgetMbps() + ')');
     // responde "Pronto!" quando o B perguntar e avisa quando chegar pedido de play/pausa
     setInterval(() => { if (readyCheck && !readyCheck.ready.has(String(state.myId))) { markReady(); log('respondi pronto'); } }, 300);
+    // "Nativa direta" em H.265: quadros HEVC (WebCodecs, placa) injetados pelo mesmo caminho do helper
+    async function startSyntheticDirect() {
+      const ni = await window.NativeVideo.start({ inject: true, synthetic: true, codec: 'hevc', width: 1280, height: 720 });
+      const enc = new VideoEncoder({
+        output: (chunk) => {
+          const pkt = new Uint8Array(9 + chunk.byteLength);
+          pkt[0] = chunk.type === 'key' ? 1 : 0;
+          new DataView(pkt.buffer).setBigInt64(1, BigInt(chunk.timestamp), true);
+          chunk.copyTo(pkt.subarray(9));
+          ni.push(pkt);
+        },
+        error: (e) => log('ERRO encoder de teste ' + e.message),
+      });
+      enc.configure({ codec: 'hvc1.1.6.L120.90', width: 1280, height: 720, bitrate: 6e6, framerate: 30,
+        hardwareAcceleration: 'prefer-hardware', latencyMode: 'realtime', hevc: { format: 'annexb' } });
+      let fn = 0;
+      const t0 = performance.now();
+      setInterval(() => {
+        const vf = new VideoFrame(c, { timestamp: Math.round((performance.now() - t0) * 1000) });
+        enc.encode(vf, { keyFrame: fn++ % 30 === 0 });
+        vf.close();
+      }, 1000 / 30);
+      state.share.video = ni.track; state.share.preview = ni.preview; state.share.stream = new MediaStream([ni.track]);
+      Object.assign(state.share, { native: true, direct: true, codec: 'hevc', width: 1280, height: 720 });
+      for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
+    }
+    const directIv = setInterval(async () => {
+      if (!/smoke-direct-pedido/.test($('#chat-log').textContent)) return;
+      clearInterval(directIv);
+      try {
+        await startSyntheticDirect(); log('direta H.265 ligada'); sendRelay(null, { kind: 'chat', text: 'smoke-direct-ligada' });
+      }
+      catch (e) { log('ERRO direta: ' + e.message); }
+    }, 300);
     // desenho do B chegando na minha tela
     let inkSeen = false;
     setInterval(() => { if (!inkSeen && meTile && meTile.trailLines && meTile.trailLines.some((l) => l.life)) { inkSeen = true; log('recebi desenho da caneta'); } }, 200);
@@ -104,6 +140,9 @@ const scriptB = common + `
     const h265 = RTCRtpReceiver.getCapabilities('video').codecs.some((c) => /h265/i.test(c.mimeType));
     if (h265 && !/h265/i.test(codec)) throw new Error('esperava H.265 no automático, veio ' + codec);
     log('codec ' + codec);
+    // medição automática do upload (feita sozinha ao conectar)
+    await until(() => peer().upMbps > 5, 25000, 'medição automática do upload');
+    log('upload medido sozinho: ' + peer().upMbps + ' Mb/s; orçamento ' + state.settings.uploadMbps + '; teto ' + perPeerMbps(80, peer()));
     await until(() => peer().tile.video.videoWidth > 0, 10000, 'mostrar o vídeo na tela');
     // selo de status (fps/ping)
     await until(() => /fps/.test(peer().tile.qtext.textContent), 15000, 'selo de status');
@@ -151,6 +190,21 @@ const scriptB = common + `
     if (!(t.trailLines && t.trailLines.length >= 5)) throw new Error('caneta não desenhou localmente');
     await sleep(1500);
     log('caneta desenhou ' + t.trailLines.length + ' traços');
+    // "Nativa direta" em H.265
+    sendRelay(null, { kind: 'chat', text: 'smoke-direct-pedido' });
+    await until(() => /smoke-direct-ligada/.test($('#chat-log').textContent), 15000, 'A ligar a direta em H.265');
+    const inV = async () => { let v2 = null; (await peer().pc.getStats()).forEach((r) => { if (r.type === 'inbound-rtp' && r.kind === 'video' && (!v2 || r.framesDecoded > v2.framesDecoded)) v2 = r; }); return v2; };
+    await sleep(2500);
+    const d0 = await inV();
+    await sleep(3000);
+    const d1 = await inV();
+    let dcodec = '?';
+    (await peer().pc.getStats()).forEach((r) => { if (r.type === 'codec' && r.id === d1.codecId) dcodec = r.mimeType; });
+    const got = d1.framesDecoded - d0.framesDecoded;
+    if (!/h265/i.test(dcodec) || d1.frameWidth !== 1280 || got < 40) {
+      throw new Error('direta H.265 não chegou certo: ' + JSON.stringify({ codec: dcodec, w: d1.frameWidth, h: d1.frameHeight, quadros3s: got }));
+    }
+    log('direta H.265 ok: ' + d1.frameWidth + 'x' + d1.frameHeight + ', ' + got + ' quadros em 3 s, ' + dcodec);
     log('B OK');
   } catch (e) {
     const p = [...state.peers.values()][0];

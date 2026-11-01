@@ -21,7 +21,8 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **Captura nativa 60 fps** (Windows Graphics Capture + H.264 na placa de vídeo) que se adapta à rede;
   "Nativa direta" para rede perfeita; "Chromium" para compatibilidade.
 - **Codec automático**: usa **H.265 (HEVC)** quando quem envia e quem recebe têm placa com suporte (mesma imagem com ~30-40% menos Mb/s); senão H.264. Dá para fixar em "Compartilhar".
-- **Orçamento de upload**: o bitrate escolhido é dividido entre quem assiste para não entupir o upload; o "Testar conexão" ajusta o orçamento ao que a rede aguenta.
+- **Bitrate automático**: ao conectar com cada amigo, o app mede sozinho o seu envio até ele (~3 s) e ajusta o orçamento de upload e o teto daquele amigo (o controle "Qualidade" vira o máximo). O resultado aparece em Ajustes. O "Testar conexão" continua lá para uma medição completa (ida e volta).
+- **H.265 também na "Nativa direta"** quando todos decodificam; se entrar alguém sem suporte, a transmissão volta sozinha para H.264.
 - **HDR → SDR automático**: quem joga com HDR ligado aparece com as cores certas para quem assiste.
 - **Telas lisas enquanto joga**: com jogo pesado aberto, o app ganha prioridade alta na placa de vídeo e as telas dos amigos ganham ~0,15 s de buffer para não engasgar. Dica: limitar o FPS do jogo (ex.: 3 abaixo da taxa do monitor) deixa a placa com folga e ajuda muito.
 - **Registro de problemas**: tudo fica em `%APPDATA%\Tela Amigos\logs`; se a tela do app cair, ela recarrega sozinha.

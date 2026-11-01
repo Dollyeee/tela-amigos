@@ -8,6 +8,11 @@ window.NativeVideo = (() => {
   // native=false: deixa os quadros do Chromium passarem como estão (captura Chromium / sem compartilhar)
   const peers = new Map(); // id -> { q, waitingKey, active, native, sentAny }
   let lastKeyReq = 0, keyTimer = null;
+  // H.265: o encoder HEVC de hardware do Chromium TRAVA se um quadro codificado for descartado
+  // aqui (para de devolver buffers). Então, sem quadro nosso, devolve o quadro com dados vazios
+  // (nada vai para a rede). No H.264 (encoder de software para o 64x64) descartar é o normal.
+  let hevc = false;
+  function skip(frame, ctl) { if (hevc) { frame.data = new ArrayBuffer(0); ctl.enqueue(frame); } }
   // no máximo 1 pedido a cada 500 ms; pedidos dentro da janela são adiados (não perdidos)
   function reqKey() {
     const wait = 500 - (Date.now() - lastKeyReq);
@@ -20,7 +25,7 @@ window.NativeVideo = (() => {
     for (const p of peers.values()) if (p.active && p.waitingKey) { reqKey(); break; }
     // diagnóstico: quantos quadros foram enviados/pulados/descartados por amigo
     const s = {};
-    for (const [id, p] of peers) { s[id] = { sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, q: p.q.length }; p.sent = p.empty = p.flush = 0; }
+    for (const [id, p] of peers) { s[id] = { all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey }; p.all = p.sent = p.empty = p.flush = 0; }
     postMessage({ type: 'stats', peers: s });
   }, 1000);
 
@@ -45,6 +50,8 @@ window.NativeVideo = (() => {
       if (active && !p.active) { p.q.length = 0; p.waitingKey = true; p.sentAny = false; reqKey(); }
       p.native = m.native;
       p.active = active;
+    } else if (m.type === 'codec') {
+      hevc = !!m.hevc;
     } else if (m.type === 'reset') {
       for (const p of peers.values()) { p.q.length = 0; p.waitingKey = true; }
     } else if (m.type === 'remove') {
@@ -57,11 +64,12 @@ window.NativeVideo = (() => {
     p.q.length = 0; p.waitingKey = true;
     t.readable.pipeThrough(new TransformStream({
       transform(frame, ctl) {
+        p.all = (p.all || 0) + 1;
         if (!p.native) { ctl.enqueue(frame); return; } // modo Chromium: não mexe
         // (keyframes da trilha vazia NÃO são usados como pedido: o Chromium gera vários quando a
         //  estimativa de banda muda. Os pedidos reais (PLI/FIR) são lidos das estatísticas no app.)
         const data = p.q.shift();
-        if (!data) { p.empty = (p.empty || 0) + 1; return; } // ainda sem quadro nosso: não envia nada
+        if (!data) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; } // ainda sem quadro nosso: não envia nada
         frame.data = data;
         p.sentAny = true;
         p.sent = (p.sent || 0) + 1;
@@ -70,6 +78,7 @@ window.NativeVideo = (() => {
     })).pipeTo(t.writable).catch(() => {});
   };`;
 
+  const dbg = { dummy: 0, writeErr: null }; // diagnóstico (quadros vazios entregues ao WebRTC)
   let worker = null;
   let generator = null, writer = null;
   let previewGen = null, previewWriter = null;
@@ -77,9 +86,17 @@ window.NativeVideo = (() => {
   let running = false;
   let lastTs = -1;
   let frameNo = 0;
-  const DW = 64, DH = 64;
-  const dummy = new Uint8Array((DW * DH * 3) / 2);
-  dummy.fill(128, DW * DH);
+  let codec = 'h264'; // 'h264' ou 'hevc' (o que o helper está gerando)
+  // quadro "vazio" que o Chromium codifica e nós trocamos pelo nosso. No H.265 precisa ser maior:
+  // os encoders HEVC de hardware recusam 64x64 (e o Chromium não tem HEVC por software)
+  let DW = 64, DH = 64;
+  let dummy = null;
+  function makeDummy() {
+    [DW, DH] = codec === 'hevc' ? [256, 144] : [64, 64];
+    dummy = new Uint8Array((DW * DH * 3) / 2);
+    dummy.fill(128, DW * DH);
+  }
+  makeDummy();
 
   function ensureWorker() {
     if (worker) return worker;
@@ -121,9 +138,10 @@ window.NativeVideo = (() => {
     if (previewOn || !inject) {
       if (!decoder || decoder.state === 'closed') makePreviewDecoder();
       if (!decoderReady && key) {
-        const codec = codecFromSps(new Uint8Array(data));
-        if (codec) {
-          decoder.configure({ codec, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true });
+        // H.265: perfil Main, nível 5.1 (cobre até 4K60); H.264: lido do SPS
+        const cfg = codec === 'hevc' ? 'hvc1.1.6.L153.B0' : codecFromSps(new Uint8Array(data));
+        if (cfg) {
+          decoder.configure({ codec: cfg, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true });
           decoderReady = true;
         }
       }
@@ -143,16 +161,22 @@ window.NativeVideo = (() => {
     frameNo++;
     for (let i = 0; i < DW * DH; i++) dummy[i] = (i + frameNo * 7) & 255;
     const vf = new VideoFrame(dummy, { format: 'I420', codedWidth: DW, codedHeight: DH, timestamp: ts });
-    writer.write(vf).catch(() => vf.close());
+    dbg.dummy++;
+    writer.write(vf).catch((e) => { dbg.writeErr = String(e && e.message || e); vf.close(); });
   }
 
   // opts.inject = true: envio direto do H.264 nativo (só rede perfeita)
   // opts.inject = false: o WebRTC recodifica a trilha decodificada (adaptativo, padrão)
+  // opts.codec: 'hevc' (H.265) ou 'h264'. opts.synthetic: teste automático, os quadros vêm de
+  // push() em vez do helper (mesmo formato: [key][timestamp 8 bytes][Annex-B])
   async function start(opts) {
     await stop();
     ensureWorker();
     worker.postMessage({ type: 'reset' });
     inject = !!opts.inject;
+    codec = opts.codec === 'hevc' ? 'hevc' : 'h264';
+    worker.postMessage({ type: 'codec', hevc: codec === 'hevc' });
+    makeDummy();
     generator = null;
     writer = null;
     if (inject) {
@@ -165,6 +189,10 @@ window.NativeVideo = (() => {
     makePreviewDecoder();
     lastTs = -1;
     running = true;
+    if (opts.synthetic) {
+      return { track: inject ? generator : previewGen, preview: new MediaStream([previewGen]), width: opts.width, height: opts.height,
+        encoder: 'teste', codec, push: (u8) => onFrame(u8) };
+    }
     window.Helper.onVideo((ab) => onFrame(new Uint8Array(ab)));
     const { inject: _i, ...helperOpts } = opts;
     const res = await window.Helper.videoStart(helperOpts);
@@ -176,7 +204,7 @@ window.NativeVideo = (() => {
     return {
       track: inject ? generator : previewGen,
       preview: new MediaStream([previewGen]),
-      width: res.width, height: res.height, encoder: res.encoder,
+      width: res.width, height: res.height, encoder: res.encoder, codec: res.codec || 'h264',
     };
   }
 
@@ -210,5 +238,5 @@ window.NativeVideo = (() => {
     previewOn = on;
   }
 
-  return { start, stop, attach, setMode, remove, setPreview, isRunning: () => running };
+  return { start, stop, attach, setMode, remove, setPreview, isRunning: () => running, dbg };
 })();

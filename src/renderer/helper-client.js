@@ -72,6 +72,7 @@ window.Helper = (() => {
       if (opts.crop) target.crop = opts.crop; // só uma área da tela (frações 0..1)
       return request({
         cmd: 'video-start', target, fps: opts.fps, kbps: opts.kbps, maxWidth: opts.maxWidth, maxHeight: opts.maxHeight,
+        codec: opts.codec || 'h264',
       }, 'video-started', 15000);
     },
     videoStop: () => request({ cmd: 'video-stop' }, 'video-stopped'),

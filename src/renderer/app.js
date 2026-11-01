@@ -83,7 +83,8 @@ async function saveDiagnostics() {
     lines.push('');
     lines.push(`--- ${p.name} (id ${p.id}) conn=${p.pc.connectionState} ice=${p.pc.iceConnectionState} sinal=${p.pc.signalingState} ` +
       `compartilhando=${p.sharing} rota=${p.route || '?'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
-      `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant}`);
+      `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant} uploadMedido=${p.upMbps || '?'}Mb/s ` +
+      `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} codecDireta=${state.share ? state.share.codec : '-'}`);
     try {
       const rep = await p.pc.getStats();
       rep.forEach((r) => {
@@ -400,6 +401,9 @@ function onRelay(from, data) {
         const was = peer.sharing;
         peer.sharing = data.sharing;
         peer.hasAudio = data.audio;
+        peer.h265 = !!data.h265;
+        // "Nativa direta" em H.265 e entrou alguém que não decodifica: volta para H.264
+        if (state.share && state.share.direct && state.share.codec === 'hevc' && !peer.h265) restartDirectCodec(peer.name);
         peer.sourceName = data.sourceName || '';
         const hadCam = peer.hasCam;
         peer.hasCam = !!data.cam;
@@ -516,10 +520,11 @@ function createPeer(id, name) {
     peer.dc = pc.createDataChannel('tela', { negotiated: true, id: 7 });
     peer.dc.binaryType = 'arraybuffer';
     peer.dc.onmessage = (e) => onDataMessage(peer, e.data);
+    peer.dc.onopen = () => scheduleAutoMeasure(peer); // mede o upload para este amigo
   } catch (e) { console.warn('canal de dados:', e.message); }
   peer.camStream = new MediaStream();   // câmera recebida deste amigo
   peer.videoTracks = new Map();         // id do stream -> trilha de vídeo recebida
-  setCodec(peer, state.share && state.share.direct ? 'native' : s.codec);
+  setCodec(peer, state.share && state.share.direct ? (state.share.codec === 'hevc' ? 'native-h265' : 'native') : s.codec);
   // transform ligado desde o início (antes de negociar); fica em "deixa passar" até o modo nativo
   window.NativeVideo.attach(peer.vT.sender, id);
 
@@ -565,7 +570,9 @@ function createPeer(id, name) {
 
 function setCodec(peer, codec) {
   peer.codecMode = codec;
-  const prefs = codec === 'native' ? window.Sdp.h264OnlyPreferences() : window.Sdp.codecPreferences(codec);
+  const prefs = codec === 'native' ? window.Sdp.h264OnlyPreferences()
+    : codec === 'native-h265' ? window.Sdp.h265OnlyPreferences()
+      : window.Sdp.codecPreferences(codec);
   try { if (prefs) peer.vT.setCodecPreferences(prefs); } catch (e) { console.warn('codec', e); }
 }
 
@@ -580,7 +587,7 @@ async function negotiate(peer) {
     peer.makingOffer = true;
     const offer = await pc.createOffer();
     if (pc.signalingState !== 'stable') { peer.pendingNegotiation = true; return; }
-    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate) * 1000, native: !!(state.share && state.share.direct) });
+    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000, native: !!(state.share && state.share.direct) });
     await pc.setLocalDescription(offer);
     sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
   } catch (e) {
@@ -611,7 +618,7 @@ async function handleDescription(peer, description) {
       await pc.setRemoteDescription({
         type: description.type,
         sdp: window.Sdp.munge(description.sdp, {
-          videoKbps: perPeerMbps(state.settings.bitrate) * 1000,
+          videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000,
           native: !!(state.share && state.share.direct),
         }),
       });
@@ -625,7 +632,7 @@ async function handleDescription(peer, description) {
     }
     if (description.type === 'offer') {
       const answer = await pc.createAnswer();
-      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate) * 1000, native: !!(state.share && state.share.direct) });
+      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000, native: !!(state.share && state.share.direct) });
       await pc.setLocalDescription(answer);
       sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
     }
@@ -700,6 +707,7 @@ function sendState(to) {
     // ids dos streams desta conexão: quem recebe separa tela de câmera
     screenId: peer ? peer.screenMS.id : null,
     camId: peer ? peer.camMS.id : null,
+    h265: window.Sdp.hasH265(), // decodifico H.265? (decide o codec da "Nativa direta")
   });
 }
 
@@ -747,7 +755,7 @@ async function doApplySendParams(peer) {
 
   // modo nativo: o vídeo precisa sair em H.264 e passar pelo transform que injeta nossos quadros
   const native = !!(share && share.direct); // envio direto do H.264 nativo
-  const codecMode = native ? 'native' : state.settings.codec;
+  const codecMode = native ? (share.codec === 'hevc' ? 'native-h265' : 'native') : state.settings.codec;
   if (peer.codecMode !== codecMode) {
     setCodec(peer, codecMode);
     negotiate(peer);
@@ -779,11 +787,11 @@ async function doApplySendParams(peer) {
     } else if (state.lightMode) {
       // PC no limite: 30 fps e no máximo 720p para não engasgar
       enc.scaleResolutionDownBy = Math.max(1, height / 720);
-      enc.maxBitrate = perPeerMbps(s.bitrate) * 1e6;
+      enc.maxBitrate = perPeerMbps(s.bitrate, peer) * 1e6;
       enc.maxFramerate = Math.min(30, Number(s.fps));
     } else {
       enc.scaleResolutionDownBy = 1;
-      enc.maxBitrate = perPeerMbps(s.bitrate) * 1e6;
+      enc.maxBitrate = perPeerMbps(s.bitrate, peer) * 1e6;
       enc.maxFramerate = Number(s.fps);
     }
     enc.priority = 'high';
@@ -812,11 +820,81 @@ function uploadBudgetMbps() { return Number(state.settings.uploadMbps) || DEFAUL
 function fullViewers() {
   return [...state.peers.values()].filter((p) => p.theyWant !== 'off' && p.theyWant !== 'thumb' && p.pc.connectionState !== 'closed').length;
 }
-// bitrate (Mb/s) que cada amigo recebe agora
-function perPeerMbps(settingMbps) {
+// bitrate (Mb/s) que cada amigo recebe agora. Com "peer": também respeita o que foi medido
+// até ele (às vezes a rede de um amigo é pior que a dos outros)
+function perPeerMbps(settingMbps, peer) {
   const want = Number(settingMbps) || 20;
   const share = Math.max(1, fullViewers());
-  return Math.max(3, Math.min(want, Math.floor(uploadBudgetMbps() / share)));
+  let v = Math.min(want, Math.floor(uploadBudgetMbps() / share));
+  if (peer && peer.upMbps) v = Math.min(v, Math.floor(peer.upMbps * 0.75));
+  return Math.max(3, v);
+}
+// "Nativa direta": o mesmo vídeo vai para todos -> o menor teto entre quem assiste
+function directMbps(settingMbps) {
+  const viewers = [...state.peers.values()].filter((p) => p.theyWant !== 'off' && p.theyWant !== 'thumb');
+  return viewers.length ? Math.min(...viewers.map((p) => perPeerMbps(settingMbps, p))) : perPeerMbps(settingMbps);
+}
+
+// ------------------------------------------------------------------ medição automática do upload
+// Ao conectar com cada amigo, mede o envio até ele pelo canal de dados (~3 s) e ajusta sozinho o
+// orçamento de upload e o teto daquele amigo. Resultado lembrado por 30 min (por nome).
+const autoMeasured = new Map(); // nome -> { up (Mb/s), at }
+let measureChain = Promise.resolve();
+function scheduleAutoMeasure(peer) {
+  if (localStorage.getItem('autoMeasure') === '0') return;
+  // um lado mede antes do outro (não disputam o mesmo caminho ao mesmo tempo)
+  const delay = (peer.polite ? 2000 : 9000) + Math.random() * 1500;
+  setTimeout(() => { measureChain = measureChain.then(() => autoMeasure(peer)).catch(() => {}); }, delay);
+}
+async function outboundBytes(peer) {
+  let b = 0;
+  try { (await peer.pc.getStats()).forEach((r) => { if (r.type === 'outbound-rtp') b += r.bytesSent || 0; }); } catch {}
+  return b;
+}
+async function autoMeasure(peer) {
+  if (!state.peers.has(peer.id) || !peer.dc || peer.dc.readyState !== 'open') return;
+  const prev = autoMeasured.get(peer.name);
+  if (prev && Date.now() - prev.at < 30 * 60 * 1000) { peer.upMbps = prev.up; updateAutoBudget(); return; }
+  state.autoMeasuring = true;
+  try {
+    const before = await outboundBytes(peer);
+    const t0 = performance.now();
+    const res = dcWait(peer, 'st-res', 12000);
+    await stBlast(peer, 3000);
+    const up = await res;
+    const sec = (performance.now() - t0) / 1000;
+    // o vídeo/áudio que já estava indo para ele também usa o upload: soma
+    const media = (((await outboundBytes(peer)) - before) * 8) / sec;
+    if (!up) return;
+    peer.upMbps = Math.round(((up + media) / 1e6) * 10) / 10;
+    autoMeasured.set(peer.name, { up: peer.upMbps, at: Date.now() });
+    console.log(`upload medido até ${peer.name}: ${peer.upMbps} Mb/s`);
+    updateAutoBudget();
+  } catch (e) {
+    console.warn(`medição automática com ${peer.name}: ${e.message}`);
+  } finally {
+    state.autoMeasuring = false;
+  }
+}
+function updateAutoBudget() {
+  const ups = [...state.peers.values()].map((p) => p.upMbps).filter(Boolean);
+  if (ups.length) {
+    state.settings.uploadMbps = Math.round(Math.min(150, Math.max(15, Math.max(...ups) * 0.8)));
+    saveSettings();
+  }
+  lastBudgetKey = ''; // reaplica os limites de todos
+  refreshBudget();
+  renderBudgetInfo();
+}
+function renderBudgetInfo() {
+  const el = $('#adj-budget');
+  if (!el) return;
+  const measured = [...state.peers.values()].filter((p) => p.upMbps);
+  const s = state.share ? state.share.settings : state.settings;
+  el.textContent = measured.length
+    ? `Upload medido: ${measured.map((p) => `${p.name} ${Math.round(p.upMbps)}`).join(' · ')} Mb/s → ` +
+      `${measured.map((p) => `${p.name} até ${perPeerMbps(s.bitrate, p)}`).join(' · ')} Mb/s (automático)`
+    : `Orçamento de upload: ${uploadBudgetMbps()} Mb/s (medindo com os amigos...)`;
 }
 let lastBudgetKey = '';
 function refreshBudget() {
@@ -1019,13 +1097,24 @@ async function startShareInner(overrides) {
     try {
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
-      state.nativeKbps = perPeerMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
+      state.nativeKbps = directMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
       baseRtt = Infinity;
       lastCut = 0;
-      nativeInfo = await window.NativeVideo.start({
+      // direta: H.265 se eu e TODOS os amigos decodificamos (e o codec não estiver fixo em H.264)
+      const wantHevc = direct && settings.codec !== 'H264' && !settings.forceH264 && window.Sdp.hasH265() &&
+        [...state.peers.values()].every((p) => p.h265);
+      const opts = {
         sourceId: src.id, displayId: src.displayId, inject: direct, crop: src.crop || null,
         fps: settings.fps, kbps: direct ? state.nativeKbps : 50000, maxWidth: maxW, maxHeight: maxH,
-      });
+        codec: wantHevc ? 'hevc' : 'h264',
+      };
+      try {
+        nativeInfo = window.__testNative ? await window.__testNative(opts) : await window.NativeVideo.start(opts);
+      } catch (e) {
+        if (!wantHevc) throw e;
+        console.warn('H.265 nativo falhou, usando H.264:', e.message);
+        nativeInfo = await window.NativeVideo.start({ ...opts, codec: 'h264' });
+      }
       video = nativeInfo.track;
       if (!direct) video.contentHint = settings.mode; // "Prioridade" vale também no modo adaptativo
       preview = nativeInfo.preview;
@@ -1085,6 +1174,7 @@ async function startShareInner(overrides) {
     width: nativeInfo ? nativeInfo.width : 0,
     height: nativeInfo ? nativeInfo.height : 0,
     encoder: nativeInfo ? nativeInfo.encoder : '',
+    codec: nativeInfo && direct ? nativeInfo.codec : null, // 'hevc' / 'h264' na "Nativa direta"
     autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
   };
   state.nativeStats = null;
@@ -1128,12 +1218,12 @@ function dcWait(peer, key, ms) {
 function dcResolve(peer, key, v) { const f = stWait.get(`${peer.id}:${key}`); if (f) f(v); }
 
 // manda dados o mais rápido possível por ST_MS (sem estourar o buffer do canal)
-async function stBlast(peer) {
+async function stBlast(peer, ms = ST_MS) {
   const chunk = new ArrayBuffer(ST_CHUNK);
   const dc = peer.dc;
   dc.bufferedAmountLowThreshold = 1 << 20;
   dcSend(peer, { t: 'st-go' });
-  const end = performance.now() + ST_MS;
+  const end = performance.now() + ms;
   while (performance.now() < end && dc.readyState === 'open') {
     if (dc.bufferedAmount > (8 << 20)) {
       await new Promise((r) => { dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; setTimeout(r, 200); });
@@ -1215,6 +1305,7 @@ async function runNetTest() {
   const modal = $('#nettest-modal'), body = $('#nettest-body'), apply = $('#nettest-apply');
   modal.classList.remove('hidden');
   if (state.netTesting) return;
+  if (state.autoMeasuring) { body.innerHTML = '<p class="muted">Terminando a medição automática...</p>'; await measureChain; }
   apply.classList.add('hidden');
   const peers = [...state.peers.values()].filter((p) => p.dc && p.dc.readyState === 'open');
   if (!peers.length) {
@@ -1251,7 +1342,11 @@ async function runNetTest() {
   try {
     for (const peer of peers) {
       draw(`Testando com ${peer.name}...`);
-      try { results.push(await testPeer(peer, (t) => draw(t))); } catch (e) { results.push({ name: peer.name, error: e.message }); }
+      try {
+        const r = await testPeer(peer, (t) => draw(t));
+        results.push(r);
+        if (r.up) { peer.upMbps = Math.round((r.up / 1e6) * 10) / 10; autoMeasured.set(peer.name, { up: peer.upMbps, at: Date.now() }); }
+      } catch (e) { results.push({ name: peer.name, error: e.message }); }
     }
     console.log(`teste de conexão: ${safeJson(results.map((r) => ({ ...r, up: r.up && +(r.up / 1e6).toFixed(1), down: r.down && +(r.down / 1e6).toFixed(1) })))}`);
     const sug = suggestQuality(results);
@@ -1281,7 +1376,7 @@ let lastCut = 0, baseRtt = Infinity;
 async function adaptNativeBitrate() {
   const share = state.share;
   if (!share || !share.direct || !state.nativeKbps) return;
-  const max = perPeerMbps(share.settings.bitrate) * 1000;
+  const max = directMbps(share.settings.bitrate) * 1000;
   let avail = Infinity, loss = 0, rtt = 0, nack = 0, pli = 0, any = false;
   for (const peer of state.peers.values()) {
     if (!peer.vT.sender.track || peer.pc.connectionState !== 'connected') continue;
@@ -1349,6 +1444,7 @@ function openAdjust() {
   $('#adj-mode').value = s.mode;
   $('#adj-engine').value = s.engine || 'native';
   panel.classList.remove('hidden');
+  renderBudgetInfo();
   refreshMixer();
 }
 
@@ -2178,6 +2274,19 @@ function applyPlayoutBuffer() {
       if (r.track && r.track.kind === 'video') { try { r.jitterBufferTarget = target; } catch {} }
     }
   }
+}
+
+// Entrou alguém sem H.265 durante a "Nativa direta" em H.265: reinicia em H.264 (o vídeo direto
+// é o mesmo para todos, então precisa ser um codec que todos decodificam)
+let restartingCodec = false;
+async function restartDirectCodec(who) {
+  if (restartingCodec || !state.share) return;
+  restartingCodec = true;
+  try {
+    toast(`${who} não decodifica H.265: a sua transmissão passou para H.264.`);
+    selectedSource = state.share.source;
+    await startShare({ engine: 'native-direct', forceH264: true, autoDirect: state.share.autoDirect });
+  } finally { restartingCodec = false; }
 }
 
 let switchingDirect = false;

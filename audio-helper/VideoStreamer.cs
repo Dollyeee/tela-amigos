@@ -37,6 +37,7 @@ sealed unsafe class VideoStreamer : IDisposable
     static readonly Guid MediaType_Video = new("73646976-0000-0010-8000-00AA00389B71");
     static readonly Guid VideoFormat_NV12 = new("3231564E-0000-0010-8000-00AA00389B71");
     static readonly Guid VideoFormat_H264 = new("34363248-0000-0010-8000-00AA00389B71");
+    static readonly Guid VideoFormat_HEVC = new("43564548-0000-0010-8000-00AA00389B71"); // 'HEVC'
     static readonly Guid MFT_CATEGORY_VIDEO_ENCODER = new("f79eac7d-e545-4387-bdee-d647d7bde42a");
     static readonly Guid TRANSFORM_ASYNC_UNLOCK = new("e5666d6b-3422-4eb6-a421-da7db1f8e207");
     static readonly Guid MFT_ENUM_ADAPTER_LUID = new("1d39518c-e220-4da8-a07f-ba172552d6b1");
@@ -117,10 +118,16 @@ sealed unsafe class VideoStreamer : IDisposable
     // dele, então pula tudo até o próximo keyframe (e pede um)
     volatile bool dropUntilKey;
 
-    public VideoStreamer(int fps, int bitrateKbps)
+    // H.265 (HEVC): mesma imagem com bem menos bits; só quando todos que assistem decodificam
+    readonly bool hevc;
+    Guid OutSubtype => hevc ? VideoFormat_HEVC : VideoFormat_H264;
+    public string Codec => hevc ? "hevc" : "h264";
+
+    public VideoStreamer(int fps, int bitrateKbps, bool hevc = false)
     {
         this.fps = fps;
         this.bitrateKbps = bitrateKbps;
+        this.hevc = hevc;
         Program.OnVideoDropped = () => { dropUntilKey = true; forceKey = true; };
     }
 
@@ -134,7 +141,7 @@ sealed unsafe class VideoStreamer : IDisposable
         // ativo, a "primeira placa" do Windows pode ser a integrada enquanto o encoder é o da
         // NVIDIA/AMD: misturar as duas dá E_FAIL ("erro não especificado").
         var attempts = BuildAttempts();
-        if (attempts.Count == 0) throw new Exception("Nenhum encoder H.264 por hardware encontrado na placa de vídeo");
+        if (attempts.Count == 0) throw new Exception($"Nenhum encoder {(hevc ? "H.265" : "H.264")} por hardware encontrado na placa de vídeo");
         var errors = new List<string>();
         foreach (var (encIndex, adapter) in attempts)
         {
@@ -168,6 +175,7 @@ sealed unsafe class VideoStreamer : IDisposable
             adapters = adapters.Select(a => new { a.Desc, vendor = $"{a.VendorId:X4}", vramMB = a.Vram / 1048576, luid = a.Luid }),
             encoders = encoders.Select(e => new { e.Index, e.Name, vendor = $"{e.VendorId:X4}", luid = e.Luid }),
             attempts = v.BuildAttempts().Select(t => $"{encoders[t.encIndex].Name} + {t.adapter.Desc}"),
+            hevcEncoders = new VideoStreamer(60, 1000, true).ListEncoders().Select(e => e.Name),
         };
     }
 
@@ -196,7 +204,7 @@ sealed unsafe class VideoStreamer : IDisposable
     List<EncoderInfo> ListEncoders()
     {
         var result = new List<EncoderInfo>();
-        var arr = EnumEncoderActivates(out uint count);
+        var arr = EnumEncoderActivates(OutSubtype, out uint count);
         for (int i = 0; i < count; i++)
         {
             using var a = new IMFActivate(Marshal.ReadIntPtr(arr, i * IntPtr.Size));
@@ -215,10 +223,10 @@ sealed unsafe class VideoStreamer : IDisposable
         return result;
     }
 
-    static IntPtr EnumEncoderActivates(out uint count)
+    static IntPtr EnumEncoderActivates(Guid subtype, out uint count)
     {
         var input = new RegisterTypeInfo { GuidMajorType = MediaType_Video, GuidSubtype = VideoFormat_NV12 };
-        var output = new RegisterTypeInfo { GuidMajorType = MediaType_Video, GuidSubtype = VideoFormat_H264 };
+        var output = new RegisterTypeInfo { GuidMajorType = MediaType_Video, GuidSubtype = subtype };
         MediaFactory.MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER,
             (uint)(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter),
             input, output, out IntPtr arr, out count);
@@ -245,9 +253,9 @@ sealed unsafe class VideoStreamer : IDisposable
     void StartWith(int encIndex, AdapterInfo adapter, VideoTarget target, int maxW, int maxH)
     {
         IMFActivate activate = null!;
-        Step("abrir o encoder H.264", () =>
+        Step($"abrir o encoder {(hevc ? "H.265" : "H.264")}", () =>
         {
-            var arr = EnumEncoderActivates(out uint count);
+            var arr = EnumEncoderActivates(OutSubtype, out uint count);
             for (int i = 0; i < count; i++)
             {
                 var a = new IMFActivate(Marshal.ReadIntPtr(arr, i * IntPtr.Size));
@@ -546,19 +554,23 @@ sealed unsafe class VideoStreamer : IDisposable
         // Formato de saída: tenta o completo (High + cores BT.709); se o encoder recusar,
         // tenta versões mais simples antes de desistir.
         var outErrors = new List<string>();
-        foreach (var (profile, colors) in new[] { (100u, true), (100u, false), (77u, false), (0u, false) })
+        // H.264: 100 High, 77 Main. H.265: 1 = Main (8 bits 4:2:0)
+        var profiles = hevc
+            ? new[] { (1u, true), (1u, false), (0u, false) }
+            : new[] { (100u, true), (100u, false), (77u, false), (0u, false) };
+        foreach (var (profile, colors) in profiles)
         {
             try
             {
                 using var outType = MediaFactory.MFCreateMediaType();
                 outType.Set(MT_MAJOR_TYPE, MediaType_Video);
-                outType.Set(MT_SUBTYPE, VideoFormat_H264);
+                outType.Set(MT_SUBTYPE, OutSubtype);
                 outType.Set(MT_AVG_BITRATE, (uint)bitrateKbps * 1000);
                 outType.Set(MT_FRAME_SIZE, ((ulong)Width << 32) | (uint)Height);
                 outType.Set(MT_FRAME_RATE, ((ulong)fps << 32) | 1u);
                 outType.Set(MT_PIXEL_ASPECT_RATIO, (1UL << 32) | 1u);
                 outType.Set(MT_INTERLACE_MODE, 2u);                       // progressivo
-                if (profile != 0) outType.Set(MT_MPEG2_PROFILE, profile); // 100 High, 77 Main
+                if (profile != 0) outType.Set(MT_MPEG2_PROFILE, profile);
                 if (colors)
                 {
                     outType.Set(MT_YUV_MATRIX, 1u);                       // BT.709
@@ -715,7 +727,8 @@ sealed unsafe class VideoStreamer : IDisposable
         try
         {
             var data = new ReadOnlySpan<byte>((void*)ptr, len);
-            bool needHeader = key && sequenceHeader != null && !HasNal(data, 7);
+            // keyframe sem os parâmetros (SPS no H.264, VPS no H.265): coloca na frente
+            bool needHeader = key && sequenceHeader != null && !(hevc ? HasHevcNal(data, 32) : HasNal(data, 7));
             int total = 1 + 8 + (needHeader ? sequenceHeader!.Length : 0) + len;
             byte[] packet = new byte[total];
             packet[0] = (byte)(key ? 1 : 0);
@@ -735,6 +748,13 @@ sealed unsafe class VideoStreamer : IDisposable
             }
         }
         finally { buffer.Unlock(); }
+    }
+
+    static bool HasHevcNal(ReadOnlySpan<byte> d, int nalType)
+    {
+        for (int i = 0; i + 3 < d.Length && i < 512; i++)
+            if (d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 1 && ((d[i + 3] >> 1) & 0x3F) == nalType) return true;
+        return false;
     }
 
     static bool HasNal(ReadOnlySpan<byte> d, int nalType)

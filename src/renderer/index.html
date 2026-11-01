@@ -84,7 +84,7 @@
     <div id="adjust-panel" class="adjust-panel hidden">
       <div class="adjust-row">
         <label class="field field-grow">
-          <span>Qualidade: <b id="adj-bitrate-label">20 Mbps</b> <span class="muted">(muda na hora)</span></span>
+          <span>Qualidade máxima por amigo: <b id="adj-bitrate-label">20 Mbps</b> <span class="muted">(muda na hora; o app limita sozinho ao que a rede aguenta)</span></span>
           <input id="adj-bitrate" type="range" min="4" max="80" step="1" value="20">
         </label>
       </div>
@@ -123,7 +123,7 @@
         <div id="mixer-list" class="mixer-list"></div>
       </div>
       <div class="adjust-foot">
-        <span class="muted">Resolução, FPS, prioridade e captura reiniciam só a captura (menos de 1 s).</span>
+        <span class="muted"><span id="adj-budget" class="budget-info"></span><br>Resolução, FPS, prioridade e captura reiniciam só a captura (menos de 1 s).</span>
         <button id="adj-apply" class="primary">Aplicar</button>
       </div>
     </div>
@@ -261,7 +261,7 @@
           </select>
         </label>
         <label class="field field-wide">
-          <span>Qualidade: <b id="opt-bitrate-label">20 Mbps</b> <span class="muted">(upload ≈ bitrate × nº de amigos assistindo)</span></span>
+          <span>Qualidade máxima por amigo: <b id="opt-bitrate-label">20 Mbps</b> <span class="muted">(o app mede a sua rede e limita sozinho)</span></span>
           <input id="opt-bitrate" type="range" min="4" max="80" step="1" value="20">
         </label>
         <label class="field field-wide">
