@@ -25,7 +25,7 @@ const state = {
   leaving: false,
   share: null,           // { stream, video, audio, settings, sourceName }
   settings: {
-    res: '1080', fps: 60, mode: 'motion', codec: 'H264', bitrate: 20, audio: 'all-except', engine: 'native',
+    res: '1080', fps: 60, mode: 'motion', codec: 'auto', bitrate: 20, audio: 'all-except', engine: 'native',
   },
 };
 
@@ -48,6 +48,12 @@ function saveSettings() {
 }
 function loadSettings() {
   try { Object.assign(state.settings, JSON.parse(localStorage.getItem('settings') || '{}')); } catch {}
+  // v1.0.27: o codec padrão virou "Automático" (H.265 quando os dois lados têm, senão H.264)
+  if (localStorage.getItem('codecMigrated') !== '1') {
+    if (state.settings.codec === 'H264') state.settings.codec = 'auto';
+    localStorage.setItem('codecMigrated', '1');
+    saveSettings();
+  }
 }
 
 // ------------------------------------------------------------------ registro (vai no diagnóstico)

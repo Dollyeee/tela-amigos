@@ -98,6 +98,12 @@ const scriptB = common + `
       return v && v.framesDecoded > 60 && v.frameWidth > 0;
     }, 30000, 'decodificar vídeo');
     log('video ' + v.frameWidth + 'x' + v.frameHeight + ' decodificados=' + v.framesDecoded);
+    // codec negociado: no "Automático" tem que ser H.265 quando a placa suporta
+    let codec = '?';
+    (await peer().pc.getStats()).forEach((r) => { if (r.type === 'codec' && r.id === v.codecId) codec = r.mimeType; });
+    const h265 = RTCRtpReceiver.getCapabilities('video').codecs.some((c) => /h265/i.test(c.mimeType));
+    if (h265 && !/h265/i.test(codec)) throw new Error('esperava H.265 no automático, veio ' + codec);
+    log('codec ' + codec);
     await until(() => peer().tile.video.videoWidth > 0, 10000, 'mostrar o vídeo na tela');
     // selo de status (fps/ping)
     await until(() => /fps/.test(peer().tile.qtext.textContent), 15000, 'selo de status');

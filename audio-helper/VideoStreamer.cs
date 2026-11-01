@@ -535,11 +535,13 @@ sealed unsafe class VideoStreamer : IDisposable
         // taxa constante (sem picos na rede), baixa latência, sem B-frames, keyframe a cada 4 s
         SetCodec(CODECAPI_RateControlMode, 0u);               // CBR
         SetCodec(CODECAPI_MeanBitRate, (uint)bitrateKbps * 1000);
-        SetCodec(CODECAPI_BufferSize, (uint)bitrateKbps * 1000 / (uint)fps * 2); // VBV de ~2 quadros
+        // VBV de ~4 quadros (66 ms a 60 fps): segura melhor explosões/movimento rápido sem
+        // aumentar muito o atraso (com 2 quadros a imagem borrava nas cenas pesadas)
+        SetCodec(CODECAPI_BufferSize, (uint)bitrateKbps * 1000 / (uint)fps * 4);
         SetCodecBool(CODECAPI_LowLatencyMode, true);
         SetCodec(CODECAPI_BPictureCount, 0u);
         SetCodec(CODECAPI_GOPSize, (uint)fps * 4);
-        SetCodec(CODECAPI_QualityVsSpeed, 50u);
+        SetCodec(CODECAPI_QualityVsSpeed, 75u); // preset de mais qualidade (NVENC aguenta folgado a 1080p60)
 
         // Formato de saída: tenta o completo (High + cores BT.709); se o encoder recusar,
         // tenta versões mais simples antes de desistir.

@@ -9,7 +9,7 @@ window.Sdp = (() => {
     for (const l of lines) {
       let m = l.match(/^a=rtpmap:(\d+) opus\/48000/i);
       if (m) opus.add(m[1]);
-      m = l.match(/^a=rtpmap:(\d+) (H264|VP8|VP9|AV1)\/90000/i);
+      m = l.match(/^a=rtpmap:(\d+) (H264|H265|VP8|VP9|AV1)\/90000/i);
       if (m) video.add(m[1]);
     }
     const hasFmtp = new Set(lines.map((l) => (l.match(/^a=fmtp:(\d+) /) || [])[1]).filter(Boolean));
@@ -59,6 +59,15 @@ window.Sdp = (() => {
   function codecPreferences(preferred) {
     const caps = RTCRtpReceiver.getCapabilities('video');
     if (!caps) return null;
+    // Automático: H.265 primeiro (mesma imagem com ~30-40% menos bits; o Chromium só lista H.265
+    // quando a placa codifica/decodifica), depois H.264; quem não tiver H.265 negocia H.264
+    if (preferred === 'auto') {
+      const is = (c, re) => re.test(c.mimeType);
+      const h265 = caps.codecs.filter((c) => is(c, /h265/i));
+      const h264 = caps.codecs.filter((c) => is(c, /h264/i));
+      const rest = caps.codecs.filter((c) => !is(c, /h26[45]/i));
+      return h265.length || h264.length ? [...h265, ...h264, ...rest] : null;
+    }
     const want = `video/${preferred}`.toLowerCase();
     const first = caps.codecs.filter((c) => c.mimeType.toLowerCase() === want);
     if (!first.length) return null;
