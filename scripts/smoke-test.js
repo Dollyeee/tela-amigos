@@ -61,6 +61,13 @@ const scriptA = common + `
     for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
     render();
     log('transmitindo');
+    // orçamento de upload: 80 Mb/s escolhidos, 1 amigo, orçamento padrão 60 -> 60 Mb/s para ele
+    state.share.settings.bitrate = 80;
+    for (const p of state.peers.values()) applySendParams(p);
+    await sleep(1500);
+    const enc = [...state.peers.values()][0].vT.sender.getParameters().encodings[0];
+    if (enc.maxBitrate !== 60e6) throw new Error('orçamento de upload não aplicado: maxBitrate=' + enc.maxBitrate);
+    log('orçamento ok (' + enc.maxBitrate / 1e6 + ' Mb/s para 1 amigo)');
     // responde "Pronto!" quando o B perguntar e avisa quando chegar pedido de play/pausa
     setInterval(() => { if (readyCheck && !readyCheck.ready.has(String(state.myId))) { markReady(); log('respondi pronto'); } }, 300);
     // desenho do B chegando na minha tela

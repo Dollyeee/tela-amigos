@@ -418,6 +418,7 @@ function onRelay(from, data) {
     case 'want':
       peer.theyWant = data.level;
       applySendParams(peer);
+      refreshBudget();
       break;
     case 'health':
       peer.health = {
@@ -573,7 +574,7 @@ async function negotiate(peer) {
     peer.makingOffer = true;
     const offer = await pc.createOffer();
     if (pc.signalingState !== 'stable') { peer.pendingNegotiation = true; return; }
-    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.direct) });
+    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate) * 1000, native: !!(state.share && state.share.direct) });
     await pc.setLocalDescription(offer);
     sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
   } catch (e) {
@@ -604,7 +605,7 @@ async function handleDescription(peer, description) {
       await pc.setRemoteDescription({
         type: description.type,
         sdp: window.Sdp.munge(description.sdp, {
-          videoKbps: state.settings.bitrate * 1000,
+          videoKbps: perPeerMbps(state.settings.bitrate) * 1000,
           native: !!(state.share && state.share.direct),
         }),
       });
@@ -618,7 +619,7 @@ async function handleDescription(peer, description) {
     }
     if (description.type === 'offer') {
       const answer = await pc.createAnswer();
-      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: state.settings.bitrate * 1000, native: !!(state.share && state.share.direct) });
+      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate) * 1000, native: !!(state.share && state.share.direct) });
       await pc.setLocalDescription(answer);
       sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
     }
@@ -772,11 +773,11 @@ async function doApplySendParams(peer) {
     } else if (state.lightMode) {
       // PC no limite: 30 fps e no máximo 720p para não engasgar
       enc.scaleResolutionDownBy = Math.max(1, height / 720);
-      enc.maxBitrate = s.bitrate * 1e6;
+      enc.maxBitrate = perPeerMbps(s.bitrate) * 1e6;
       enc.maxFramerate = Math.min(30, Number(s.fps));
     } else {
       enc.scaleResolutionDownBy = 1;
-      enc.maxBitrate = s.bitrate * 1e6;
+      enc.maxBitrate = perPeerMbps(s.bitrate) * 1e6;
       enc.maxFramerate = Number(s.fps);
     }
     enc.priority = 'high';
@@ -795,6 +796,31 @@ async function doApplySendParams(peer) {
     }
   } catch {}
 }
+
+// ------------------------------------------------------------------ orçamento de upload
+// Na malha, cada amigo assistindo recebe uma cópia: 80 Mb/s escolhidos com 3 amigos viravam 240 Mb/s
+// e entupiam o upload/Radmin (atraso de segundos, imagem caindo para 180p). O total fica dentro do
+// orçamento (medido no "Testar conexão"; padrão 60 Mb/s) e é dividido entre quem assiste em tela cheia.
+const DEFAULT_UPLOAD_MBPS = 60;
+function uploadBudgetMbps() { return Number(state.settings.uploadMbps) || DEFAULT_UPLOAD_MBPS; }
+function fullViewers() {
+  return [...state.peers.values()].filter((p) => p.theyWant !== 'off' && p.theyWant !== 'thumb' && p.pc.connectionState !== 'closed').length;
+}
+// bitrate (Mb/s) que cada amigo recebe agora
+function perPeerMbps(settingMbps) {
+  const want = Number(settingMbps) || 20;
+  const share = Math.max(1, fullViewers());
+  return Math.max(3, Math.min(want, Math.floor(uploadBudgetMbps() / share)));
+}
+let lastBudgetKey = '';
+function refreshBudget() {
+  // mudou quem assiste: reaplica os limites de todos (sem renegociar)
+  const key = `${fullViewers()}|${uploadBudgetMbps()}`;
+  if (key === lastBudgetKey) return;
+  lastBudgetKey = key;
+  for (const peer of state.peers.values()) applySendParams(peer);
+}
+setInterval(refreshBudget, 3000);
 
 // ------------------------------------------------------------------ compartilhar
 const RES = { 1440: [2560, 1440], 1080: [1920, 1080], 720: [1280, 720] };
@@ -987,7 +1013,7 @@ async function startShareInner(overrides) {
     try {
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
-      state.nativeKbps = settings.bitrate * 1000;
+      state.nativeKbps = perPeerMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
       baseRtt = Infinity;
       lastCut = 0;
       nativeInfo = await window.NativeVideo.start({
@@ -1053,6 +1079,7 @@ async function startShareInner(overrides) {
     width: nativeInfo ? nativeInfo.width : 0,
     height: nativeInfo ? nativeInfo.height : 0,
     encoder: nativeInfo ? nativeInfo.encoder : '',
+    autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
   };
   state.nativeStats = null;
   if (old && !old.native) old.video.stop();
@@ -1173,7 +1200,9 @@ function suggestQuality(results) {
   // com folga (20+ Mb/s) mantém a resolução escolhida (nativa/1440p); senão, 1080p ou menos
   let res = bitrate >= 20 ? state.settings.res : '1080', fps = 60;
   if (bitrate < 6) { res = '720'; fps = 30; } else if (bitrate < 10) res = '720';
-  return { bitrate, res, fps, worstPing };
+  // orçamento total de upload: ~70% do maior envio medido
+  const uploadMbps = Math.max(10, Math.round(totalUp * 0.7));
+  return { bitrate, res, fps, worstPing, uploadMbps };
 }
 
 async function runNetTest() {
@@ -1221,12 +1250,12 @@ async function runNetTest() {
     console.log(`teste de conexão: ${safeJson(results.map((r) => ({ ...r, up: r.up && +(r.up / 1e6).toFixed(1), down: r.down && +(r.down / 1e6).toFixed(1) })))}`);
     const sug = suggestQuality(results);
     if (!sug) { draw('Não deu para medir. Tente de novo.'); return; }
-    draw(`Sugestão: ${sug.res}p ${sug.fps} fps, ${sug.bitrate} Mb/s por amigo.` +
+    draw(`Sugestão: ${sug.res}p ${sug.fps} fps, ${sug.bitrate} Mb/s por amigo (upload total até ${sug.uploadMbps} Mb/s).` +
       (sug.worstPing > 120 ? ' Ping alto: prefira "Fluidez".' : '') +
       ' Medido pelo Radmin; é um mínimo, a velocidade real pode ser maior.');
     apply.classList.remove('hidden');
     apply.onclick = () => {
-      Object.assign(state.settings, { bitrate: sug.bitrate, res: sug.res, fps: sug.fps });
+      Object.assign(state.settings, { bitrate: sug.bitrate, res: sug.res, fps: sug.fps, uploadMbps: sug.uploadMbps });
       saveSettings();
       if (state.share) applyLiveBitrate(sug.bitrate);
       toast(`Qualidade: ${sug.res}p ${sug.fps} fps, ${sug.bitrate} Mb/s.${state.share ? ' Resolução e FPS valem ao reiniciar a transmissão (ou em Ajustes).' : ''}`);
@@ -1246,7 +1275,7 @@ let lastCut = 0, baseRtt = Infinity;
 async function adaptNativeBitrate() {
   const share = state.share;
   if (!share || !share.direct || !state.nativeKbps) return;
-  const max = share.settings.bitrate * 1000;
+  const max = perPeerMbps(share.settings.bitrate) * 1000;
   let avail = Infinity, loss = 0, rtt = 0, nack = 0, pli = 0, any = false;
   for (const peer of state.peers.values()) {
     if (!peer.vT.sender.track || peer.pc.connectionState !== 'connected') continue;
@@ -2021,7 +2050,14 @@ async function healthLoop() {
     if (ns && state.share.native && ns.dropped > 6) cpu = true; // encoder do helper não dá conta
     const now = Date.now();
     if (cpu) { cpuStrikes++; cpuSeenAt = now; } else cpuStrikes = 0;
-    if (!state.lightMode && cpuStrikes >= 2) {
+    const sh = state.share;
+    if (cpuStrikes >= 2 && sh.native && !sh.direct && !sh.autoDirect && localStorage.getItem('autoDirect') !== '0') {
+      // Captura nativa adaptativa: o WebRTC recodifica a tela uma vez POR AMIGO e, com um jogo
+      // pesado disputando a placa, cada quadro chegava a levar 200+ ms. A "Nativa direta" manda o
+      // vídeo que o helper já codifica (prioridade alta na placa) para todos: bem mais leve.
+      cpuStrikes = 0;
+      switchToDirect();
+    } else if (!state.lightMode && cpuStrikes >= 2) {
       state.lightMode = true;
       toast('Seu PC está no limite: modo leve ligado (30 fps, até 720p) para não travar.');
       for (const peer of state.peers.values()) applySendParams(peer);
@@ -2136,6 +2172,18 @@ function applyPlayoutBuffer() {
       if (r.track && r.track.kind === 'video') { try { r.jitterBufferTarget = target; } catch {} }
     }
   }
+}
+
+let switchingDirect = false;
+async function switchToDirect() {
+  if (switchingDirect || !state.share) return;
+  switchingDirect = true;
+  try {
+    toast('Seu PC está ocupado (jogo pesado): troquei para "Nativa direta", que pesa bem menos. Dá para voltar em Ajustes.');
+    console.warn('PC no limite na captura adaptativa: trocando para nativa direta');
+    selectedSource = state.share.source;
+    await startShare({ engine: 'native-direct', autoDirect: true });
+  } finally { switchingDirect = false; }
 }
 
 // A captura nativa parou (placa de vídeo reiniciada, helper caiu...): reinicia a mesma tela
