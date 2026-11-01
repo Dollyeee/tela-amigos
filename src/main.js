@@ -387,6 +387,18 @@ ipcMain.handle('diag:save', async (_e, rendererText) => {
   return file;
 });
 
+// ---- clipes: salva o MP4 em Vídeos\Tela Amigos ----
+ipcMain.handle('clip:save', (_e, name, buffer) => {
+  const dir = path.join(app.getPath('videos'), 'Tela Amigos');
+  fs.mkdirSync(dir, { recursive: true });
+  const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) || 'tela';
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const file = path.join(dir, `clipe-${safe}-${stamp}.mp4`);
+  fs.writeFileSync(file, Buffer.from(buffer));
+  shell.showItemInFolder(file);
+  return file;
+});
+
 ipcMain.handle('window:focus', () => {
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
@@ -479,7 +491,7 @@ function setupTray() {
 
 // ---- teclas de atalho globais (funcionam com o jogo em primeiro plano) ----
 function setupHotkeys() {
-  const keys = { 'Control+Shift+S': 'share', 'Control+Shift+M': 'mute', 'Control+Shift+O': 'overlay-lock' };
+  const keys = { 'Control+Shift+S': 'share', 'Control+Shift+M': 'mute', 'Control+Shift+O': 'overlay-lock', 'Control+Shift+C': 'clip' };
   for (const [accel, action] of Object.entries(keys)) {
     const fn = action === 'overlay-lock' ? toggleOverlayLocks : () => toRenderer('hotkey', action);
     try { globalShortcut.register(accel, fn); } catch {}

@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('native', {
   saveDiagnostics: (text) => ipcRenderer.invoke('diag:save', text),
   focusWindow: () => ipcRenderer.invoke('window:focus'),
   trayStatus: (s) => ipcRenderer.send('tray:status', s),
+  saveClip: (name, buffer) => ipcRenderer.invoke('clip:save', name, buffer),
   pointer: (p) => ipcRenderer.send('pointer:show', p),
   pointerHide: (id) => ipcRenderer.send('pointer:hide', id),
   onHotkey: (cb) => ipcRenderer.on('hotkey', (_e, action) => cb(action)),

@@ -630,6 +630,7 @@ function removePeer(id) {
   peer.pc.close();
   window.NativeVideo.remove(id);
   closeOverlay(id);
+  window.Clips.stop(id);
   if (peer.tile) peer.tile.el.remove();
   state.peers.delete(id);
   state.order = state.order.filter((x) => x !== id);
@@ -1264,6 +1265,37 @@ function attachInteractions(tile, id) {
   tile.el.addEventListener('pointercancel', end);
 }
 
+// ------------------------------------------------------------------ clipes (replay de 30 s)
+function tileStream(id) {
+  if (id === 'me') return state.share ? state.share.preview : state.camera ? state.camera.stream : null;
+  const p = state.peers.get(id);
+  return p ? (p.sharing ? p.remoteStream : p.camStream) : null;
+}
+function tileName(id) { return id === 'me' ? state.myName : (state.peers.get(id) || {}).name || 'tela'; }
+
+function toggleReplay(id, btn) {
+  const on = window.Clips.toggle(id, tileStream(id), tileName(id));
+  const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+  if (tile) tile.el.classList.toggle('replaying', on);
+  toast(on
+    ? `Replay ligado na tela de ${tileName(id)}: a partir de agora dá para salvar os últimos 30 s (Ctrl+Shift+C).`
+    : `Replay desligado na tela de ${tileName(id)}.`);
+}
+
+async function saveClip(id) {
+  if (!window.Clips.isOn(id)) {
+    toggleReplay(id);
+    return;
+  }
+  try {
+    const r = await window.Clips.save(id);
+    if (!r) { toast('Ainda não há imagem suficiente para o clipe. Espere alguns segundos.', 'error'); return; }
+    toast(`Clipe de ${Math.round(r.seconds)} s salvo em Vídeos\\Tela Amigos.`);
+  } catch (e) {
+    toast(`Não consegui salvar o clipe: ${e.message}`, 'error');
+  }
+}
+
 // ------------------------------------------------------------------ sobreposição (por cima do jogo)
 // Abre uma janelinha sempre por cima com a tela do amigo. A janela é do mesmo app, então
 // recebe o próprio stream (sem decodificar de novo nem gastar banda extra).
@@ -1488,6 +1520,8 @@ const ICONS = {
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.5C4.3 9 3 12 3 12s4 6 9 6a9 9 0 0 0 4.2-1"/></svg>',
   vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+  rec: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4" class="fill"/></svg>',
+  clip: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.5 7.5L20 18M8.5 16.5L20 6"/></svg>',
   overlay: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="14" height="12" rx="2"/><rect x="9" y="3" width="13" height="10" rx="2" class="fill"/></svg>',
   corner: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="5" width="8" height="6" rx="1" class="fill"/></svg>',
 };
@@ -1586,6 +1620,8 @@ function makeTile(id) {
     iconButton('focus', 'Focar nesta tela / voltar para a grade', () => toggleFocus(id)),
     iconButton('pip', 'Picture-in-picture (janela flutuante)', () => togglePip(id)),
     ...(isMe ? [] : [iconButton('overlay', 'Sobreposição: janelinha por cima do jogo', () => openOverlay(id))]),
+    iconButton('rec', 'Replay: guarda os últimos 30 s desta tela para salvar um clipe', (b) => toggleReplay(id, b)),
+    iconButton('clip', 'Salvar clipe dos últimos 30 s (Ctrl+Shift+C)', () => saveClip(id)),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
   );
   if (!isMe) {
@@ -2087,8 +2123,12 @@ function initRoomUi() {
       const anyOn = tiles.some((t) => !t.video.muted);
       for (const t of tiles) { t.video.muted = anyOn; if (t.vol) t.vol.querySelector('.icon-btn').innerHTML = anyOn ? ICONS.mute : ICONS.vol; }
       toast(anyOn ? 'Todas as telas mutadas.' : 'Som das telas de volta.');
-    } else if (action === 'overlay-lock' && window.Overlay) {
-      window.Overlay.toggleLock();
+    } else if (action === 'clip') {
+      // salva clipe de todas as telas com replay ligado (ou da tela em foco, ligando o replay)
+      const ids = window.Clips.ids();
+      if (ids.length) ids.forEach((id) => saveClip(id));
+      else if (state.layout === 'focus' && state.focusId) saveClip(state.focusId);
+      else toast('Ligue o replay numa tela (botão de gravar) para poder salvar clipes.');
     }
   });
   $('#opt-engine').onchange = updateEngineFields;

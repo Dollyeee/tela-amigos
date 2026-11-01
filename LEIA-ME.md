@@ -28,6 +28,15 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **Ocultar** a tela de alguém para de receber o vídeo/áudio dela.
 - **Áudio**: "Todo o som do PC, exceto Discord" ou "Só: <app>". O som deste app nunca é reenviado.
 - Sala resistente a quedas: reconecta sozinha sem derrubar as telas.
+- **Câmera** estilo streamer: com tela + câmera, a câmera fica no canto da imagem.
+- **Sobreposição**: janelinha da tela de um amigo sempre por cima do jogo; "Travar" deixa o mouse atravessar.
+- **Chat**, **reações** com emoji e **laser** (segure o botão direito sobre a tela de alguém; quem transmite
+  vê o ponteiro no próprio monitor, sem aparecer na transmissão).
+- **Clipes**: ligue o replay numa tela e salve os últimos 30 s em MP4 (Vídeos\Tela Amigos).
+- Qualidade de cada tela (bolinha verde/amarela/vermelha), **modo leve** automático quando o PC está no limite,
+  prévia escondida automaticamente ao jogar em tela cheia, notificações, ícone na bandeja.
+- Atalhos globais: **Ctrl+Shift+S** transmitir/parar · **M** mutar todos · **O** destravar sobreposição · **C** salvar clipe.
+- **Enviar diagnóstico**: gera um .txt na Área de Trabalho com tudo o que ajuda a achar problemas.
 - **Estatísticas** (S): FPS, bitrate, ping, buffer, travadas, perdas, rota, encoder.
 
 ## Desenvolver
