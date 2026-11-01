@@ -93,7 +93,7 @@ async function buildRendererDiag() {
       `compartilhando=${p.sharing} rota=${p.route || '?'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
       `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant} uploadMedido=${p.upMbps || '?'}Mb/s ` +
       `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} av1=${p.av1} codecDireta=${state.share ? state.share.codec : '-'} ` +
-      `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'}`);
+      `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'} resInteligente=${p.smartH || 'cheia'}`);
     const h = state.hist.get(p.name);
     if (h && h.length) {
       lines.push(`  histórico (${h.length} pontos, 2 s cada; t fps Mb/s ping perda% travadas causa):`);
@@ -950,12 +950,14 @@ async function doApplySendParams(peer) {
       enc.maxFramerate = 30;
     } else if (state.lightMode) {
       // PC no limite: 30 fps e no máximo 720p para não engasgar
-      enc.scaleResolutionDownBy = Math.max(1, height / Math.min(720, peer.theyWantH || 720));
+      enc.scaleResolutionDownBy = Math.max(1, height / Math.min(720, peer.theyWantH || 720, peer.smartH || 720));
       enc.maxBitrate = capBitrateForHeight(perPeerMbps(s.bitrate, peer), peer.theyWantH) * 1e6;
       enc.maxFramerate = Math.min(30, Number(s.fps));
     } else {
       // quem assiste pode escolher uma resolução menor (PC fraco, economizar): só para ele
-      enc.scaleResolutionDownBy = peer.theyWantH ? Math.max(1, height / peer.theyWantH) : 1;
+      // e a rede até ele pode estar apertada (resolução inteligente)
+      const capH = Math.min(peer.theyWantH || Infinity, peer.smartH || Infinity);
+      enc.scaleResolutionDownBy = isFinite(capH) ? Math.max(1, height / capH) : 1;
       enc.maxBitrate = capBitrateForHeight(perPeerMbps(s.bitrate, peer), peer.theyWantH) * 1e6;
       enc.maxFramerate = Number(s.fps);
     }
@@ -1281,6 +1283,11 @@ async function startShareInner(overrides) {
 
   let [maxW, maxH] = RES[settings.res] || [3840, 2160];
   if (settings.res === 'native' && src.size) { maxW = src.size.width; maxH = src.size.height; }
+  // resolução inteligente (direta): rede apertada -> menos pixels, imagem mais limpa
+  if (settings.smartH && settings.fullH > settings.smartH) {
+    maxW = Math.round(settings.fullW * settings.smartH / settings.fullH / 2) * 2;
+    maxH = settings.smartH;
+  }
 
   // para a captura anterior antes de começar a nova (o helper só tem um encoder)
   const old = state.share;
@@ -1295,6 +1302,8 @@ async function startShareInner(overrides) {
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
       state.nativeKbps = directMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
+      // troca de resolução pela rede: continua de onde estava (começar no máximo entupiria de novo)
+      if (settings.startKbps) state.nativeKbps = Math.min(state.nativeKbps, settings.startKbps);
       baseRtt = Infinity;
       lastCut = 0;
       // direta: AV1 se eu e TODOS os amigos temos placa que decodifica AV1 (e a minha codifica);
@@ -1380,7 +1389,12 @@ async function startShareInner(overrides) {
     encoder: nativeInfo ? nativeInfo.encoder : '',
     codec: nativeInfo && direct ? nativeInfo.codec : null, // 'hevc' / 'h264' na "Nativa direta"
     autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
+    smartH: settings.smartH || 0,        // resolução reduzida pela rede (0 = cheia)
   };
+  // resolução cheia (antes da redução pela rede): para saber até onde pode voltar
+  state.share.fullW = settings.smartH ? settings.fullW : state.share.width;
+  state.share.fullH = settings.smartH ? settings.fullH : state.share.height;
+  smartDirect.low = smartDirect.high = 0;
   state.nativeStats = null;
   if (old && !old.native) old.video.stop();
   // codec que deve sair (as estatísticas confirmam depois): protege contra queda logo no início
@@ -1638,6 +1652,96 @@ async function adaptNativeBitrate() {
   }
 }
 setInterval(adaptNativeBitrate, 1000);
+
+// ------------------------------------------------------------------ resolução inteligente
+// Pouca banda + resolução alta = imagem toda quadriculada (ex.: 1080p60 de jogo em 5 Mb/s pelo
+// Radmin). Com a mesma banda, um 720p fica bem mais limpo: desce um degrau quando a rede não dá
+// bits suficientes para a resolução atual e volta quando sobra (com folga, para não ficar trocando).
+// Só no modo "Movimento" (no "Detalhe" o Chromium já mantém a resolução e baixa o FPS).
+const SMART_STEPS = [2160, 1440, 1080, 720, 540];
+const SMART_BPP = { h264: 0.065, hevc: 0.045, h265: 0.045, av1: 0.04, vp9: 0.045, vp8: 0.07 }; // bits por pixel por quadro
+function smartNeedKbps(h, fps, codec) { return (h * h * 16 / 9) * Math.min(60, fps || 30) * (SMART_BPP[codec] || 0.065) / 1000; }
+function smartEnabled(share) { return localStorage.getItem('smartRes') !== '0' && share && share.settings.mode === 'motion'; }
+function smartDown(h) { return SMART_STEPS.find((x) => x < h - 8) || h; }
+function smartUp(h, top) { const up = [...SMART_STEPS].reverse().find((x) => x > h + 8); return up && up < top - 8 ? up : top; }
+// decide o degrau: 'down' / 'up' / null (conta segundos seguidos antes de trocar)
+function smartStep(st, cur, top, kbps, fps, codec, downSecs, upSecs) {
+  if (cur > 540 && kbps < smartNeedKbps(cur, fps, codec) * 0.75) { st.high = 0; if (++st.low >= downSecs) { st.low = 0; return 'down'; } return null; }
+  st.low = Math.max(0, st.low - 1);
+  if (cur < top - 8 && performance.now() > (st.upBlock || 0) && kbps >= smartNeedKbps(smartUp(cur, top), fps, codec)) {
+    if (++st.high >= upSecs) { st.high = 0; return 'up'; }
+  } else st.high = Math.max(0, st.high - 2);
+  return null;
+}
+// depois de subir, se cair de novo logo: espera bem mais para tentar outra vez
+function smartAfter(st, dir, waitMs) {
+  const now = performance.now();
+  if (dir === 'up') st.lastUp = now;
+  else st.upBlock = now + (st.lastUp && now - st.lastUp < 90000 ? waitMs * 10 : waitMs);
+}
+
+// adaptativo (encoder do Chromium, um por amigo): só muda a escala do envio, sem reiniciar nada
+async function smartResAdaptive() {
+  const share = state.share;
+  if (!share || share.direct) return;
+  const top = share.height || share.video.getSettings().height || 1080;
+  const fps = Number(share.settings.fps) || 30;
+  for (const peer of state.peers.values()) {
+    if (!smartEnabled(share) || state.lightMode || peer.theyWant === 'off' || peer.theyWant === 'thumb' || peer.pc.connectionState !== 'connected') {
+      if (peer.smartH) { peer.smartH = 0; applySendParams(peer); }
+      continue;
+    }
+    let report;
+    try { report = await peer.pc.getStats(); } catch { continue; }
+    let avail = 0, out = null, codec = 'h264';
+    report.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) avail = r.availableOutgoingBitrate / 1000;
+      if (r.type === 'outbound-rtp' && r.kind === 'video' && String(r.mid) === String(peer.vT.mid)) out = r;
+    });
+    if (!avail || !out) continue;
+    const c = out.codecId && report.get(out.codecId);
+    if (c && c.mimeType) codec = c.mimeType.split('/')[1].toLowerCase();
+    const base = Math.min(top, peer.theyWantH || top);
+    const cur = Math.min(base, peer.smartH || base);
+    const kbps = window.__smartKbps || Math.min(avail, perPeerMbps(share.settings.bitrate, peer) * 1000); // (__smartKbps: teste automático)
+    const st = peer.smartSt || (peer.smartSt = { low: 0, high: 0 });
+    const dir = smartStep(st, cur, base, kbps, fps, codec, 4, 10);
+    if (!dir) continue;
+    const next = dir === 'down' ? smartDown(cur) : smartUp(cur, base);
+    peer.smartH = next >= base ? 0 : next;
+    smartAfter(st, dir, 15000); // aqui subir é barato (sem reiniciar nada)
+    console.log(`resolução inteligente com ${peer.name}: ${cur}p -> ${next}p (rede ~${Math.round(kbps / 100) / 10} Mb/s, ${codec})`);
+    applySendParams(peer);
+  }
+}
+setInterval(smartResAdaptive, 1000);
+
+// direta (um encoder só para todos): segue o bitrate da rede e reinicia a captura no novo tamanho
+const smartDirect = { low: 0, high: 0 };
+let smartRestarting = false;
+async function smartResDirect() {
+  const share = state.share;
+  if (!share || !share.direct || !smartEnabled(share) || !state.nativeKbps || shareBusy || restartingCodec || smartRestarting) return;
+  const top = share.fullH || share.height;
+  const cur = share.height;
+  if (!top || !cur) return;
+  const dir = smartStep(smartDirect, cur, top, state.nativeKbps, Number(share.settings.fps), share.codec, 10, 30);
+  if (!dir) return;
+  const next = dir === 'down' ? smartDown(cur) : smartUp(cur, top);
+  smartAfter(smartDirect, dir, 60000); // aqui cada troca reinicia a captura
+  console.log(`resolução inteligente (direta): ${cur}p -> ${next}p (rede ~${Math.round(state.nativeKbps / 100) / 10} Mb/s, ${share.codec})`);
+  toast(dir === 'down'
+    ? `Rede apertada (~${Math.round(state.nativeKbps / 1000)} Mb/s): transmitindo em ${next}p para a imagem ficar nítida. Volta sozinho quando a rede melhorar.`
+    : `A rede melhorou: voltando para ${next}p.`);
+  smartRestarting = true;
+  try {
+    selectedSource = share.source;
+    const s = share.settings;
+    await startShare({ engine: 'native-direct', autoDirect: share.autoDirect, noAv1: s.noAv1, forceH264: s.forceH264,
+      smartH: next >= top - 8 ? 0 : next, fullW: share.fullW, fullH: share.fullH, startKbps: state.nativeKbps });
+  } finally { smartRestarting = false; }
+}
+setInterval(smartResDirect, 1000);
 
 // Pedidos de keyframe reais (PLI/FIR) vindos de quem assiste: lidos das estatísticas do envio.
 async function watchKeyRequests() {

@@ -9,7 +9,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = 47911; // porta de teste (nunca a da sala de verdade)
-const TIMEOUT_MS = 180000;
+const TIMEOUT_MS = 240000;
 const electronPath = require(path.join(ROOT, 'node_modules', 'electron'));
 const { createSignalingServer } = require(path.join(ROOT, 'src', 'signaling'));
 
@@ -137,6 +137,15 @@ const scriptA = common + `
       try { await startSyntheticAv1(); log('direta AV1 ligada'); sendRelay(null, { kind: 'chat', text: 'smoke-av1-ligada' }); }
       catch (e) { log('ERRO direta AV1: ' + e.message); }
     }, 300);
+    // resolução inteligente: simula rede apertada e depois normal
+    let smartSeen = 0;
+    setInterval(() => {
+      const t = $('#chat-log').textContent;
+      const baixo = (t.match(/smoke-smart-baixo/g) || []).length, normal = (t.match(/smoke-smart-normal/g) || []).length;
+      if (baixo + normal === smartSeen) return;
+      smartSeen = baixo + normal;
+      window.__smartKbps = baixo > normal ? 1200 : 0;
+    }, 300);
     // 2ª tela sintética (960x540)
     const s2Iv = setInterval(() => {
       if (!/smoke-s2-pedido/.test($('#chat-log').textContent)) return;
@@ -164,7 +173,7 @@ const scriptA = common + `
     window.inkCheck = () => inkSeen;
     setTimeout(async () => { for (const p of state.peers.values()) { let o = ''; (await p.pc.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') o += JSON.stringify({ sent: r.framesSent, enc: r.framesEncoded, w: r.frameWidth, lim: r.qualityLimitationReason }); }); log('envio ' + o + ' trilha=' + p.vT.sender.track + ' estado=' + track.readyState); } }, 8000);
     // espera o B terminar (ele sai da sala) ou o tempo acabar
-    await until(() => state.peers.size === 0, 165000, 'B terminar');
+    await until(() => state.peers.size === 0, 225000, 'B terminar');
     if (!window.inkCheck()) throw new Error('o desenho da caneta do B não chegou');
     log('A OK');
   } catch (e) { log('FALHOU A: ' + e.message); }
@@ -271,6 +280,13 @@ const scriptB = common + `
     log('resolução escolhida ok (' + (await inMain()).frameHeight + 'p)');
     setResMode(peer().id, 'auto');
     await until(async () => (await inMain()).frameHeight === 720, 15000, 'voltar ao original');
+    // resolução inteligente: rede apertada -> desce para 540p; rede boa -> volta para 720p
+    sendRelay(null, { kind: 'chat', text: 'smoke-smart-baixo' });
+    await until(async () => { const x = await inMain(); return x && x.frameHeight > 0 && x.frameHeight <= 540; }, 20000, 'resolução inteligente descer');
+    log('resolução inteligente desceu (' + (await inMain()).frameHeight + 'p com rede apertada)');
+    sendRelay(null, { kind: 'chat', text: 'smoke-smart-normal' });
+    await until(async () => (await inMain()).frameHeight === 720, 45000, 'resolução inteligente voltar');
+    log('resolução inteligente voltou (720p)');
     // foto da tela
     const shot = await takeShot(peer().id);
     if (!shot) throw new Error('foto não salvou');
