@@ -10,6 +10,9 @@ let exe = null;
 let selfPid = 0;
 let buf = Buffer.alloc(0);
 
+let lastBoost = null;
+function sendBoost() { proc.stdin.write(JSON.stringify({ cmd: 'boost', pids: lastBoost, on: true }) + '\n'); }
+
 function post(msg) { if (port) port.postMessage(msg); }
 
 function ensure() {
@@ -20,6 +23,7 @@ function ensure() {
   proc.on('error', (e) => post({ t: 'event', msg: { type: 'helper-error', message: e.message } }));
   proc.stdin.on('error', () => {});
   proc.stdout.on('data', parse);
+  if (lastBoost) sendBoost(); // helper novo: reaplica a prioridade de GPU
   proc.on('exit', (code) => {
     proc = null;
     post({ t: 'event', msg: { type: 'helper-exit', code } });
@@ -40,7 +44,11 @@ function parse(chunk) {
     else if (type === 3) post({ t: 'video', d: payload });
     else if (type === 4) post({ t: 'sys', d: payload }); // áudio do PC inteiro (para os clipes)
     else if (type === 1) {
-      try { post({ t: 'event', msg: JSON.parse(Buffer.from(payload).toString('utf8')) }); } catch {}
+      try {
+        const msg = JSON.parse(Buffer.from(payload).toString('utf8'));
+        if (msg.type === 'boost') process.parentPort.postMessage({ type: 'boost-result', result: msg.result });
+        post({ t: 'event', msg });
+      } catch {}
     }
   }
 }
@@ -67,6 +75,10 @@ process.parentPort.on('message', (e) => {
     port = e.ports[0];
     port.on('message', onPortMessage);
     port.start();
+  } else if (m.type === 'boost') {
+    // prioridade de GPU dos processos do app (pedido pelo processo principal)
+    lastBoost = m.pids;
+    if (proc) sendBoost(); else ensure(); // ao subir, o ensure já envia
   } else if (m.type === 'quit') {
     // NUNCA encerrar o helper à força com a captura de áudio ligada: matar um processo no meio
     // de uma captura "process loopback" derruba o serviço de áudio do Windows (som e microfone

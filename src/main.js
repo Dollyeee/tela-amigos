@@ -2,22 +2,38 @@ const {
   app, BrowserWindow, ipcMain, desktopCapturer, screen, clipboard, shell, session,
   utilityProcess, MessageChannelMain, Tray, Menu, globalShortcut, nativeImage,
 } = require('electron');
-
-// registro do processo principal (vai no diagnóstico)
-const mainLog = [];
-for (const level of ['log', 'warn', 'error']) {
-  const orig = console[level].bind(console);
-  console[level] = (...args) => {
-    mainLog.push(`${new Date().toISOString()} [${level}] ${args.map((a) => (a && a.stack) || String(a)).join(' ')}`);
-    if (mainLog.length > 400) mainLog.shift();
-    orig(...args);
-  };
-}
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const { spawn } = require('child_process');
+
+// registro do processo principal: na memória (diagnóstico) e em arquivo, para sobreviver a
+// um fechamento inesperado (userData/logs/tela-amigos.log, com rodízio em ~1 MB)
+const mainLog = [];
+let logFile = null;
+function writeLogLine(line) {
+  mainLog.push(line);
+  if (mainLog.length > 400) mainLog.shift();
+  try {
+    if (!logFile) {
+      const dir = path.join(app.getPath('userData'), 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      logFile = path.join(dir, 'tela-amigos.log');
+      try { if (fs.statSync(logFile).size > 1_000_000) fs.renameSync(logFile, `${logFile}.1`); } catch {}
+    }
+    fs.appendFileSync(logFile, line + '\n');
+  } catch {}
+}
+for (const level of ['log', 'warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    writeLogLine(`${new Date().toISOString()} [${level}] ${args.map((a) => (a && a.stack) || String(a)).join(' ')}`);
+    orig(...args);
+  };
+}
+process.on('uncaughtException', (e) => console.error('erro não tratado no processo principal:', e));
+process.on('unhandledRejection', (e) => console.error('promessa rejeitada no processo principal:', e));
 
 const SIGNAL_PORT = Number(process.env.TELA_PORT) || 47800;
 
@@ -36,7 +52,9 @@ if (process.env.TELA_PROFILE) app.setPath('userData', path.join(app.getPath('use
 
 let win = null;
 
-const toRenderer = (channel, data) => { if (win && !win.isDestroyed()) win.webContents.send(channel, data); };
+// envio protegido: durante uma recarga/queda da página o send lança erro
+const safeSend = (wc, ...args) => { try { if (wc && !wc.isDestroyed()) wc.send(...args); } catch {} };
+const toRenderer = (channel, data) => { if (win && !win.isDestroyed()) safeSend(win.webContents, channel, data); };
 
 function localIPs() {
   const out = [];
@@ -64,24 +82,64 @@ function helperPath() {
 
 let helperHost = null;
 let quitting = false;
+let recoveredFrom = null; // motivo da última queda da interface (mostrado depois de recarregar)
+
+// processos auxiliares do Chromium (placa de vídeo, áudio...) que caem também ficam registrados
+app.on('child-process-gone', (_e, d) => {
+  if (d.reason !== 'clean-exit') console.error(`processo "${d.type}" caiu: ${d.reason} (código ${d.exitCode})${d.name ? ' ' + d.name : ''}`);
+});
+ipcMain.handle('app:recovered', () => { const r = recoveredFrom; recoveredFrom = null; return r; });
+function readLogTail(n) {
+  try {
+    let text = fs.readFileSync(logFile, 'utf8');
+    if (text.split('\n').length < n) { try { text = fs.readFileSync(`${logFile}.1`, 'utf8') + text; } catch {} }
+    return text.split('\n').slice(-n).join('\n');
+  } catch { return mainLog.join('\n'); }
+}
 
 function startHelperHost() {
   helperHost = utilityProcess.fork(path.join(__dirname, 'helper-host.js'), [], { serviceName: 'Tela Amigos Helper' });
   helperHost.postMessage({ type: 'config', exe: helperPath(), selfPid: process.pid });
-  helperHost.on('exit', () => {
+  helperHost.on('message', (m) => {
+    if (m && m.type === 'boost-result') console.log(`prioridade de GPU (4=alta, 3=acima do normal, -1=falhou): ${JSON.stringify(m.result)}`);
+  });
+  helperHost.on('exit', (code) => {
     helperHost = null;
     if (quitting) return;
+    console.error(`processo do helper caiu (código ${code}); reiniciando`);
+    boostedKey = ''; // o helper novo precisa reaplicar a prioridade de GPU
     // caiu: sobe de novo e reconecta a interface
     setTimeout(() => { startHelperHost(); connectRendererToHelper(); }, 500);
     toRenderer('helper:restarted', null);
   });
 }
 
+// ---------------------------------------------------------------- prioridade (jogo pesado aberto)
+// Com um jogo usando a placa de vídeo/CPU ao máximo, o Windows deixa o app por último e as
+// telas dos amigos engasgam. Sobe a prioridade de CPU (acima do normal) dos processos do app e
+// pede ao helper para subir a prioridade de GPU deles. Refeito quando surgem processos novos.
+let boostedKey = '';
+function applyPriority() {
+  try {
+    const procs = app.getAppMetrics().filter((m) => ['Browser', 'GPU', 'Tab', 'Utility'].includes(m.type));
+    const pids = procs.map((m) => m.pid);
+    const key = pids.slice().sort().join(',');
+    if (key === boostedKey) return;
+    boostedKey = key;
+    for (const pid of pids) { try { os.setPriority(pid, os.constants.priority.PRIORITY_ABOVE_NORMAL); } catch {} }
+    if (helperHost) helperHost.postMessage({ type: 'boost', pids });
+    console.log(`prioridade elevada: ${procs.map((m) => `${m.type}${m.serviceName ? '/' + m.serviceName : ''}=${m.pid}`).join(' ')}`);
+  } catch (e) { console.warn('prioridade:', e.message); }
+}
+
 function connectRendererToHelper() {
   if (!helperHost || !win || win.isDestroyed()) return;
   const { port1, port2 } = new MessageChannelMain();
-  helperHost.postMessage({ type: 'port' }, [port1]);
-  win.webContents.postMessage('helper:port', null, [port2]);
+  // a página pode estar no meio de uma recarga: aí o did-finish-load reconecta depois
+  try {
+    win.webContents.postMessage('helper:port', null, [port2]);
+    helperHost.postMessage({ type: 'port' }, [port1]);
+  } catch (e) { console.warn('canal com o helper fica para depois da recarga:', e.message); }
 }
 
 function createWindow() {
@@ -108,6 +166,16 @@ function createWindow() {
   win.removeMenu();
   // a cada carregamento (inclusive recarga) a página ganha um canal novo com o helper
   win.webContents.on('did-finish-load', connectRendererToHelper);
+  // a interface travou/fechou (falta de memória, placa de vídeo reiniciada...): registra e
+  // recarrega sozinha em vez de deixar a janela branca/fechada
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error(`interface caiu: ${details.reason} (código ${details.exitCode})`);
+    if (details.reason === 'clean-exit') return;
+    recoveredFrom = details.reason;
+    setTimeout(() => { if (win && !win.isDestroyed()) win.reload(); }, 1000);
+  });
+  win.webContents.on('unresponsive', () => console.warn('interface sem responder'));
+  win.webContents.on('responsive', () => console.warn('interface voltou a responder'));
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.setWindowOpenHandler(({ url }) => {
     // janela de sobreposição (tela de um amigo por cima do jogo)
@@ -131,6 +199,12 @@ function createWindow() {
     overlays.add(child);
     child.on('closed', () => overlays.delete(child));
   });
+  // avisos/erros da interface também vão para o arquivo de registro (sobrevivem se ela cair)
+  if (!process.env.TELA_TEST_SCRIPT) {
+    win.webContents.on('console-message', (e) => {
+      if (e.level === 'warning' || e.level === 'error') writeLogLine(`${new Date().toISOString()} [interface ${e.level}] ${String(e.message).slice(0, 2000)}`);
+    });
+  }
   // Teste automatizado (só com variável de ambiente): roda um script na página e mostra o console
   if (process.env.TELA_TEST_SCRIPT) {
     win.webContents.on('console-message', (e) => {
@@ -377,7 +451,7 @@ ipcMain.handle('diag:save', async (_e, rendererText) => {
     `Redes: ${JSON.stringify(localIPs())}`,
     `Sala neste PC: ${JSON.stringify(await roomStatus())}`,
     '', '===== interface =====', rendererText,
-    '', '===== processo principal =====', mainLog.join('\n'),
+    '', '===== registro em arquivo (inclui sessões anteriores) =====', readLogTail(400),
     '', '===== placa de vídeo =====', gpu,
   ].join('\n');
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
@@ -413,7 +487,7 @@ function setOverlayLock(w, locked) {
   if (!w || w.isDestroyed()) return;
   w.locked = locked;
   w.setIgnoreMouseEvents(locked, { forward: true }); // travada: cliques atravessam para o jogo
-  w.webContents.send('overlay:locked', locked, overlayKey);
+  safeSend(w.webContents, 'overlay:locked', locked, overlayKey);
 }
 ipcMain.on('overlay:lock', (e, locked) => setOverlayLock(BrowserWindow.fromWebContents(e.sender), !!locked));
 // cadeado da janela travada: só enquanto o mouse está em cima dele a janela aceita clique
@@ -462,7 +536,7 @@ function overlayWindow(opts, file) {
 function sendWhenReady(w, channel, data, show) {
   const go = () => {
     if (w.isDestroyed()) return;
-    w.webContents.send(channel, data);
+    safeSend(w.webContents, channel, data);
     if (show && !w.isVisible()) w.showInactive();
   };
   if (w.webContents.isLoading()) w.webContents.once('did-finish-load', go); else go();
@@ -583,10 +657,18 @@ if (!gotLock) {
 
 if (gotLock) app.whenReady().then(() => {
   installDisplayMediaHandler();
+  console.log(`Tela Amigos v${app.getVersion()} iniciando (Windows ${os.release()})`);
+  // relatórios de travamento ficam só neste PC (nada é enviado)
+  try { require('electron').crashReporter.start({ uploadToServer: false }); } catch {}
   startHelperHost();
   createWindow();
-  setupTray();
-  setupHotkeys();
+  setTimeout(applyPriority, 3000);
+  setInterval(applyPriority, 15000);
+  // cópias de teste (perfil próprio) não pegam atalhos globais nem a bandeja do app de verdade
+  if (!process.env.TELA_PROFILE) {
+    setupTray();
+    setupHotkeys();
+  }
   setupAutoUpdate();
 });
 

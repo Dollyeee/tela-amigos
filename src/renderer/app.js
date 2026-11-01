@@ -505,6 +505,7 @@ function createPeer(id, name) {
       // vídeo: tela ou câmera? decide em resolveTracks (o amigo informa os ids no "state")
       const sid = (e.streams && e.streams[0] && e.streams[0].id) || `sem-id-${peer.videoTracks.size}`;
       peer.videoTracks.set(sid, e.track);
+      if (state.gaming) applyPlayoutBuffer();
     }
     resolveTracks(peer);
   };
@@ -1538,14 +1539,31 @@ function onHelperEvent(msg) {
     const was = state.gaming;
     state.gaming = !!msg.playing;
     state.gamingExe = msg.exe || '';
+    if (state.gaming !== was) applyPlayoutBuffer();
     if (state.gaming !== was && state.share && localStorage.getItem('gamehide') !== '0') {
       toast(state.gaming
         ? 'Jogo em tela cheia: sua prévia foi escondida para economizar (a transmissão continua).'
         : 'Sua prévia voltou.');
     }
     render();
-  } else if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
+  }
+  if (msg.type === 'boost') console.log(`prioridade de GPU (pid: nível 4=alta, 3=acima do normal): ${safeJson(msg.result)}`);
+  if (msg.type === 'helper-exit') console.warn(`AudioHelper fechou (código ${msg.code})`);
+  if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
+  }
+}
+
+// Jogo pesado aberto: o PC demora mais (e de forma irregular) para decodificar/desenhar, e as
+// telas dos amigos engasgam. Um pequeno buffer de reprodução (~150 ms a mais de atraso) absorve
+// essas variações; sem jogo, volta ao mínimo (menor atraso possível).
+const GAME_BUFFER_MS = 150;
+function applyPlayoutBuffer() {
+  const target = state.gaming && localStorage.getItem('gamebuffer') !== '0' ? GAME_BUFFER_MS : null;
+  for (const peer of state.peers.values()) {
+    for (const r of peer.pc.getReceivers()) {
+      if (r.track && r.track.kind === 'video') { try { r.jitterBufferTarget = target; } catch {} }
+    }
   }
 }
 
@@ -1587,8 +1605,8 @@ async function stopShare() {
     sendState(peer.id);
   }
   $('#btn-share').textContent = 'Compartilhar tela';
-  window.Helper.gameWatch(false).catch(() => {});
-  state.gaming = false;
+  // a detecção de jogo continua enquanto estiver na sala (ajusta a reprodução das telas dos amigos)
+  if (state.leaving) { window.Helper.gameWatch(false).catch(() => {}); state.gaming = false; applyPlayoutBuffer(); }
   state.lightMode = false;
   $('#btn-stop').classList.add('hidden');
   $('#btn-adjust').classList.add('hidden');
@@ -1603,6 +1621,8 @@ function enterRoom() {
   $('#btn-copy-ip').textContent = `Sala: ${state.hostIp}  (copiar)`;
   $('#btn-close-room').classList.toggle('hidden', !state.isHost);
   render();
+  // detecta jogo em tela cheia: com jogo pesado, as telas dos amigos ganham um respiro (buffer)
+  window.Helper.gameWatch(true).catch(() => {});
   // aquece o AudioHelper e a captura para o "Compartilhar" abrir rápido
   window.native.audioAvailable().then((ok) => ok && window.Helper.list()).catch(() => {});
 }
@@ -2334,6 +2354,8 @@ function initRoomUi() {
   }).catch(() => {});
   $('#opt-gamehide').checked = localStorage.getItem('gamehide') !== '0';
   $('#opt-gamehide').onchange = () => { localStorage.setItem('gamehide', $('#opt-gamehide').checked ? '1' : '0'); render(); };
+  $('#opt-gamebuffer').checked = localStorage.getItem('gamebuffer') !== '0';
+  $('#opt-gamebuffer').onchange = () => { localStorage.setItem('gamebuffer', $('#opt-gamebuffer').checked ? '1' : '0'); applyPlayoutBuffer(); };
   // teclas globais (funcionam com o jogo em primeiro plano)
   window.native.onHotkey((action) => {
     if ($('#room').classList.contains('hidden')) return;
@@ -2404,6 +2426,10 @@ function initRoomUi() {
 // ------------------------------------------------------------------ atualização automática
 function initUpdates() {
   window.native.appVersion().then((v) => { $('#app-version').textContent = `v${v}`; });
+  // a interface caiu e foi recarregada sozinha: avisa (o motivo fica no registro/diagnóstico)
+  window.native.recovered().then((why) => {
+    if (why) toast(`O app teve um problema (${why}) e foi recarregado. Se repetir, clique em "Enviar diagnóstico".`, 'error');
+  }).catch(() => {});
   const bar = $('#update-bar');
   const checkBtn = $('#btn-check-update');
   let hideTimer = null;

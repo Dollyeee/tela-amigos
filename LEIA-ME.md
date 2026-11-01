@@ -21,6 +21,8 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **Captura nativa 60 fps** (Windows Graphics Capture + H.264 na placa de vídeo) que se adapta à rede;
   "Nativa direta" para rede perfeita; "Chromium" para compatibilidade.
 - **HDR → SDR automático**: quem joga com HDR ligado aparece com as cores certas para quem assiste.
+- **Telas lisas enquanto joga**: com jogo pesado aberto, o app ganha prioridade alta na placa de vídeo e as telas dos amigos ganham ~0,15 s de buffer para não engasgar. Dica: limitar o FPS do jogo (ex.: 3 abaixo da taxa do monitor) deixa a placa com folga e ajuda muito.
+- **Registro de problemas**: tudo fica em `%APPDATA%\Tela Amigos\logs`; se a tela do app cair, ela recarrega sozinha.
 - **Ajustes** durante a transmissão: qualidade muda na hora; resolução/FPS/captura sem parar.
 - Layouts **Grade** e **Foco** (miniaturas embaixo). Duplo clique foca/desfoca; **Esc** sai da tela cheia e do foco;
   arraste pela alça ⋮⋮ para reorganizar; picture-in-picture.

@@ -143,6 +143,15 @@ static class Program
                     case "video-key":
                         video?.RequestKeyFrame();
                         break;
+                    case "boost":
+                    {
+                        var pids = new List<int>();
+                        if (root.TryGetProperty("pids", out var pl)) foreach (var e in pl.EnumerateArray()) pids.Add(e.GetInt32());
+                        bool high = !root.TryGetProperty("on", out var bo) || bo.GetBoolean();
+                        var got = Priority.Boost(pids, high);
+                        SendJson(new { id, type = "boost", result = got.ToDictionary(k => k.Key.ToString(), k => k.Value) });
+                        break;
+                    }
                     case "video-bitrate":
                         video?.SetBitrate(root.GetProperty("kbps").GetInt32());
                         break;
