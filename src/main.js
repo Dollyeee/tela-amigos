@@ -793,8 +793,29 @@ if (!gotLock) {
   });
 }
 
+// Uma atualização às vezes deixava o atalho do Menu Iniciar apontando para a pasta temporária
+// do instalador (que some): clicar nele não fazia nada. Ao abrir, confere e conserta os atalhos.
+function repairShortcuts() {
+  if (!app.isPackaged || process.platform !== 'win32') return;
+  const exe = process.execPath;
+  const places = [
+    path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Tela Amigos.lnk'),
+    path.join(app.getPath('desktop'), 'Tela Amigos.lnk'),
+  ];
+  for (const lnk of places) {
+    try {
+      if (!fs.existsSync(lnk)) continue;
+      const cur = shell.readShortcutLink(lnk);
+      if (cur.target && path.resolve(cur.target).toLowerCase() === path.resolve(exe).toLowerCase()) continue;
+      shell.writeShortcutLink(lnk, 'update', { target: exe, cwd: path.dirname(exe), icon: exe, iconIndex: 0 });
+      console.warn(`atalho consertado: ${lnk} (apontava para ${cur.target})`);
+    } catch (e) { console.warn('atalho:', e.message); }
+  }
+}
+
 if (gotLock) app.whenReady().then(() => {
   installDisplayMediaHandler();
+  setTimeout(repairShortcuts, 5000);
   console.log(`Tela Amigos v${app.getVersion()} iniciando (Windows ${os.release()})`);
   // relatórios de travamento ficam só neste PC (nada é enviado)
   try { require('electron').crashReporter.start({ uploadToServer: false }); } catch {}
