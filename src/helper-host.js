@@ -38,6 +38,7 @@ function parse(chunk) {
     buf = buf.subarray(5 + len);
     if (type === 2) post({ t: 'pcm', d: payload });
     else if (type === 3) post({ t: 'video', d: payload });
+    else if (type === 4) post({ t: 'sys', d: payload }); // áudio do PC inteiro (para os clipes)
     else if (type === 1) {
       try { post({ t: 'event', msg: JSON.parse(Buffer.from(payload).toString('utf8')) }); } catch {}
     }

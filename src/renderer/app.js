@@ -1378,9 +1378,27 @@ function tileStream(id) {
 }
 function tileName(id) { return id === 'me' ? state.myName : (state.peers.get(id) || {}).name || 'tela'; }
 
-function toggleReplay(id, btn) {
-  const on = window.Clips.toggle(id, tileStream(id), tileName(id));
+async function toggleReplay(id) {
   const tile = id === 'me' ? meTile : (state.peers.get(id) || {}).tile;
+  let on;
+  if (window.Clips.isOn(id)) {
+    on = window.Clips.toggle(id); // desliga
+  } else {
+    const stream = tileStream(id);
+    const opts = {
+      // câmera do amigo entra no clipe na posição em que ela está na tela
+      compose: () => (tile && !tile.camBox.classList.contains('hidden')) ? { video: tile.camVideo, pos: camPos(tile) } : null,
+    };
+    // áudio do PC inteiro (Discord, jogo...) misturado com o som da transmissão
+    if (localStorage.getItem('clipSys') !== '0' && (await window.native.audioAvailable())) {
+      try {
+        const mix = await window.ClipAudio.mixFor(stream);
+        opts.audioTrack = mix.track;
+        opts.release = mix.release;
+      } catch (e) { console.warn('áudio do PC no clipe', e); }
+    }
+    on = window.Clips.toggle(id, stream, tileName(id), opts);
+  }
   if (tile) tile.el.classList.toggle('replaying', on);
   toast(on
     ? `Replay ligado na tela de ${tileName(id)}: a partir de agora dá para salvar os últimos 30 s (Ctrl+Shift+C).`
@@ -2293,6 +2311,8 @@ function initRoomUi() {
   $('#btn-adjust').onclick = openAdjust;
   $('#btn-camera').onclick = toggleCamera;
   $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+  $('#opt-clipsys').checked = localStorage.getItem('clipSys') !== '0';
+  $('#opt-clipsys').onchange = () => localStorage.setItem('clipSys', $('#opt-clipsys').checked ? '1' : '0');
   $('#opt-laserdesk').checked = localStorage.getItem('laserDesk') !== '0';
   $('#opt-laserdesk').onchange = () => localStorage.setItem('laserDesk', $('#opt-laserdesk').checked ? '1' : '0');
   $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));

@@ -1,4 +1,4 @@
-﻿// AudioHelper: captura de áudio por app (process loopback, Win10 2004+) e de vídeo (WGC + H.264 por hardware).
+// AudioHelper: captura de áudio por app (process loopback, Win10 2004+) e de vídeo (WGC + H.264 por hardware).
 //
 // Protocolo:
 //   stdin  -> uma linha JSON por comando; "id" (opcional) volta na resposta:
@@ -24,6 +24,7 @@ static class Program
     static Mixer? mixer;
     static VideoStreamer? video;
     static GameWatcher? gameWatcher;
+    static Mixer? clipMixer; // áudio do PC inteiro (menos este app) para os clipes
 
     // ---- saída: fila com escritor próprio; quem captura nunca fica preso esperando o app ler ----
     static readonly BlockingCollection<byte[]> outQueue = new(new ConcurrentQueue<byte[]>(), 400);
@@ -120,6 +121,17 @@ static class Program
                         video = null;
                         SendJson(new { id, type = "video-stopped" });
                         break;
+                    case "sysaudio-start":
+                        clipMixer?.Dispose();
+                        clipMixer = new Mixer(selfPid, selfPid, ProcessLoopbackMode.ExcludeTargetProcessTree, 4);
+                        clipMixer.Start();
+                        SendJson(new { id, type = "sysaudio-started" });
+                        break;
+                    case "sysaudio-stop":
+                        clipMixer?.Dispose();
+                        clipMixer = null;
+                        SendJson(new { id, type = "sysaudio-stopped" });
+                        break;
                     case "game-watch":
                         gameWatcher?.Dispose();
                         gameWatcher = root.TryGetProperty("on", out var on) && on.GetBoolean() ? new GameWatcher(selfPid) : null;
@@ -143,6 +155,7 @@ static class Program
         }
         // stdin fechou: o app principal saiu
         mixer?.Dispose();
+        clipMixer?.Dispose();
         video?.Dispose();
     }
 }
@@ -414,7 +427,15 @@ sealed class Mixer : IDisposable
     Thread? mixThread;
     Timer? scanTimer;
 
-    public Mixer(int appPid, int selfPid) { this.appPid = appPid; this.selfPid = selfPid; }
+    readonly ProcessLoopbackMode captureMode;
+    readonly byte packetType;
+
+    /// mode Include + appPid: só aquele app; appPid 0: tudo exceto Discord (várias capturas);
+    /// mode Exclude + appPid: o PC inteiro menos aquela árvore (usado nos clipes, pacote tipo 4)
+    public Mixer(int appPid, int selfPid, ProcessLoopbackMode mode = ProcessLoopbackMode.IncludeTargetProcessTree, byte packetType = 2)
+    {
+        this.appPid = appPid; this.selfPid = selfPid; captureMode = mode; this.packetType = packetType;
+    }
 
     public void Start()
     {
@@ -461,7 +482,7 @@ sealed class Mixer : IDisposable
         }
         try
         {
-            await cap.StartAsync(ProcessLoopbackMode.IncludeTargetProcessTree);
+            await cap.StartAsync(captureMode);
             bool stillWanted;
             lock (capLock) stillWanted = running && captures.TryGetValue(pid, out var c) && c == cap;
             if (!stillWanted) cap.Dispose(); // o mixer foi encerrado enquanto iniciava
@@ -513,7 +534,7 @@ sealed class Mixer : IDisposable
                     outBytes[i * 2] = (byte)v;
                     outBytes[i * 2 + 1] = (byte)(v >> 8);
                 }
-                Program.Send(2, outBytes);
+                Program.Send(packetType, outBytes);
                 blocksSent++;
             }
         }

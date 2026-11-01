@@ -40,6 +40,16 @@
     if (lines.length) requestAnimationFrame(drawTrail); else animating = false;
   }
   window.pointerApi.onPointer((p) => {
+    // esta janela (tela inteira) agora só desenha o RASTRO; a mão é uma janelinha à parte
+    if (p.trailOnly) {
+      const prev = hands[p.id];
+      if (prev && prev.lastX != null) {
+        lines.push({ x1: prev.lastX, y1: prev.lastY, x2: p.x, y2: p.y, color: p.color, t: performance.now() });
+        if (!animating) { animating = true; requestAnimationFrame(drawTrail); }
+      }
+      hands[p.id] = { lastX: p.drawing ? p.x : null, lastY: p.drawing ? p.y : null };
+      return;
+    }
     let h = hands[p.id];
     if (!h) {
       h = document.createElement('div');

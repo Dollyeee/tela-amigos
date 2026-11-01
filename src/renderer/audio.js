@@ -81,5 +81,59 @@ window.HelperAudio = (() => {
     node = null;
   }
 
-  return { start, stop };
+  return { start, stop, WORKLET };
+})();
+
+// Áudio dos clipes: som do PC inteiro (menos este app, vem do AudioHelper) misturado com o som
+// da transmissão do amigo. Cada clipe ganha a sua mistura; a captura do PC é uma só.
+window.ClipAudio = (() => {
+  let ctx = null, sysNode = null, users = 0, starting = null;
+
+  async function ensure() {
+    if (ctx) return;
+    if (starting) return starting;
+    starting = (async () => {
+      ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+      const url = URL.createObjectURL(new Blob([window.HelperAudio.WORKLET], { type: 'text/javascript' }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      sysNode = new AudioWorkletNode(ctx, 'pcm-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      window.Helper.onSys((ab) => { if (sysNode) sysNode.port.postMessage(ab, [ab]); });
+      const res = await window.Helper.sysStart();
+      if (res.type === 'error') console.warn('áudio do PC para clipes:', res.message);
+    })();
+    try { await starting; } finally { starting = null; }
+  }
+
+  async function mixFor(stream) {
+    await ensure();
+    users++;
+    const dest = ctx.createMediaStreamDestination();
+    dest.channelCount = 2;
+    sysNode.connect(dest);
+    const at = stream && stream.getAudioTracks()[0];
+    const src = at ? ctx.createMediaStreamSource(new MediaStream([at])) : null;
+    if (src) src.connect(dest);
+    let released = false;
+    return {
+      track: dest.stream.getAudioTracks()[0],
+      release() {
+        if (released) return;
+        released = true;
+        try { sysNode && sysNode.disconnect(dest); } catch {}
+        try { src && src.disconnect(); } catch {}
+        if (--users <= 0) shutdown();
+      },
+    };
+  }
+
+  async function shutdown() {
+    users = 0;
+    try { await window.Helper.sysStop(); } catch {} // para a captura com calma
+    try { await ctx.close(); } catch {}
+    ctx = null;
+    sysNode = null;
+  }
+
+  return { mixFor };
 })();

@@ -425,36 +425,77 @@ function toggleOverlayLocks() {
   for (const w of overlays) setOverlayLock(w, anyUnlocked);
 }
 
-// ---- laser no monitor de quem transmite ----
-// Janela transparente por cima de tudo, que não recebe cliques e fica FORA da captura
-// (não aparece na transmissão). Só fica visível enquanto alguém está apontando.
-let pointerWin = null, pointerDisplay = null, pointerHideTimer = null;
-function ensurePointerWin(displayId) {
-  const d = screen.getAllDisplays().find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
-  if (pointerWin && !pointerWin.isDestroyed() && pointerDisplay === d.id) return pointerWin;
-  if (pointerWin && !pointerWin.isDestroyed()) pointerWin.destroy();
-  pointerWin = new BrowserWindow({
-    ...d.bounds, transparent: true, frame: false, skipTaskbar: true, focusable: false, resizable: false,
-    movable: false, hasShadow: false, show: false, alwaysOnTop: true,
-    webPreferences: { preload: path.join(__dirname, 'pointer-preload.js') },
-  });
-  pointerWin.setIgnoreMouseEvents(true);
-  pointerWin.setAlwaysOnTop(true, 'screen-saver');
-  pointerWin.setContentProtection(true); // fora da captura de tela
-  pointerWin.loadFile(path.join(__dirname, 'renderer', 'pointer.html'));
-  pointerDisplay = d.id;
-  return pointerWin;
+// ---- mãozinha no monitor de quem transmite ----
+// Cada mão é uma JANELINHA pequena que acompanha o ponteiro (antes era uma janela do tamanho do
+// monitor, que conflitava com mods do Windows como o Windhawk). Ela é DESTRUÍDA ao parar de
+// apontar (escondida e mostrada de novo, o Windows exibia a imagem antiga: "fantasmas").
+// Todas ficam por cima de tudo, não recebem cliques e ficam FORA da captura de tela.
+const HAND_TIP = { x: 60, y: 50 };              // onde fica a ponta do dedo na janelinha
+const handWins = new Map();                     // id de quem aponta -> { win, timer }
+let trailWin = null, trailDisplay = null, trailTimer = null;
+
+function displayById(displayId) {
+  return screen.getAllDisplays().find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
 }
+function overlayWindow(opts, file) {
+  const w = new BrowserWindow({
+    transparent: true, frame: false, skipTaskbar: true, focusable: false, resizable: false, movable: false,
+    hasShadow: false, show: false, alwaysOnTop: true, thickFrame: false,
+    webPreferences: { preload: path.join(__dirname, 'pointer-preload.js') },
+    ...opts,
+  });
+  w.setIgnoreMouseEvents(true);
+  w.setAlwaysOnTop(true, 'screen-saver');
+  w.setContentProtection(true); // fora da captura: não aparece na transmissão
+  w.loadFile(path.join(__dirname, 'renderer', file));
+  return w;
+}
+function sendWhenReady(w, channel, data, show) {
+  const go = () => {
+    if (w.isDestroyed()) return;
+    w.webContents.send(channel, data);
+    if (show && !w.isVisible()) w.showInactive();
+  };
+  if (w.webContents.isLoading()) w.webContents.once('did-finish-load', go); else go();
+}
+function destroyHand(id) {
+  const h = handWins.get(id);
+  if (!h) return;
+  clearTimeout(h.timer);
+  if (!h.win.isDestroyed()) h.win.destroy();
+  handWins.delete(id);
+}
+
 ipcMain.on('pointer:show', (_e, p) => {
-  const w = ensurePointerWin(p.displayId);
-  const send = () => { if (!w.isDestroyed()) { w.webContents.send('pointer', p); if (!w.isVisible()) w.showInactive(); } };
-  if (w.webContents.isLoading()) w.webContents.once('did-finish-load', send); else send();
-  clearTimeout(pointerHideTimer);
-  pointerHideTimer = setTimeout(() => { if (pointerWin && !pointerWin.isDestroyed()) pointerWin.hide(); }, 2000);
+  const d = displayById(p.displayId);
+  const px = Math.round(d.bounds.x + p.x * d.bounds.width - HAND_TIP.x);
+  const py = Math.round(d.bounds.y + p.y * d.bounds.height - HAND_TIP.y);
+  let h = handWins.get(p.id);
+  if (!h || h.win.isDestroyed()) {
+    h = { win: overlayWindow({ x: px, y: py, width: 240, height: 120 }, 'hand.html'), timer: null };
+    handWins.set(p.id, h);
+  } else {
+    h.win.setPosition(px, py);
+  }
+  sendWhenReady(h.win, 'pointer', p, true);
+  clearTimeout(h.timer);
+  h.timer = setTimeout(() => destroyHand(p.id), 1500);
+
+  // rastro (Shift): só aí usa uma janela do tamanho do monitor, destruída logo depois
+  if (p.drawing) {
+    if (!trailWin || trailWin.isDestroyed() || trailDisplay !== d.id) {
+      if (trailWin && !trailWin.isDestroyed()) trailWin.destroy();
+      trailWin = overlayWindow({ ...d.bounds }, 'pointer.html');
+      trailDisplay = d.id;
+    }
+    sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true }, true);
+    clearTimeout(trailTimer);
+    trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, 3000);
+  } else if (trailWin && !trailWin.isDestroyed()) {
+    sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true, drawing: false }, false);
+  }
 });
-ipcMain.on('pointer:hide', (_e, id) => {
-  if (pointerWin && !pointerWin.isDestroyed()) pointerWin.webContents.send('pointer-hide', id);
-});
+ipcMain.on('pointer:hide', (_e, id) => destroyHand(id));
 
 // ---- ícone na bandeja: status da sala e atalhos ----
 let tray = null;

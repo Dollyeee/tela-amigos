@@ -5,7 +5,7 @@ window.Helper = (() => {
   let nextId = 1;
   const pending = new Map(); // id -> { expect, resolve, timer }
   const queue = [];          // comandos enviados antes do canal existir
-  let onPcm = null, onVideo = null;
+  let onPcm = null, onVideo = null, onSys = null;
   const eventListeners = [];
 
   window.addEventListener('message', (e) => {
@@ -27,6 +27,7 @@ window.Helper = (() => {
     const m = e.data;
     if (m.t === 'pcm') { if (onPcm) onPcm(m.d); return; }
     if (m.t === 'video') { if (onVideo) onVideo(m.d); return; }
+    if (m.t === 'sys') { if (onSys) onSys(m.d); return; }
     if (m.t !== 'event') return;
     const msg = m.msg;
     if (msg.id != null && pending.has(msg.id)) settle(msg.id, msg);
@@ -74,6 +75,9 @@ window.Helper = (() => {
     diag: () => request({ cmd: 'video-diag' }, 'video-diag', 8000),
     gameWatch: (on) => request({ cmd: 'game-watch', on }, 'game-watch'),
     videoBitrate: (kbps) => send({ cmd: 'video-bitrate', kbps }),
+    sysStart: () => request({ cmd: 'sysaudio-start' }, 'sysaudio-started'),
+    sysStop: () => request({ cmd: 'sysaudio-stop' }, 'sysaudio-stopped'),
+    onSys: (cb) => { onSys = cb; },
     onPcm: (cb) => { onPcm = cb; },
     onVideo: (cb) => { onVideo = cb; },
     onEvent: (cb) => { eventListeners.push(cb); },

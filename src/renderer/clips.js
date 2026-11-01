@@ -6,9 +6,12 @@ window.Clips = (() => {
   const buffers = new Map();  // id -> Replay
 
   class Replay {
-    constructor(id, stream, name) {
+    // opts.compose(): { video, pos } da câmera para desenhar por cima (ou null)
+    // opts.audioTrack: áudio já misturado (transmissão + PC inteiro); opts.release() ao parar
+    constructor(id, stream, name, opts = {}) {
       this.id = id;
       this.name = name;
+      this.opts = opts;
       this.video = [];   // { chunk, meta }
       this.audio = [];   // { chunk, meta }
       this.videoConfig = null;
@@ -17,7 +20,27 @@ window.Clips = (() => {
       this.frames = 0;
       this.stopped = false;
       this.startVideo(stream);
-      this.startAudio(stream);
+      this.startAudio(opts.audioTrack ? new MediaStream([opts.audioTrack]) : stream);
+    }
+
+    // câmera do amigo por cima, na posição em que ela está na tela (bordas arredondadas)
+    drawCam(g, W, H) {
+      const comp = this.opts.compose && this.opts.compose();
+      if (!comp || !comp.video || comp.video.readyState < 2 || !comp.video.videoWidth) return;
+      const v = comp.video, p = comp.pos;
+      const cw = p.w * W, ch = (cw * 9) / 16, x = p.x * W, y = p.y * H;
+      // "cover": corta a câmera para caber em 16:9
+      const vr = v.videoWidth / v.videoHeight;
+      let sw = v.videoWidth, sh = v.videoHeight, sx = 0, sy = 0;
+      if (vr > 16 / 9) { sw = v.videoHeight * 16 / 9; sx = (v.videoWidth - sw) / 2; } else { sh = v.videoWidth * 9 / 16; sy = (v.videoHeight - sh) / 2; }
+      const r = Math.max(6, cw * 0.04);
+      g.save();
+      g.beginPath(); g.roundRect(x, y, cw, ch, r); g.clip();
+      g.drawImage(v, sx, sy, sw, sh, x, y, cw, ch);
+      g.restore();
+      g.lineWidth = Math.max(2, W / 640);
+      g.strokeStyle = 'rgba(255,255,255,.9)';
+      g.beginPath(); g.roundRect(x, y, cw, ch, r); g.stroke();
     }
 
     async startVideo(stream) {
@@ -51,11 +74,14 @@ window.Clips = (() => {
           if (key !== cfgKey) { cfgKey = key; await makeEncoder(frame.displayWidth, frame.displayHeight); }
           if (encoder.encodeQueueSize > 6) { frame.close(); continue; } // placa ocupada: pula um quadro
           let f = frame;
-          if (frame.displayWidth !== this.width || frame.displayHeight !== this.height) {
-            // reduz para o tamanho do clipe
+          const withCam = !!(this.opts.compose && this.opts.compose());
+          if (withCam || frame.displayWidth !== this.width || frame.displayHeight !== this.height) {
+            // desenha num canvas: reduz para o tamanho do clipe e/ou põe a câmera por cima
             const c = this.canvas || (this.canvas = new OffscreenCanvas(this.width, this.height));
             if (c.width !== this.width) { c.width = this.width; c.height = this.height; }
-            c.getContext('2d').drawImage(frame, 0, 0, this.width, this.height);
+            const g = c.getContext('2d');
+            g.drawImage(frame, 0, 0, this.width, this.height);
+            if (withCam) this.drawCam(g, this.width, this.height);
             f = new VideoFrame(c, { timestamp: frame.timestamp });
             frame.close();
           }
@@ -133,6 +159,7 @@ window.Clips = (() => {
 
     stop() {
       this.stopped = true;
+      try { this.opts.release && this.opts.release(); } catch {}
       try { this.vReader && this.vReader.cancel(); } catch {}
       try { this.aReader && this.aReader.cancel(); } catch {}
       try { this.vTrack && this.vTrack.stop(); } catch {}
@@ -140,10 +167,10 @@ window.Clips = (() => {
     }
   }
 
-  function toggle(id, stream, name) {
+  function toggle(id, stream, name, opts) {
     if (buffers.has(id)) { buffers.get(id).stop(); buffers.delete(id); return false; }
-    if (!stream || !stream.getVideoTracks().length) return false;
-    buffers.set(id, new Replay(id, stream, name));
+    if (!stream || !stream.getVideoTracks().length) { opts && opts.release && opts.release(); return false; }
+    buffers.set(id, new Replay(id, stream, name, opts));
     return true;
   }
 
