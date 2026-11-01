@@ -188,7 +188,10 @@ window.Clips = (() => {
       this.muxer = null;
       this.startedAt = Date.now();
       this.bytes = 0;
-      this.ready = window.native.recOpen(this.name).then((h) => { this.handle = h; });
+      this.ready = window.native.recOpen(this.name).then((h) => { this.handle = h; }, (e) => {
+        // não deu para criar o arquivo (pasta bloqueada, disco cheio...): para em vez de acumular na memória
+        this.failed = e; this.pending = []; this.stop();
+      });
       // o áudio tem até 3 s para aparecer; senão grava só o vídeo
       this.audioDeadline = performance.now() + 3000;
     }
@@ -201,7 +204,7 @@ window.Clips = (() => {
       this.feed('a', chunk, meta);
     }
     feed(kind, chunk, meta) {
-      if (this.closed) return;
+      if (this.closed || this.failed) return;
       if (!this.muxer) {
         this.pending.push({ kind, chunk, meta });
         const audioOk = !this.hasAudio || this.audioConfig || performance.now() > this.audioDeadline;
@@ -267,9 +270,16 @@ window.Clips = (() => {
     return file ? { file, seconds: (Date.now() - r.startedAt) / 1000, bytes: r.bytes } : null;
   }
   const recInfo = (id) => { const r = recordings.get(id); return r ? { seconds: (Date.now() - r.startedAt) / 1000, bytes: r.bytes } : null; };
+  // espera o arquivo abrir: devolve o erro, se não abriu
+  async function recReady(id) { const r = recordings.get(id); if (!r) return null; await r.ready; return r.failed || null; }
+  const recByHandle = (h) => { for (const [id, r] of recordings) if (r.handle === h) return id; return null; };
 
   function toggle(id, stream, name, opts) {
-    if (buffers.has(id)) { buffers.get(id).stop(); buffers.delete(id); return false; }
+    if (buffers.has(id)) {
+      buffers.get(id).stop(); buffers.delete(id);
+      try { opts && opts.release && opts.release(); } catch {} // o áudio pedido agora não vai ser usado
+      return false;
+    }
     if (!stream || !stream.getVideoTracks().length) { opts && opts.release && opts.release(); return false; }
     buffers.set(id, new Replay(id, stream, name, opts));
     return true;
@@ -294,5 +304,6 @@ window.Clips = (() => {
   return {
     toggle, build, save, stop, isOn: (id) => buffers.has(id), ids: () => [...buffers.keys()],
     startRecording, stopRecording, isRecording: (id) => recordings.has(id), recInfo, recordingIds: () => [...recordings.keys()],
+    recReady, recByHandle,
   };
 })();

@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 // um fechamento inesperado (userData/logs/tela-amigos.log, com rodízio em ~1 MB)
 const mainLog = [];
 let logFile = null;
+let logWrites = 0;
 function writeLogLine(line) {
   mainLog.push(line);
   if (mainLog.length > 400) mainLog.shift();
@@ -23,6 +24,7 @@ function writeLogLine(line) {
       try { if (fs.statSync(logFile).size > 1_000_000) fs.renameSync(logFile, `${logFile}.1`); } catch {}
     }
     fs.appendFileSync(logFile, line + '\n');
+    if (++logWrites % 500 === 0 && fs.statSync(logFile).size > 2_000_000) { fs.renameSync(logFile, `${logFile}.1`); }
   } catch {}
 }
 for (const level of ['log', 'warn', 'error']) {
@@ -82,6 +84,7 @@ function helperPath() {
 
 let helperHost = null;
 let quitting = false;
+let updateReady = false; // atualização baixada (instala ao fechar)
 let recoveredFrom = null; // motivo da última queda da interface (mostrado depois de recarregar)
 
 // processos auxiliares do Chromium (placa de vídeo, áudio...) que caem também ficam registrados
@@ -165,6 +168,12 @@ function createWindow() {
     },
   });
   win.removeMenu();
+  win.on('closed', () => {
+    for (const w of [...overlays]) { try { w.destroy(); } catch {} }
+    for (const id of [...handWins.keys()]) destroyHand(id);
+    if (trailWin && !trailWin.isDestroyed()) trailWin.destroy();
+    if (regionWin && !regionWin.isDestroyed()) regionWin.destroy();
+  });
   // a cada carregamento (inclusive recarga) a página ganha um canal novo com o helper
   win.webContents.on('did-finish-load', connectRendererToHelper);
   // a interface travou/fechou (falta de memória, placa de vídeo reiniciada...): registra e
@@ -190,7 +199,7 @@ function createWindow() {
         },
       };
     }
-    shell.openExternal(url);
+    if (/^https:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   win.webContents.on('did-create-window', (child) => {
@@ -298,7 +307,30 @@ ipcMain.handle('rooms:discover', () => new Promise((resolve) => {
   }, 1200);
 }));
 
-ipcMain.handle('host:start', async (_e, hostName) => {
+// O instalador de atualização fecha À FORÇA tudo que roda da pasta do app, inclusive o servidor
+// da sala. Antes de instalar, anota que a sala estava aberta; ao abrir de novo, ela é reaberta
+// sozinha (os amigos, que ficam tentando reconectar, voltam sozinhos).
+const roomFile = () => path.join(app.getPath('userData'), 'sala-aberta.json');
+let lastHostName = 'Sala';
+async function rememberRoomForUpdate() {
+  try {
+    if ((await roomStatus()).running) fs.writeFileSync(roomFile(), JSON.stringify({ hostName: lastHostName, at: Date.now() }));
+  } catch {}
+}
+async function restoreRoomAfterUpdate() {
+  try {
+    const j = JSON.parse(fs.readFileSync(roomFile(), 'utf8'));
+    fs.unlinkSync(roomFile());
+    if (Date.now() - j.at > 30 * 60 * 1000) return; // só logo depois da atualização
+    const r = await startRoomServer(j.hostName);
+    console.log(`sala reaberta depois da atualização: ${JSON.stringify(r)}`);
+  } catch {}
+}
+
+ipcMain.handle('host:start', (_e, hostName) => startRoomServer(hostName));
+async function startRoomServer(hostName) {
+  lastHostName = String(hostName || 'Sala').slice(0, 30);
+  try { fs.writeFileSync(path.join(app.getPath('userData'), 'sala-nome.txt'), lastHostName); } catch {}
   const st = await roomStatus();
   if (st.running) return { ok: true, reused: true };
   if (st.busy) return { ok: false, error: `A porta ${SIGNAL_PORT} está sendo usada por outro programa.` };
@@ -315,11 +347,12 @@ ipcMain.handle('host:start', async (_e, hostName) => {
     if ((await roomStatus(300)).running) return { ok: true };
   }
   return { ok: false, error: 'Não consegui abrir a sala (o firewall pode estar bloqueando).' };
-});
+}
 
 // Fecha a sala para todos (o "Sair" normal não fecha mais)
 ipcMain.handle('host:stop', () => new Promise((resolve) => {
-  const req = http.get({ host: '127.0.0.1', port: SIGNAL_PORT, path: '/shutdown', timeout: 1500 }, (res) => { res.resume(); resolve(true); });
+  const req = http.get({ host: '127.0.0.1', port: SIGNAL_PORT, path: '/shutdown', timeout: 1500, headers: { 'X-Tela-Amigos': '1' } },
+    (res) => { res.resume(); resolve(true); });
   req.on('timeout', () => { req.destroy(); resolve(false); });
   req.on('error', () => resolve(false));
 }));
@@ -329,11 +362,17 @@ let pendingSourceId = null;
 ipcMain.handle('capture:select', (_e, id) => { pendingSourceId = id; });
 function installDisplayMediaHandler() {
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
-    const types = pendingSourceId && pendingSourceId.startsWith('window') ? ['window'] : ['screen'];
-    const all = await desktopCapturer.getSources({ types, thumbnailSize: { width: 0, height: 0 } });
-    const src = all.find((s) => s.id === pendingSourceId) || all[0];
-    pendingSourceId = null;
-    callback(src ? { video: src } : {});
+    try {
+      const types = pendingSourceId && pendingSourceId.startsWith('window') ? ['window'] : ['screen'];
+      const all = await desktopCapturer.getSources({ types, thumbnailSize: { width: 0, height: 0 } });
+      const src = all.find((s) => s.id === pendingSourceId) || all[0];
+      callback(src ? { video: src } : {});
+    } catch (e) {
+      console.warn('getDisplayMedia:', e.message);
+      callback({}); // sem resposta a captura ficaria esperando para sempre
+    } finally {
+      pendingSourceId = null;
+    }
   });
 }
 
@@ -387,7 +426,7 @@ ipcMain.handle('video:target', (_e, { sourceId, displayId }) => {
 // retângulo. Devolve a área em frações do monitor (0..1), ou null se cancelar.
 let regionWin = null;
 ipcMain.handle('region:pick', (_e, displayId) => new Promise((resolve) => {
-  if (regionWin && !regionWin.isDestroyed()) regionWin.close();
+  if (regionWin && !regionWin.isDestroyed()) regionWin.destroy(); // a anterior resolve como "cancelou"
   const d = screen.getAllDisplays().find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
   const b = d.bounds;
   // a janela do app sai da frente se estiver nesse monitor (para ver o que tem embaixo)
@@ -395,24 +434,26 @@ ipcMain.handle('region:pick', (_e, displayId) => new Promise((resolve) => {
     screen.getDisplayMatching(win.getBounds()).id === d.id;
   if (appOnIt) win.minimize();
   let result = null;
-  regionWin = new BrowserWindow({
+  const w = new BrowserWindow({
     x: b.x, y: b.y, width: b.width, height: b.height, frame: false, transparent: true, resizable: false,
     movable: false, skipTaskbar: true, alwaysOnTop: true, fullscreenable: false, hasShadow: false, show: false,
     webPreferences: { preload: path.join(__dirname, 'region-preload.js'), contextIsolation: true, sandbox: true },
   });
-  regionWin.setAlwaysOnTop(true, 'screen-saver');
-  regionWin.setBounds(b); // garante o monitor inteiro mesmo com escalas diferentes
-  regionWin.loadFile(path.join(__dirname, 'renderer', 'region.html'));
-  regionWin.once('ready-to-show', () => { regionWin.show(); regionWin.focus(); });
-  const onDone = (_ev, rect) => {
+  regionWin = w;
+  w.setAlwaysOnTop(true, 'screen-saver');
+  w.setBounds(b); // garante o monitor inteiro mesmo com escalas diferentes
+  w.loadFile(path.join(__dirname, 'renderer', 'region.html'));
+  w.once('ready-to-show', () => { if (!w.isDestroyed()) { w.show(); w.focus(); } });
+  const onDone = (ev, rect) => {
+    if (w.isDestroyed() || ev.sender !== w.webContents) return; // resposta de outra janela
     const ok = rect && [rect.x, rect.y, rect.w, rect.h].every(Number.isFinite) && rect.w > 0.02 && rect.h > 0.02;
     result = ok ? { x: Math.max(0, rect.x), y: Math.max(0, rect.y), w: Math.min(1, rect.w), h: Math.min(1, rect.h) } : null;
-    if (regionWin && !regionWin.isDestroyed()) regionWin.close();
+    w.close();
   };
-  ipcMain.once('region:done', onDone);
-  regionWin.on('closed', () => {
+  ipcMain.on('region:done', onDone);
+  w.on('closed', () => {
     ipcMain.removeListener('region:done', onDone);
-    regionWin = null;
+    if (regionWin === w) regionWin = null;
     if (appOnIt && win && !win.isDestroyed()) { win.restore(); win.focus(); }
     resolve(result);
   });
@@ -437,7 +478,9 @@ function setupAutoUpdate() {
   let lastCheck = 0;
   let manual = false;    // o usuário clicou em "procurar": mostra também "já está atualizado"
   autoUpdater.on('checking-for-update', () => { if (manual) toRenderer('update:status', { state: 'checking' }); });
-  autoUpdater.on('update-available', (info) => toRenderer('update:status', { state: 'downloading', percent: 0, version: info.version }));
+  autoUpdater.on('update-available', (info) => {
+    if (info.version !== ready) toRenderer('update:status', { state: 'downloading', percent: 0, version: info.version });
+  });
   autoUpdater.on('update-not-available', () => {
     if (manual && !ready) toRenderer('update:status', { state: 'latest', version: app.getVersion() });
     manual = false;
@@ -445,6 +488,7 @@ function setupAutoUpdate() {
   autoUpdater.on('download-progress', (p) => toRenderer('update:status', { state: 'downloading', percent: Math.round(p.percent) }));
   autoUpdater.on('update-downloaded', (info) => {
     ready = info.version;
+    updateReady = true;
     manual = false;
     toRenderer('update:status', { state: 'ready', version: info.version });
   });
@@ -470,8 +514,19 @@ function setupAutoUpdate() {
   ipcMain.handle('update:check', () => check(true));
   ipcMain.handle('update:install', () => {
     quitting = true;
-    if (helperHost) helperHost.postMessage({ type: 'quit' }); // para a captura com calma
-    setTimeout(() => { forceExitSoon(10000); autoUpdater.quitAndInstall(true, true); }, 1500);
+    let done = false;
+    const install = async () => {
+      if (done) return;
+      done = true;
+      await rememberRoomForUpdate();
+      quitPrepared = true; // helper já parado e sala anotada: a saída não precisa esperar de novo
+      forceExitSoon(10000);
+      autoUpdater.quitAndInstall(true, true);
+    };
+    // só instala depois que o helper parar a captura com calma (o instalador fecha à força o que
+    // ainda estiver rodando da pasta do app)
+    if (helperHost) { helperHost.once('exit', install); helperHost.postMessage({ type: 'quit' }); setTimeout(install, 5000); }
+    else install();
   });
 }
 
@@ -816,6 +871,7 @@ function repairShortcuts() {
 if (gotLock) app.whenReady().then(() => {
   installDisplayMediaHandler();
   setTimeout(repairShortcuts, 5000);
+  if (!process.env.TELA_PROFILE) restoreRoomAfterUpdate();
   console.log(`Tela Amigos v${app.getVersion()} iniciando (Windows ${os.release()})`);
   // relatórios de travamento ficam só neste PC (nada é enviado)
   try { require('electron').crashReporter.start({ uploadToServer: false }); } catch {}
@@ -831,9 +887,25 @@ if (gotLock) app.whenReady().then(() => {
   setupAutoUpdate();
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', () => app.quit());
+
+// Saída (por qualquer caminho: fechar a janela, "Sair" na bandeja, atualização ao fechar):
+// antes, lembra a sala se uma atualização vai ser instalada e espera o helper encerrar a captura
+// com calma. Só depois o app termina de verdade (forceExitSoon garante que não trava).
+let quitPrepared = false;
+app.on('before-quit', (e) => {
   quitting = true;
-  if (helperHost) helperHost.postMessage({ type: 'quit' });
-  forceExitSoon();
-  app.quit();
+  if (quitPrepared) return;
+  quitPrepared = true;
+  e.preventDefault();
+  (async () => {
+    if (updateReady) await rememberRoomForUpdate();
+    if (helperHost) {
+      await new Promise((resolve) => {
+        helperHost.once('exit', resolve);
+        helperHost.postMessage({ type: 'quit' });
+        setTimeout(resolve, 4000);
+      });
+    }
+  })().finally(() => app.quit());
 });

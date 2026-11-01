@@ -41,7 +41,13 @@ static class Program
             {
                 foreach (var p in outQueue.GetConsumingEnumerable()) stdout.Write(p);
             }
-            catch { Environment.Exit(0); } // o app fechou o pipe
+            catch
+            {
+                // o app fechou o pipe. NÃO sair na hora: encerrar com a captura "process loopback"
+                // ligada derruba o serviço de áudio do Windows. Descarta o que chegar e deixa o Main
+                // ver o stdin fechado e parar tudo direito.
+                try { foreach (var _ in outQueue.GetConsumingEnumerable()) { } } catch { }
+            }
         }) { IsBackground = true, Name = "stdout" }.Start();
     }
 
@@ -82,6 +88,8 @@ static class Program
                         mixer = null;
                         var mode = root.GetProperty("mode").GetString();
                         int pid = root.TryGetProperty("pid", out var p) ? p.GetInt32() : 0;
+                        if (mode == "app" && AudioApps.TreeHasForbidden(pid, selfPid))
+                            throw new Exception("esse programa abre o Discord/este app: escolha \"Todo o som do PC, exceto Discord\"");
                         mixer = new Mixer(mode == "app" ? pid : 0, selfPid);
                         mixer.Start();
                         SendJson(new { id, type = "started" });
@@ -267,7 +275,7 @@ static class AudioApps
     /// Raízes (pid) de todos os processos com sessão de áudio em qualquer saída ativa.
     /// Remove raízes que estão dentro da árvore de outra (ex.: jogo aberto pela Steam), senão o
     /// mesmo áudio seria capturado duas vezes.
-    public static List<int> SessionRoots(Dictionary<int, ProcTree.Info> map)
+    public static List<int> SessionRoots(Dictionary<int, ProcTree.Info> map, int selfPid = 0)
     {
         var roots = new HashSet<int>();
         using var en = new MMDeviceEnumerator();
@@ -289,7 +297,19 @@ static class AudioApps
             }
             catch { /* dispositivo pode sumir durante a enumeração */ }
         }
+        // fora: raízes que CONTÊM o Discord ou este app (ex.: explorer.exe com sessão de áudio teria
+        // todos os apps abertos pelo menu Iniciar como filhos; capturá-lo levaria a voz do Discord)
+        var forbidden = map.Keys.Where(p => ProcTree.IsDiscord(p, map) || ProcTree.IsSelf(p, selfPid, map)).ToList();
+        roots.RemoveWhere(r => !ProcTree.IsDiscord(r, map) && forbidden.Any(f => f != r && ProcTree.Ancestry(f, map).Contains(r)));
         return roots.Where(r => !ProcTree.Ancestry(r, map).Skip(1).Any(roots.Contains)).ToList();
+    }
+
+    /// A árvore deste processo contém o Discord ou este app? (não pode ser capturada inteira)
+    public static bool TreeHasForbidden(int pid, int selfPid)
+    {
+        var map = ProcTree.Snapshot();
+        return map.Keys.Any(p => (ProcTree.IsDiscord(p, map) || ProcTree.IsSelf(p, selfPid, map)) && ProcTree.Ancestry(p, map).Contains(pid))
+            && !ProcTree.IsDiscord(pid, map);
     }
 
     /// Árvores que podem ser capturadas no modo "tudo exceto Discord":
@@ -331,7 +351,7 @@ static class AudioApps
     {
         var map = ProcTree.Snapshot();
         var result = new List<AudioApp>();
-        foreach (var pid in SessionRoots(map))
+        foreach (var pid in SessionRoots(map, selfPid))
         {
             if (ProcTree.IsSelf(pid, selfPid, map)) continue;
             result.Add(new AudioApp(pid, FriendlyName(pid, map), ProcTree.IsDiscord(pid, map), map.TryGetValue(pid, out var inf) ? inf.Exe : ""));
@@ -379,14 +399,27 @@ sealed class ProcessCapture : IDisposable
     public async Task StartAsync(ProcessLoopbackMode mode)
     {
         var client = await AudioClient.ActivateProcessLoopbackAsync((uint)Pid, mode);
-        var fmt = new WaveFormat(Program.SampleRate, 16, Program.Channels);
-        client.Initialize(AudioClientShareMode.Shared,
-            AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback | AudioClientStreamFlags.AutoConvertPcm,
-            200_000, 0, fmt, Guid.Empty);
         var ev = new AutoResetEvent(false);
-        client.SetEventHandle(ev.SafeWaitHandle.DangerousGetHandle());
-        var cap = client.AudioCaptureClient;
-        client.Start();
+        AudioCaptureClient cap;
+        try
+        {
+            // o mixer pode ter sido encerrado enquanto a ativação acontecia: não liga nada
+            if (!running) throw new OperationCanceledException();
+            var fmt = new WaveFormat(Program.SampleRate, 16, Program.Channels);
+            client.Initialize(AudioClientShareMode.Shared,
+                AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback | AudioClientStreamFlags.AutoConvertPcm,
+                200_000, 0, fmt, Guid.Empty);
+            client.SetEventHandle(ev.SafeWaitHandle.DangerousGetHandle());
+            cap = client.AudioCaptureClient;
+            client.Start();
+        }
+        catch
+        {
+            try { client.Stop(); } catch { }
+            try { client.Dispose(); } catch { }
+            ev.Dispose();
+            throw;
+        }
         thread = new Thread(() =>
         {
             try
@@ -466,6 +499,8 @@ sealed class Mixer : IDisposable
     readonly int selfPid;
     readonly Dictionary<int, ProcessCapture> captures = new();
     readonly object capLock = new();
+    readonly List<Task> starting = new();               // ativações em andamento (esperadas no Dispose)
+    readonly Dictionary<int, DateTime> failedUntil = new(); // pid que falhou: espera antes de tentar de novo
     volatile bool running = true;
     Thread? mixThread;
     Timer? scanTimer;
@@ -480,9 +515,15 @@ sealed class Mixer : IDisposable
         this.appPid = appPid; this.selfPid = selfPid; captureMode = mode; this.packetType = packetType;
     }
 
+    void StartCapture(int pid)
+    {
+        var t = AddCapture(pid);
+        lock (capLock) { starting.RemoveAll(x => x.IsCompleted); starting.Add(t); }
+    }
+
     public void Start()
     {
-        if (appPid != 0) _ = AddCapture(appPid);
+        if (appPid != 0) StartCapture(appPid);
         else scanTimer = new Timer(_ => Scan(), null, 0, 2000);
         mixThread = new Thread(MixLoop) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "mixer" };
         mixThread.Start();
@@ -495,21 +536,24 @@ sealed class Mixer : IDisposable
         {
             var map = ProcTree.Snapshot();
             var wanted = AudioApps.CaptureRoots(map, selfPid);
+            var gone = new List<ProcessCapture>();
             lock (capLock)
             {
                 // sai quem morreu ou passou a fazer parte da árvore de outro capturado
                 foreach (var pid in captures.Keys.ToList())
                     if (!map.ContainsKey(pid) || captures[pid].Dead || !wanted.Contains(pid))
                     {
-                        captures[pid].Dispose();
+                        gone.Add(captures[pid]);
                         captures.Remove(pid);
                     }
             }
+            // fora do lock: Dispose espera a thread da captura e travaria a mistura
+            foreach (var c in gone) c.Dispose();
             foreach (var pid in wanted)
             {
                 bool has;
-                lock (capLock) has = captures.ContainsKey(pid);
-                if (!has) _ = AddCapture(pid);
+                lock (capLock) has = captures.ContainsKey(pid) || (failedUntil.TryGetValue(pid, out var until) && until > DateTime.UtcNow);
+                if (!has) StartCapture(pid);
             }
         }
         catch (Exception ex) { try { Program.SendJson(new { type = "warn", message = ex.Message }); } catch { } }
@@ -530,9 +574,11 @@ sealed class Mixer : IDisposable
             lock (capLock) stillWanted = running && captures.TryGetValue(pid, out var c) && c == cap;
             if (!stillWanted) cap.Dispose(); // o mixer foi encerrado enquanto iniciava
         }
+        catch (OperationCanceledException) { cap.Dead = true; }
         catch (Exception ex)
         {
             cap.Dead = true;
+            lock (capLock) failedUntil[pid] = DateTime.UtcNow.AddSeconds(30); // não insiste a cada 2 s
             Program.SendJson(new { type = "warn", message = $"Falha ao capturar pid {pid}: {ex.Message}" });
         }
     }
@@ -612,11 +658,13 @@ sealed class Mixer : IDisposable
             using var done = new ManualResetEvent(false);
             if (scanTimer.Dispose(done)) done.WaitOne(3000); // espera um Scan em andamento terminar
         }
+        // ativações ainda em andamento terminam antes (senão ligariam a captura depois do fim)
+        Task[] pend;
+        lock (capLock) pend = starting.ToArray();
+        try { Task.WaitAll(pend, 3000); } catch { }
         mixThread?.Join(500);
-        lock (capLock)
-        {
-            foreach (var c in captures.Values) c.Dispose();
-            captures.Clear();
-        }
+        List<ProcessCapture> all;
+        lock (capLock) { all = captures.Values.ToList(); captures.Clear(); }
+        foreach (var c in all) c.Dispose();
     }
 }

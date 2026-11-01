@@ -87,20 +87,29 @@ window.HelperAudio = (() => {
 // Áudio dos clipes: som do PC inteiro (menos este app, vem do AudioHelper) misturado com o som
 // da transmissão do amigo. Cada clipe ganha a sua mistura; a captura do PC é uma só.
 window.ClipAudio = (() => {
-  let ctx = null, sysNode = null, users = 0, starting = null;
+  let ctx = null, sysNode = null, users = 0, starting = null, stopping = null;
 
+  // ctx/sysNode só ficam visíveis quando o início terminou (e somem se falhar)
   async function ensure() {
-    if (ctx) return;
     if (starting) return starting;
+    if (stopping) await stopping; // desligando: espera terminar antes de ligar de novo
+    if (ctx) return;
     starting = (async () => {
-      ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
-      const url = URL.createObjectURL(new Blob([window.HelperAudio.WORKLET], { type: 'text/javascript' }));
-      await ctx.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
-      sysNode = new AudioWorkletNode(ctx, 'pcm-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
-      window.Helper.onSys((ab) => { if (sysNode) sysNode.port.postMessage(ab, [ab]); });
-      const res = await window.Helper.sysStart();
-      if (res.type === 'error') console.warn('áudio do PC para clipes:', res.message);
+      const c = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+      try {
+        const url = URL.createObjectURL(new Blob([window.HelperAudio.WORKLET], { type: 'text/javascript' }));
+        await c.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        const node = new AudioWorkletNode(c, 'pcm-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+        window.Helper.onSys((ab) => { if (sysNode) sysNode.port.postMessage(ab, [ab]); });
+        ctx = c; sysNode = node;
+        const res = await window.Helper.sysStart();
+        if (res.type === 'error') console.warn('áudio do PC para clipes:', res.message);
+      } catch (e) {
+        ctx = null; sysNode = null;
+        try { await c.close(); } catch {}
+        throw e;
+      }
     })();
     try { await starting; } finally { starting = null; }
   }
@@ -127,12 +136,14 @@ window.ClipAudio = (() => {
     };
   }
 
-  async function shutdown() {
+  function shutdown() {
     users = 0;
-    try { await window.Helper.sysStop(); } catch {} // para a captura com calma
-    try { await ctx.close(); } catch {}
-    ctx = null;
-    sysNode = null;
+    const c = ctx;
+    ctx = null; sysNode = null; // um novo pedido já cria outro (depois de este terminar)
+    stopping = (async () => {
+      try { await window.Helper.sysStop(); } catch {} // para a captura com calma
+      try { if (c) await c.close(); } catch {}
+    })().finally(() => { stopping = null; });
   }
 
   return { mixFor };

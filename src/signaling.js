@@ -36,7 +36,9 @@ function createSignalingServer(port, { onShutdown } = {}) {
   const server = http.createServer((req, res) => {
     const addr = req.socket.remoteAddress;
     // o app de quem hospeda consulta / fecha a sala por aqui (só do próprio PC)
-    if (req.url === '/shutdown' && isLocal(addr)) {
+    // /shutdown: só do próprio PC E com o cabeçalho do app (uma página aberta no navegador não
+    // consegue mandar cabeçalho próprio sem permissão)
+    if (req.url === '/shutdown' && isLocal(addr) && req.headers['x-tela-amigos'] === '1') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
       for (const [, m] of members) send(m.ws, { type: 'room-closed' });
@@ -56,7 +58,9 @@ function createSignalingServer(port, { onShutdown } = {}) {
   const wss = new WebSocketServer({
     server,
     maxPayload: 64 * 1024,
-    verifyClient: (info) => allowedAddress(info.req.socket.remoteAddress),
+    // só o app (páginas file://) ou clientes sem Origin; um site aberto no navegador não entra
+    verifyClient: (info) => allowedAddress(info.req.socket.remoteAddress) &&
+      (!info.origin || info.origin === 'file://' || info.origin === 'null'),
   });
 
   wss.on('connection', (ws) => {

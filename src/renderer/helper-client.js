@@ -10,7 +10,14 @@ window.Helper = (() => {
 
   window.addEventListener('message', (e) => {
     if (!e.data || !e.data.__helperPort || !e.ports || !e.ports[0]) return;
+    const restarted = !!port;
     port = e.ports[0];
+    // canal novo com um já existente = o processo do helper caiu e voltou: o que estava
+    // pendente nunca vai ter resposta, e a captura (se havia) acabou
+    if (restarted) {
+      for (const id of [...pending.keys()]) settle(id, { type: 'error', message: 'o AudioHelper reiniciou' });
+      for (const f of eventListeners) { try { f({ type: 'helper-exit', code: 'reinício' }); } catch {} }
+    }
     port.onmessage = onMessage;
     for (const m of queue.splice(0)) port.postMessage(m);
   });
@@ -34,7 +41,7 @@ window.Helper = (() => {
     else if (msg.id == null) {
       // helper antigo (sem id): responde ao pedido mais antigo que espera este tipo
       for (const [id, p] of pending) {
-        if (p.expect === msg.type || msg.type === 'error') { settle(id, msg); break; }
+        if (p.expect === msg.type) { settle(id, msg); break; } // erro sem id é de outro comando
       }
     }
     if (msg.type === 'helper-exit' || msg.type === 'helper-error') {

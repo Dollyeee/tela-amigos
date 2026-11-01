@@ -267,6 +267,8 @@ function showLobbyError(msg) { $('#lobby-error').textContent = msg || ''; }
 // Conexão com a sala. Se cair depois de entrar, reconecta sozinho retomando o mesmo lugar
 // (o vídeo, que vai direto entre os PCs, continua enquanto isso).
 function connect(ip, isHost) {
+  clearTimeout(reconnectTimer); // tentativa antiga de reconectar (outra sala) não pode voltar
+  reconnectTimer = null;
   showLobbyError('');
   $('#btn-join').disabled = $('#btn-host').disabled = true;
   state.resume = null;
@@ -309,17 +311,26 @@ function openSocket(ip, reconnecting) {
       return;
     }
     if (state.leaving) return;
+    // fechou antes de entrar na sala (ex.: "Sala cheia"): volta ao lobby normal, sem reconectar
+    if ($('#room').classList.contains('hidden')) {
+      $('#btn-join').disabled = $('#btn-host').disabled = false;
+      setReconnectBanner(false);
+      return;
+    }
     scheduleReconnect(ip);
   };
 }
 
 let reconnectTry = 0;
+let reconnectTimer = null;
 function scheduleReconnect(ip) {
   clearInterval(heartbeat);
   reconnectTry++;
   setReconnectBanner(true);
   const wait = Math.min(5000, 500 * 2 ** Math.min(reconnectTry, 4));
-  setTimeout(() => {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
     if (state.leaving || $('#room').classList.contains('hidden')) return;
     openSocket(ip, true);
   }, wait);
@@ -351,7 +362,12 @@ function onSignal(msg) {
           for (const id of [...state.peers.keys()]) if (!ids.has(id)) removePeer(id);
         }
         for (const p of msg.peers) createPeer(p.id, p.name);
-        for (const peer of state.peers.values()) sendState(peer.id);
+        for (const peer of state.peers.values()) {
+          sendState(peer.id);
+          // o que eles mandaram enquanto eu estava fora se perdeu: pede o estado de novo
+          sendRelay(peer.id, { kind: 'state-req' });
+          unstickNegotiation(peer);
+        }
         toast('Reconectado à sala.');
         break;
       }
@@ -389,10 +405,24 @@ function onSignal(msg) {
   }
 }
 
+// Uma oferta enviada durante uma queda da sala se perdeu: a conexão ficaria presa em
+// "have-local-offer" e nunca mais renegociaria. Desfaz e negocia de novo.
+function unstickNegotiation(peer) {
+  if (peer.pc.signalingState !== 'have-local-offer') return;
+  peer.sigChain = peer.sigChain
+    .then(() => peer.pc.signalingState === 'have-local-offer' && peer.pc.setLocalDescription({ type: 'rollback' }))
+    .then(() => { peer.makingOffer = false; negotiate(peer); })
+    .catch((e) => console.warn('desfazer negociação', e));
+}
+
 function onRelay(from, data) {
   const peer = state.peers.get(from);
   if (!peer) return;
   switch (data.kind) {
+    case 'state-req': // o amigo reconectou à sala: reenvia meu estado e destrava a negociação
+      sendState(from);
+      unstickNegotiation(peer);
+      break;
     // em fila por amigo: uma descrição/candidato nunca é processado no meio de outro
     case 'sdp': peer.sigChain = peer.sigChain.then(() => handleDescription(peer, data.description)); break;
     case 'ice': peer.sigChain = peer.sigChain.then(() => handleCandidate(peer, data.candidate)); break;
@@ -826,7 +856,9 @@ function perPeerMbps(settingMbps, peer) {
   const want = Number(settingMbps) || 20;
   const share = Math.max(1, fullViewers());
   let v = Math.min(want, Math.floor(uploadBudgetMbps() / share));
-  if (peer && peer.upMbps) v = Math.min(v, Math.floor(peer.upMbps * 0.75));
+  // a medição pelo canal de dados costuma sair ABAIXO do real (é um piso): só limita quando ela
+  // mostra uma ligação claramente fraca com esse amigo
+  if (peer && peer.upMbps && peer.upMbps < 30) v = Math.min(v, Math.floor(peer.upMbps * 0.75));
   return Math.max(3, v);
 }
 // "Nativa direta": o mesmo vídeo vai para todos -> o menor teto entre quem assiste
@@ -853,6 +885,8 @@ async function outboundBytes(peer) {
 }
 async function autoMeasure(peer) {
   if (!state.peers.has(peer.id) || !peer.dc || peer.dc.readyState !== 'open') return;
+  // "Testar conexão" rodando: usa o mesmo canal; tenta de novo depois
+  if (state.netTesting) { setTimeout(() => scheduleAutoMeasure(peer), 15000); return; }
   const prev = autoMeasured.get(peer.name);
   if (prev && Date.now() - prev.at < 30 * 60 * 1000) { peer.upMbps = prev.up; updateAutoBudget(); return; }
   state.autoMeasuring = true;
@@ -879,7 +913,8 @@ async function autoMeasure(peer) {
 function updateAutoBudget() {
   const ups = [...state.peers.values()].map((p) => p.upMbps).filter(Boolean);
   if (ups.length) {
-    state.settings.uploadMbps = Math.round(Math.min(150, Math.max(15, Math.max(...ups) * 0.8)));
+    // nunca abaixo do padrão: medir pouco não prova que a rede é fraca (o teste é um piso)
+    state.settings.uploadMbps = Math.round(Math.min(150, Math.max(DEFAULT_UPLOAD_MBPS, Math.max(...ups) * 0.8)));
     saveSettings();
   }
   lastBudgetKey = ''; // reaplica os limites de todos
@@ -1038,7 +1073,9 @@ async function loadAudioOptions() {
     return;
   }
   add('all-except', 'Todo o som do PC, exceto Discord');
-  const res = await window.Helper.list();
+  // já deixa o valor certo (a lista de apps demora; compartilhar antes não pode virar "sem áudio")
+  sel.value = state.settings.audio === 'none' ? 'none' : 'all-except';
+  const res = await window.Helper.list().catch(() => ({}));
   if (res.type === 'list') {
     for (const a of res.apps) {
       if (a.discord) continue;
@@ -1305,14 +1342,16 @@ async function runNetTest() {
   const modal = $('#nettest-modal'), body = $('#nettest-body'), apply = $('#nettest-apply');
   modal.classList.remove('hidden');
   if (state.netTesting) return;
-  if (state.autoMeasuring) { body.innerHTML = '<p class="muted">Terminando a medição automática...</p>'; await measureChain; }
+  state.netTesting = true; // marca já: a medição automática não começa no meio
+  if (state.autoMeasuring) { body.innerHTML = '<p class="muted">Terminando a medição automática...</p>'; }
+  await measureChain.catch(() => {});
   apply.classList.add('hidden');
   const peers = [...state.peers.values()].filter((p) => p.dc && p.dc.readyState === 'open');
   if (!peers.length) {
     body.innerHTML = '<p class="muted">Ninguém conectado para testar (ou os amigos ainda estão numa versão antiga).</p>';
+    state.netTesting = false;
     return;
   }
-  state.netTesting = true;
   const results = [];
   const grade = (v, warn, bad, lower) => (lower ? (v < bad ? 'bad' : v < warn ? 'warn' : 'good') : (v > bad ? 'bad' : v > warn ? 'warn' : 'good'));
   const draw = (status) => {
@@ -2069,6 +2108,12 @@ async function toggleRecording(id) {
     } catch (e) { console.warn('áudio do PC na gravação', e); }
   }
   if (!window.Clips.startRecording(id, stream, tileName(id), opts)) { toast('Não deu para começar a gravação.', 'error'); return; }
+  const openErr = await window.Clips.recReady(id);
+  if (openErr) {
+    await window.Clips.stopRecording(id).catch(() => {});
+    toast(`Não deu para criar o arquivo da gravação: ${openErr.message || openErr}`, 'error');
+    return;
+  }
   if (tile) {
     tile.el.classList.add('recording');
     tile.recBadge = document.createElement('div');
@@ -2331,6 +2376,10 @@ async function stopShare() {
   if (!share) return;
   state.share = null;
   if (window.Clips.isRecording('me')) toggleRecording('me'); // parou de transmitir: salva a gravação
+  if (window.Clips.isOn('me')) { // replay da minha tela ficaria preso na trilha encerrada
+    window.Clips.stop('me');
+    if (meTile) meTile.el.classList.remove('replaying');
+  }
   share.video.onended = null;
   if (share.native) await window.NativeVideo.stop();
   else share.stream.getTracks().forEach((t) => t.stop());
@@ -2364,7 +2413,15 @@ function enterRoom() {
 
 async function leaveRoom() {
   state.leaving = true;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  endReadyCheck(null);
   await stopShare();
+  window.Helper.gameWatch(false).catch(() => {});
+  state.gaming = false;
+  // replay/gravação da câmera (minha tela sem compartilhar) também param
+  if (window.Clips.isRecording('me')) await toggleRecording('me');
+  if (window.Clips.isOn('me')) window.Clips.stop('me');
   if (state.camera) { state.camera.track.stop(); state.camera = null; $('#btn-camera').textContent = 'Câmera'; $('#btn-camera').classList.remove('active'); }
   for (const id of [...state.peers.keys()]) removePeer(id);
   // "Sair" não fecha mais a sala de quem hospeda (ela fica aberta em segundo plano)
@@ -2925,7 +2982,8 @@ function render() {
   // diz a cada amigo em que qualidade quero receber a tela dele
   for (const peer of state.peers.values()) {
     let level = 'full';
-    if (!peer.sharing || state.hidden.has(peer.id)) level = 'off';
+    // só câmera também precisa ser recebida (antes cortava a câmera de quem não compartilhava a tela)
+    if ((!peer.sharing && !peer.hasCam) || state.hidden.has(peer.id)) level = 'off';
     else if (focusMode && peer.id !== focus && state.pipId !== peer.id) level = 'thumb';
     if (peer.iWant !== level) {
       peer.iWant = level;
@@ -3117,6 +3175,13 @@ function initRoomUi() {
   $('#opt-leveler').onchange = () => localStorage.setItem('leveler', $('#opt-leveler').checked ? '1' : '0');
   $('#side-opts').open = localStorage.getItem('sideOpts') === '1';
   $('#side-opts').ontoggle = () => localStorage.setItem('sideOpts', $('#side-opts').open ? '1' : '0');
+  // falha ao gravar no disco (disco cheio...): para a gravação em vez de fingir que salvou
+  window.native.onRecError(({ handle, message }) => {
+    const id = window.Clips.recByHandle(handle);
+    if (id == null) return;
+    toast(`A gravação parou: ${message}. O que já foi gravado ficou salvo.`, 'error');
+    toggleRecording(id);
+  });
   $('#btn-ready').onclick = () => startReadyCheck();
   $('#ready-ok').onclick = () => markReady();
   $('#ready-cancel').onclick = () => {

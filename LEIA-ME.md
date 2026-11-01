@@ -25,6 +25,7 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **H.265 também na "Nativa direta"** quando todos decodificam; se entrar alguém sem suporte, a transmissão volta sozinha para H.264.
 - **HDR → SDR automático**: quem joga com HDR ligado aparece com as cores certas para quem assiste.
 - **Telas lisas enquanto joga**: com jogo pesado aberto, o app ganha prioridade alta na placa de vídeo e as telas dos amigos ganham ~0,15 s de buffer para não engasgar. Dica: limitar o FPS do jogo (ex.: 3 abaixo da taxa do monitor) deixa a placa com folga e ajuda muito.
+- **Sala sobrevive à atualização**: o instalador fecha tudo que roda da pasta do app; se a sua sala estava aberta, ela reabre sozinha quando o app volta (os amigos reconectam sozinhos).
 - **Registro de problemas**: tudo fica em `%APPDATA%\Tela Amigos\logs`; se a tela do app cair, ela recarrega sozinha.
 - **Ajustes** durante a transmissão: qualidade muda na hora; resolução/FPS/captura sem parar.
 - Layouts **Grade** e **Foco** (miniaturas embaixo). Duplo clique foca/desfoca; **Esc** sai da tela cheia e do foco;

@@ -128,8 +128,8 @@ sealed unsafe class VideoStreamer : IDisposable
         this.fps = fps;
         this.bitrateKbps = bitrateKbps;
         this.hevc = hevc;
-        Program.OnVideoDropped = () => { dropUntilKey = true; forceKey = true; };
     }
+    Action? droppedHandler;
 
     // ================================================================ início
     public void Start(VideoTarget target, int maxW, int maxH)
@@ -151,6 +151,9 @@ sealed unsafe class VideoStreamer : IDisposable
                 if (errors.Count == 0 && Environment.GetEnvironmentVariable("TELA_TEST_FAILFIRST") == "1")
                     throw new Exception("falha simulada (teste)");
                 StartWith(encIndex, adapter, target, maxW, maxH);
+                // só agora (o diagnóstico cria instâncias temporárias que não podem roubar o aviso)
+                droppedHandler = () => { dropUntilKey = true; forceKey = true; };
+                Program.OnVideoDropped = droppedHandler;
                 if (errors.Count > 0) Program.SendJson(new { type = "warn", message = $"Captura nativa funcionou na tentativa {errors.Count + 1}: {adapter.Desc}" });
                 return;
             }
@@ -395,8 +398,15 @@ sealed unsafe class VideoStreamer : IDisposable
         session = framePool.CreateCaptureSession(item);
         try { session.IsBorderRequired = false; } catch { }
         try { session.IsCursorCaptureEnabled = true; } catch { }
-        item.Closed += (_, _) => Program.SendJson(new { type = "video-ended" });
+        closedItem = item;
+        item.Closed += OnItemClosed;
         session.StartCapture();
+    }
+
+    GraphicsCaptureItem? closedItem;
+    void OnItemClosed(GraphicsCaptureItem sender, object _)
+    {
+        if (running && ReferenceEquals(sender, closedItem)) Program.SendJson(new { type = "video-ended" });
     }
 
     void OnFrameArrived(Direct3D11CaptureFramePool pool, object _)
@@ -466,7 +476,8 @@ sealed unsafe class VideoStreamer : IDisposable
     void CreateProcessor()
     {
         vpIn?.Dispose(); vp?.Dispose(); vpEnum?.Dispose();
-        foreach (var v in vpOut) v?.Dispose();
+        vpIn = null; vp = null; vpEnum = null;
+        for (int i = 0; i < vpOut.Length; i++) { vpOut[i]?.Dispose(); vpOut[i] = null!; }
         var content = new VideoProcessorContentDescription
         {
             InputFrameFormat = VideoFrameFormat.Progressive,
@@ -505,7 +516,7 @@ sealed unsafe class VideoStreamer : IDisposable
         // área escolhida (frações) -> pixels da captura
         var t = tgt;
         int sx = 0, sy = 0, cw = fullW, ch = fullH;
-        if (t != null && (t.CropW < 1 || t.CropH < 1))
+        if (t != null && (t.CropW < 1 || t.CropH < 1) && fullW >= 4 && fullH >= 4)
         {
             sx = Math.Clamp((int)Math.Round(t.CropX * fullW), 0, fullW - 2);
             sy = Math.Clamp((int)Math.Round(t.CropY * fullH), 0, fullH - 2);
@@ -513,7 +524,7 @@ sealed unsafe class VideoStreamer : IDisposable
             ch = Math.Clamp((int)Math.Round(t.CropH * fullH), 2, fullH - sy);
         }
         double s = Math.Min((double)Width / cw, (double)Height / ch);
-        int dw = Math.Min(Width, (int)Math.Round(cw * s)) & ~1, dh = Math.Min(Height, (int)Math.Round(ch * s)) & ~1;
+        int dw = Math.Max(2, Math.Min(Width, (int)Math.Round(cw * s)) & ~1), dh = Math.Max(2, Math.Min(Height, (int)Math.Round(ch * s)) & ~1);
         int dx = ((Width - dw) / 2) & ~1, dy = ((Height - dh) / 2) & ~1;
         videoContext.VideoProcessorSetStreamSourceRect(vp!, 0, true, new RawRect(sx, sy, sx + cw, sy + ch));
         videoContext.VideoProcessorSetStreamDestRect(vp!, 0, true, new RawRect(dx, dy, dx + dw, dy + dh));
@@ -691,6 +702,7 @@ sealed unsafe class VideoStreamer : IDisposable
         Program.SendJson(new { type = "video-error", message });
     }
 
+    int outputErrors;
     void DrainOutput()
     {
         var odb = new OutputDataBuffer { StreamID = 0 };
@@ -705,9 +717,14 @@ sealed unsafe class VideoStreamer : IDisposable
         if (res.Code == MF_E_TRANSFORM_NEED_MORE_INPUT) return;
         if (res.Failure)
         {
+            odb.Events?.Dispose();
+            try { odb.Sample?.Dispose(); } catch { }
+            if (Interlocked.Decrement(ref inFlight) < 0) Interlocked.Exchange(ref inFlight, 0);
+            if (++outputErrors >= 30) { Fail($"encoder falhando (0x{res.Code:X8})"); return; }
             Program.SendJson(new { type = "warn", message = $"ProcessOutput 0x{res.Code:X8}" });
             return;
         }
+        outputErrors = 0;
 
         using var sample = odb.Sample;
         odb.Events?.Dispose();
@@ -887,6 +904,7 @@ sealed unsafe class VideoStreamer : IDisposable
     public void Dispose()
     {
         running = false;
+        if (droppedHandler != null && Program.OnVideoDropped == droppedHandler) Program.OnVideoDropped = null;
         tickThread?.Join(1000);
         try
         {
@@ -904,6 +922,8 @@ sealed unsafe class VideoStreamer : IDisposable
     void ReleaseAll()
     {
         try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch { }
+        try { if (closedItem != null) closedItem.Closed -= OnItemClosed; } catch { }
+        closedItem = null;
         try { session?.Dispose(); } catch { }
         try { framePool?.Dispose(); } catch { }
         session = null!; framePool = null!; item = null!;
@@ -922,6 +942,7 @@ sealed unsafe class VideoStreamer : IDisposable
             vpIn = null; vp = null; vpEnum = null; latest = null; latestW = latestH = 0;
         }
         try { events?.Dispose(); } catch { }
+        try { using var sd = encoder?.QueryInterfaceOrNull<IMFShutdown>(); sd?.Shutdown(); } catch { }
         try { encoder?.Dispose(); } catch { }
         try { deviceManager?.Dispose(); } catch { }
         events = null!; encoder = null!; deviceManager = null!;

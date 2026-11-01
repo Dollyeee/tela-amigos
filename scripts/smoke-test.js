@@ -248,7 +248,7 @@ function runInstance(name, script) {
 
 async function main() {
   console.log('Teste automático: duas cópias do app conectando e transmitindo...');
-  const server = createSignalingServer(PORT);
+  const server = await createSignalingServer(PORT);
   const a = runInstance('a', scriptA);
   await new Promise((r) => setTimeout(r, 1500));
   const b = runInstance('b', scriptB);
