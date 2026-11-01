@@ -102,10 +102,33 @@ function readLogTail(n) {
   } catch { return mainLog.join('\n'); }
 }
 
+// AudioHelper.exe: o instalador da atualização fecha À FORÇA tudo o que roda da pasta do app, e
+// matar o helper no meio de uma captura de áudio derruba o serviço de áudio do Windows. Antes de
+// instalar, confere pelo pid que ele terminou.
+let audioHelperPid = 0;
+function audioHelperAlive() {
+  if (!audioHelperPid) return false;
+  try { process.kill(audioHelperPid, 0); return true; } catch { return false; }
+}
+async function waitAudioHelperGone(ms) {
+  const end = Date.now() + ms;
+  while (audioHelperAlive() && Date.now() < end) await new Promise((r) => setTimeout(r, 200));
+  return !audioHelperAlive();
+}
+function waitHelperHostExit(ms) {
+  if (!helperHost) return Promise.resolve();
+  return new Promise((resolve) => {
+    helperHost.once('exit', resolve);
+    helperHost.postMessage({ type: 'quit' });
+    setTimeout(resolve, ms);
+  });
+}
+
 function startHelperHost() {
   helperHost = utilityProcess.fork(path.join(__dirname, 'helper-host.js'), [], { serviceName: 'Tela Amigos Helper' });
   helperHost.postMessage({ type: 'config', exe: helperPath(), selfPid: process.pid });
   helperHost.on('message', (m) => {
+    if (m && m.type === 'helper-pid') audioHelperPid = m.pid || 0;
     if (m && m.type === 'boost-result') console.log(`prioridade de GPU (4=alta, 3=acima do normal, -1=falhou): ${JSON.stringify(m.result)}`);
   });
   helperHost.on('exit', (code) => {
@@ -114,7 +137,7 @@ function startHelperHost() {
     console.error(`processo do helper caiu (código ${code}); reiniciando`);
     boostedKey = ''; // o helper novo precisa reaplicar a prioridade de GPU
     // caiu: sobe de novo e reconecta a interface
-    setTimeout(() => { startHelperHost(); connectRendererToHelper(); }, 500);
+    setTimeout(() => { if (quitting) return; startHelperHost(); connectRendererToHelper(); }, 500);
     toRenderer('helper:restarted', null);
   });
 }
@@ -514,22 +537,27 @@ function setupAutoUpdate() {
     if (Date.now() - lastCheck > 2 * 60 * 1000) check();
   });
   ipcMain.handle('update:check', () => check(true));
-  ipcMain.handle('update:install', () => {
+  ipcMain.handle('update:install', async () => {
+    if (quitting) return;
     quitting = true;
-    let done = false;
-    const install = async () => {
-      if (done) return;
-      done = true;
-      await rememberRoomForUpdate();
-      quitPrepared = true; // helper já parado e sala anotada: a saída não precisa esperar de novo
-      forceExitSoon(10000);
-      autoUpdater.quitAndInstall(true, true);
-    };
     // só instala depois que o helper parar a captura com calma (o instalador fecha à força o que
     // ainda estiver rodando da pasta do app)
-    if (helperHost) { helperHost.once('exit', install); helperHost.postMessage({ type: 'quit' }); setTimeout(install, 5000); }
-    else install();
+    await waitHelperHostExit(13000);
+    if (!(await waitAudioHelperGone(3000))) {
+      // não terminou: NÃO roda o instalador agora (fica para a próxima vez que fechar o app)
+      console.warn(`AudioHelper (pid ${audioHelperPid}) não terminou: atualização adiada`);
+      autoUpdater.autoInstallOnAppQuit = false;
+      quitting = false;
+      if (!helperHost) { startHelperHost(); connectRendererToHelper(); }
+      toRenderer('update:status', { state: 'error', message: 'o auxiliar de captura ainda estava fechando. Tente "Reiniciar e atualizar" de novo em alguns segundos' });
+      return;
+    }
+    await rememberRoomForUpdate();
+    quitPrepared = true; // helper já parado e sala anotada: a saída não precisa esperar de novo
+    forceExitSoon(10000);
+    autoUpdater.quitAndInstall(true, true);
   });
+  updaterRef = autoUpdater;
 }
 
 ipcMain.handle('app:version', () => app.getVersion());
@@ -571,13 +599,15 @@ ipcMain.handle('clip:save', (_e, name, buffer) => {
   const dir = videosDir();
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) || 'tela';
-  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const stamp = fileStamp();
   const file = path.join(dir, `clipe-${safe}-${stamp}.mp4`);
   fs.writeFileSync(file, Buffer.from(buffer));
   if (!TEST_HIDDEN) shell.showItemInFolder(file);
   return file;
 });
 
+// data e hora com milissegundos: dois arquivos no mesmo segundo não se sobrescrevem
+function fileStamp() { return new Date().toISOString().replace(/[:T.]/g, '-').slice(0, 23); }
 // clipes e gravações: Vídeos\Tela Amigos (no teste automático, dentro do perfil de teste)
 const TEST_HIDDEN = !!process.env.TELA_TEST_HIDDEN;
 function videosDir() {
@@ -591,7 +621,7 @@ ipcMain.handle('shot:save', (_e, buffer, name) => {
   const dir = TEST_HIDDEN ? path.join(app.getPath('userData'), 'fotos') : path.join(app.getPath('pictures'), 'Tela Amigos');
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _()-]/gu, '').slice(0, 40) || 'tela';
-  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const stamp = fileStamp();
   const file = path.join(dir, `foto-${safe}-${stamp}.png`);
   fs.writeFileSync(file, buf);
   // no teste automático não mexe na área de transferência de quem está usando o PC
@@ -606,10 +636,10 @@ ipcMain.handle('rec:open', (_e, name) => {
   const dir = videosDir();
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || 'tela').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) || 'tela';
-  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  const stamp = fileStamp();
   const file = path.join(dir, `gravacao-${safe}-${stamp}.mp4`);
   const handle = ++recSeq;
-  recFiles.set(handle, { fd: fs.openSync(file, 'w'), file });
+  recFiles.set(handle, { fd: fs.openSync(file, 'wx'), file }); // 'wx': nunca apaga uma gravação existente
   console.log(`gravação iniciada: ${file}`);
   return handle;
 });
@@ -899,7 +929,7 @@ function forceExitSoon(ms = 6000) {
   if (exitWatchdog) return;
   exitWatchdog = setTimeout(() => { console.warn('encerramento travado: saindo à força'); app.exit(0); }, ms);
 }
-app.on('before-quit', () => forceExitSoon());
+app.on('before-quit', () => forceExitSoon(20000));
 
 // Uma cópia só: abrir de novo traz a janela existente para frente (duas cópias disputariam a
 // sala, a captura e o áudio). Perfis de teste (TELA_PROFILE) têm a própria trava.
@@ -913,6 +943,8 @@ if (!gotLock) {
       console.warn('abriram o app de novo e esta cópia estava sem janela: recriando');
       if (exitWatchdog) { clearTimeout(exitWatchdog); exitWatchdog = null; }
       quitting = false;
+      quitPrepared = false;
+      quitGen++;
       if (!helperHost) startHelperHost();
       createWindow();
       return;
@@ -968,19 +1000,24 @@ app.on('window-all-closed', () => app.quit());
 // antes, lembra a sala se uma atualização vai ser instalada e espera o helper encerrar a captura
 // com calma. Só depois o app termina de verdade (forceExitSoon garante que não trava).
 let quitPrepared = false;
+let quitGen = 0; // abrir o app de novo durante o fechamento cancela o fechamento pendente
+let updaterRef = null;
 app.on('before-quit', (e) => {
   quitting = true;
   if (quitPrepared) return;
   quitPrepared = true;
   e.preventDefault();
+  const gen = ++quitGen;
   (async () => {
     if (updateReady) await rememberRoomForUpdate();
-    if (helperHost) {
-      await new Promise((resolve) => {
-        helperHost.once('exit', resolve);
-        helperHost.postMessage({ type: 'quit' });
-        setTimeout(resolve, 4000);
-      });
+    await waitHelperHostExit(13000);
+    // atualização pronta mas o AudioHelper não terminou: não deixa o instalador matá-lo
+    if (updateReady && !(await waitAudioHelperGone(3000)) && updaterRef) {
+      console.warn(`AudioHelper (pid ${audioHelperPid}) não terminou: atualização fica para a próxima`);
+      updaterRef.autoInstallOnAppQuit = false;
     }
-  })().finally(() => app.quit());
+  })().finally(() => {
+    if (gen !== quitGen) return; // reabriram o app no meio: continua aberto
+    app.quit();
+  });
 });

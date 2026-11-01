@@ -78,8 +78,10 @@ window.NativeVideo = (() => {
       // o Chromium fez um keyframe (pedido de quem assiste): o nosso vem logo em seguida
       p.q.length = 0; p.waitingKey = true; item = null; reqKey();
     }
-    // fila crescendo sem keyframe na frente (o envio ficou para trás): recomeça num keyframe
-    if (item && p.q.length > 4 && !item.key) { p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1; item = null; reqKey(); }
+    // fila crescendo sem keyframe na frente (o envio ficou para trás): recomeça num keyframe.
+    // (mesmo limite da entrada: os quadros que chegam enquanto o keyframe espera o lugar dele
+    //  não podem disparar isso logo depois, senão vira um ciclo de keyframes)
+    if (item && p.q.length > 12 && !item.key) { p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1; item = null; reqKey(); }
     if (!item) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; }
     p.q.shift();
     frame.data = item.data;

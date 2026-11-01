@@ -92,10 +92,10 @@ window.Sdp = (() => {
   }
   // decodifico AV1 pela placa de vídeo? (por software, 1080p60 pesa demais com jogo aberto)
   let av1Hw = false;
-  if (window.VideoDecoder) {
-    VideoDecoder.isConfigSupported({ codec: 'av01.0.09M.08', codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: 'prefer-hardware' })
-      .then((r) => { av1Hw = !!(r && r.supported); }).catch(() => {});
-  }
+  const av1Ready = window.VideoDecoder
+    ? VideoDecoder.isConfigSupported({ codec: 'av01.0.09M.08', codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: 'prefer-hardware' })
+      .then((r) => { av1Hw = !!(r && r.supported); }).catch(() => {})
+    : Promise.resolve();
   const hasAV1Hw = () => av1Hw && !!(RTCRtpReceiver.getCapabilities('video') || { codecs: [] }).codecs.some((c) => /av1/i.test(c.mimeType));
   const hasH265 = () => !!(RTCRtpReceiver.getCapabilities('video') || { codecs: [] }).codecs.some((c) => /h265/i.test(c.mimeType));
 
@@ -112,5 +112,5 @@ window.Sdp = (() => {
     return h264.length ? [...h264, ...extras] : null;
   }
 
-  return { munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw };
+  return { munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw, av1Ready };
 })();

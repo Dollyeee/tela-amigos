@@ -515,6 +515,7 @@ function onRelay(from, data) {
         peer.share2 = !!data.share2 && !!data.sharing;
         peer.share2Name = String(data.share2Name || '').slice(0, 120);
         if (data.s2Id) peer.remoteS2Id = data.s2Id;
+        if (peer.share2 && !had2 && peer.tile) peer.tile.s2Hidden = false;
         if (peer.share2 && !had2) toast(`${peer.name} adicionou uma 2ª tela (aparece no canto da tela dele; ⇄ troca)`);
         if (!peer.share2 && peer.tile) peer.tile.swapped = false;
         peer.sourceName = data.sourceName || '';
@@ -808,6 +809,8 @@ async function handleCandidate(peer, candidate) {
 function removePeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
+  if (histOpen === id) closeHistory();
+  closeMenus();
   peer.pc.close();
   window.NativeVideo.remove(id);
   closeOverlay(id);
@@ -1087,7 +1090,7 @@ let sourceTab = 'screen';
 // esconde opções que não fazem efeito no tipo de captura escolhido
 function updateEngineFields() {
   const direct = $('#opt-engine').value === 'native-direct';
-  $('#opt-codec').closest('.field').classList.toggle('hidden', direct); // direto é sempre H.264
+  $('#opt-codec').closest('.field').classList.toggle('hidden', direct); // direta escolhe sozinha (AV1 > H.265 > H.264)
 }
 
 async function openShareModal(second = false) {
@@ -1170,7 +1173,7 @@ function renderSources() {
       renderSources();
       updateRegionUi();
     };
-    el.ondblclick = () => startShare();
+    el.ondblclick = () => startFromModal();
     box.appendChild(el);
   }
 }
@@ -1182,7 +1185,7 @@ function updateRegionUi() {
   $('#btn-region').classList.toggle('hidden', !isScreen);
   $('#btn-region-clear').classList.toggle('hidden', !(isScreen && src.crop));
   $('#btn-region').textContent = isScreen && src.crop ? 'Trocar área...' : 'Escolher área...';
-  $('#share-note').textContent = isScreen && src.crop
+  if (!state.pickSecond) $('#share-note').textContent = isScreen && src.crop
     ? `Só uma área: ${Math.round(src.crop.w * 100)}% × ${Math.round(src.crop.h * 100)}% da tela`
     : '';
 }
@@ -1226,7 +1229,7 @@ async function loadAudioOptions() {
   }
   const saved = state.settings.audio;
   sel.value = [...sel.options].some((o) => o.value === saved) ? saved : 'all-except';
-  $('#share-note').textContent = 'O som deste app (telas dos amigos) nunca é enviado de volta.';
+  if (!state.pickSecond) $('#share-note').textContent = 'O som deste app (telas dos amigos) nunca é enviado de volta.';
 }
 
 function readSettings() {
@@ -1242,11 +1245,18 @@ function readSettings() {
   return { ...s };
 }
 
+// botão/duplo clique do modal: tela principal ou 2ª tela (conforme o modal foi aberto)
+function startFromModal() {
+  if (!selectedSource) return;
+  if (state.pickSecond) startSecond(selectedSource);
+  else startShare();
+}
+
 // overrides: ex. { engine: 'chromium' } quando a captura nativa caiu várias vezes
 let shareBusy = false;
 async function startShare(overrides) {
   if (shareBusy || !selectedSource) return; // evita dois inícios ao mesmo tempo (duplo clique)
-  if (state.pickSecond && !$('#share-modal').classList.contains('hidden') && !(overrides && !(overrides instanceof Event))) { await startSecond(selectedSource); return; }
+
   shareBusy = true;
   try {
     await startShareInner(overrides && !(overrides instanceof Event) ? overrides : null);
@@ -1283,7 +1293,7 @@ async function startShareInner(overrides) {
       // direta: AV1 se eu e TODOS os amigos temos placa que decodifica AV1 (e a minha codifica);
       // senão H.265 se todos decodificam; senão H.264
       const peersNow = [...state.peers.values()];
-      const wantAv1 = direct && (settings.codec === 'auto' || settings.codec === 'AV1') && !settings.forceH264 && !settings.noAv1 &&
+      const wantAv1 = direct && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 &&
         !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && window.Sdp.hasAV1Hw() && peersNow.every((p) => p.av1);
       const wantHevc = direct && settings.codec !== 'H264' && !settings.forceH264 && window.Sdp.hasH265() &&
         peersNow.every((p) => p.h265);
@@ -2377,14 +2387,22 @@ async function healthLoop() {
   for (const peer of state.peers.values()) {
     if (!peer.sharing || !peer.tile || state.hidden.has(peer.id)) continue;
     let v = null, rtt = null;
+    // a tela principal dele (mesmo se aqui ela estiver no canto, trocada com a 2ª)
+    const mainTrack = peer.remoteStream.getVideoTracks()[0];
+    const mainId = mainTrack ? mainTrack.id : null;
     try {
       (await peer.pc.getStats()).forEach((r) => {
-        if (r.type === 'inbound-rtp' && r.kind === 'video' && (!v || (r.bytesReceived || 0) > (v.bytesReceived || 0))) v = r;
+        if (r.type !== 'inbound-rtp' || r.kind !== 'video') return;
+        if (mainId && r.trackIdentifier) { if (r.trackIdentifier === mainId) v = r; return; }
+        if (!v || (r.bytesReceived || 0) > (v.bytesReceived || 0)) v = r;
+      });
+      (await peer.pc.getStats()).forEach((r) => {
         if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
       });
     } catch { continue; }
     if (!v) continue;
-    const pq = peer.tile.video.getVideoPlaybackQuality ? peer.tile.video.getVideoPlaybackQuality() : null;
+    const shownVideo = peer.tile.swapped ? peer.tile.s2.video : peer.tile.video; // onde a 1ª tela está aparecendo
+    const pq = shownVideo.getVideoPlaybackQuality ? shownVideo.getVideoPlaybackQuality() : null;
     const prev = peer.qprev;
     peer.qprev = {
       t: performance.now(), lost: v.packetsLost || 0, recv: v.packetsReceived || 0, fz: v.freezeCount || 0,
@@ -2522,6 +2540,12 @@ async function restartDirectCodec(who, from = 'hevc') {
     selectedSource = state.share.source;
     await startShare({ engine: 'native-direct', noAv1: true, forceH264: from === 'hevc', autoDirect: state.share.autoDirect });
   } finally { restartingCodec = false; }
+  // alguém sem suporte entrou durante a troca: confere de novo
+  const sh = state.share;
+  if (sh && sh.direct) {
+    const bad = [...state.peers.values()].find((p) => (sh.codec === 'hevc' && !p.h265) || (sh.codec === 'av1' && !p.av1));
+    if (bad) restartDirectCodec(bad.name, sh.codec);
+  }
 }
 
 let switchingDirect = false;
@@ -2572,6 +2596,7 @@ async function stopShare() {
   }
   share.video.onended = null;
   stopSecond(true);
+  if (state.pickSecond) { state.pickSecond = false; $('#share-modal').classList.add('hidden'); $('#share-modal').classList.remove('second'); }
   if (share.native) await window.NativeVideo.stop();
   else share.stream.getTracks().forEach((t) => t.stop());
   if (share.audio) await window.HelperAudio.stop();
@@ -2627,6 +2652,11 @@ async function leaveRoom() {
     setTimeout(() => ws.close(), 200);
   }
   state.isHost = false;
+  closeHistory();
+  closeMenus();
+  state.hostIp = '';
+  lastTrayKey = '';
+  window.native.trayStatus({ room: '', people: [], sharing: false });
   if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
   state.ws = null;
   state.order = [];
@@ -2834,6 +2864,9 @@ function makeTile(id) {
   more.title = 'Mais opções';
   more.textContent = '⋯';
   more.onclick = (e) => { e.stopPropagation(); openMoreMenu(actions, more); };
+  // o "fechar ao clicar fora" não pode pegar o próprio botão (senão o clique reabre o menu)
+  more.onpointerdown = (e) => e.stopPropagation();
+  if (tile.resBtn) tile.resBtn.onpointerdown = (e) => e.stopPropagation();
   actions.append(more);
   actions.append(iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)));
   bar.append(grip, label, actions);
@@ -3432,6 +3465,7 @@ async function startSecond(src) {
     toast(`Não foi possível capturar a 2ª tela: ${e.message}`, 'error');
     return;
   }
+  if (!state.share) { stream.getTracks().forEach((t) => t.stop()); return; } // parou enquanto abria
   stopSecond(true);
   const video = stream.getVideoTracks()[0];
   video.contentHint = 'detail';
@@ -3943,7 +3977,7 @@ function initRoomUi() {
   $('#adj-apply').onclick = applyAdjust;
   $('#modal-close').onclick = () => $('#share-modal').classList.add('hidden');
   $('#share-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'share-modal') $('#share-modal').classList.add('hidden'); });
-  $('#btn-start-share').onclick = startShare;
+  $('#btn-start-share').onclick = startFromModal;
   $('#opt-bitrate').oninput = () => { $('#opt-bitrate-label').textContent = `${$('#opt-bitrate').value} Mbps`; };
   document.querySelectorAll('.tabs .seg').forEach((b) => {
     b.onclick = () => {
@@ -4038,6 +4072,8 @@ function initUpdates() {
   c.addEventListener('pointerleave', () => { histHover = null; drawHistory(); });
   new ResizeObserver(() => { if (histOpen != null) drawHistory(); }).observe(c);
 }
+
+window.Sdp.av1Ready.then(() => { if (window.Sdp.hasAV1Hw()) for (const p of state.peers.values()) sendState(p.id); });
 
 initLobby();
 initRoomUi();

@@ -633,6 +633,26 @@ sealed unsafe class VideoStreamer : IDisposable
             sequenceHeader = t.GetBlob(MT_MPEG_SEQUENCE_HEADER);
         }
         catch { sequenceHeader = null; }
+        // AV1: o MF pode entregar no formato "av1C" (4 bytes de cabeçalho + OBUs). Só usa se o
+        // que sobrar for mesmo um sequence header OBU válido; senão não injeta nada
+        av1SeqObus = null;
+        if (av1 && sequenceHeader != null)
+        {
+            var h = sequenceHeader.Length >= 4 && (sequenceHeader[0] & 0x80) != 0 ? sequenceHeader[4..] : sequenceHeader;
+            if (h.Length > 0 && HasObu(h, 1)) av1SeqObus = h;
+        }
+    }
+    byte[]? av1SeqObus;
+
+    // tamanho total do primeiro OBU se ele for do tipo pedido (cabeçalho + extensão + leb128 + dados); senão 0
+    static int ObuLength(ReadOnlySpan<byte> d, int obuType)
+    {
+        if (d.Length < 1 || ((d[0] >> 3) & 0xF) != obuType || (d[0] & 2) == 0) return 0;
+        int p = 1 + ((d[0] & 4) != 0 ? 1 : 0);
+        long size = 0; int shift = 0;
+        while (p < d.Length) { byte b = d[p++]; size |= (long)(b & 0x7F) << shift; shift += 7; if ((b & 0x80) == 0 || shift > 56) break; }
+        long total = p + size;
+        return total <= d.Length ? (int)total : 0;
     }
 
     static void Log(string m) => Console.Error.WriteLine("[video] " + m);
@@ -751,8 +771,7 @@ sealed unsafe class VideoStreamer : IDisposable
         {
             var data = new ReadOnlySpan<byte>((void*)ptr, len);
             // keyframe sem os parâmetros (SPS no H.264, VPS no H.265, sequence header no AV1): coloca na frente
-            byte[]? header = sequenceHeader;
-            if (av1 && header != null && header.Length > 4 && (header[0] & 0x80) != 0) header = header[4..]; // av1C -> OBUs
+            byte[]? header = av1 ? av1SeqObus : sequenceHeader;
             bool needHeader = key && header != null && !(av1 ? HasObu(data, 1) : hevc ? HasHevcNal(data, 32) : HasNal(data, 7));
             int total = 1 + 8 + (needHeader ? header!.Length : 0) + len;
             byte[] packet = new byte[total];
@@ -762,7 +781,7 @@ sealed unsafe class VideoStreamer : IDisposable
             if (needHeader)
             {
                 // AV1: o "temporal delimiter" (se houver) tem que continuar sendo o primeiro OBU
-                int td = av1 && len >= 2 && ((data[0] >> 3) & 0xF) == 2 ? 2 : 0;
+                int td = av1 ? ObuLength(data, 2) : 0;
                 data[..td].CopyTo(packet.AsSpan(off)); off += td;
                 header!.CopyTo(packet, off); off += header.Length;
                 data[td..].CopyTo(packet.AsSpan(off));
@@ -939,7 +958,7 @@ sealed unsafe class VideoStreamer : IDisposable
     {
         running = false;
         if (droppedHandler != null && Program.OnVideoDropped == droppedHandler) Program.OnVideoDropped = null;
-        tickThread?.Join(1000);
+        bool tickDone = tickThread == null || tickThread.Join(3000);
         try
         {
             encoder?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero);
@@ -948,7 +967,17 @@ sealed unsafe class VideoStreamer : IDisposable
             shutdown?.Shutdown();
         }
         catch { }
-        eventThread?.Join(1000);
+        bool eventDone = eventThread == null || eventThread.Join(3000);
+        if (!tickDone || !eventDone)
+        {
+            // uma thread ainda está presa numa chamada da placa (ex.: placa resetando): liberar
+            // agora faria ela usar objetos já destruídos e o helper cair (levando o áudio junto).
+            // Melhor vazar esses objetos do que derrubar o processo.
+            Log("threads do vídeo não pararam a tempo: objetos da placa não foram liberados");
+            try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch { }
+            try { session?.Dispose(); } catch { }
+            return;
+        }
         ReleaseAll();
     }
 

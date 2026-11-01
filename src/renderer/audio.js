@@ -93,6 +93,7 @@ window.ClipAudio = (() => {
   async function ensure() {
     if (starting) return starting;
     if (stopping) await stopping; // desligando: espera terminar antes de ligar de novo
+    if (starting) return starting; // outro pedido começou enquanto esperava
     if (ctx) return;
     starting = (async () => {
       const c = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });

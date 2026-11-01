@@ -96,7 +96,8 @@ window.Clips = (() => {
           f.close();
         }
       } catch (e) { console.warn('clipe', e); }
-      try { encoder && encoder.close(); } catch {}
+      // flush antes de fechar: close() joga fora o que ainda está na fila (fim da gravação)
+      if (encoder) { try { await encoder.flush(); } catch {} try { encoder.close(); } catch {} }
     }
 
     pushVideo(chunk, meta) {
@@ -140,7 +141,7 @@ window.Clips = (() => {
           data.close();
         }
       } catch (e) { console.warn('clipe (áudio)', e); }
-      try { encoder && encoder.close(); } catch {}
+      if (encoder) { try { await encoder.flush(); } catch {} try { encoder.close(); } catch {} }
     }
 
     // monta o MP4 com o que está guardado agora

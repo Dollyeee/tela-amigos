@@ -24,8 +24,11 @@ function ensure() {
   proc.stdin.on('error', () => {});
   proc.stdout.on('data', parse);
   if (lastBoost) sendBoost(); // helper novo: reaplica a prioridade de GPU
+  // o processo principal acompanha o pid: só instala atualização depois que ele sumir de verdade
+  process.parentPort.postMessage({ type: 'helper-pid', pid: proc.pid || 0 });
   proc.on('exit', (code) => {
     proc = null;
+    process.parentPort.postMessage({ type: 'helper-pid', pid: 0 });
     post({ t: 'event', msg: { type: 'helper-exit', code } });
   });
   return true;
@@ -90,6 +93,8 @@ process.parentPort.on('message', (e) => {
       proc.stdin.end();
     } catch {}
     proc.once('exit', () => process.exit(0));
-    setTimeout(() => process.exit(0), 3000); // sai mesmo assim; o helper termina ao ver o stdin fechado
+    // sai mesmo assim depois de um tempo (o helper termina sozinho ao ver o stdin fechado);
+    // o processo principal confere pelo pid antes de deixar o instalador rodar
+    setTimeout(() => process.exit(0), 12000);
   }
 });
