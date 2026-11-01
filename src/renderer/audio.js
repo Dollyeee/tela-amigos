@@ -47,7 +47,7 @@ window.HelperAudio = (() => {
   let ctx = null;
   let node = null;
 
-  async function start(mode, pid) {
+  async function start(mode, pid, device) {
     await stop();
     ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
     const url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }));
@@ -64,7 +64,7 @@ window.HelperAudio = (() => {
       if (node) node.port.postMessage(ab, [ab]);
     });
 
-    const res = await window.Helper.audioStart(mode, pid);
+    const res = await window.Helper.audioStart(mode, pid, device);
     if (res.type === 'error') {
       await stop();
       throw new Error(res.message);

@@ -81,7 +81,7 @@ static class Program
                 switch (cmd)
                 {
                     case "list":
-                        SendJson(new { id, type = "list", apps = AudioApps.List(selfPid) });
+                        SendJson(new { id, type = "list", apps = AudioApps.List(selfPid), devices = AudioApps.Devices(selfPid) });
                         break;
                     case "start":
                         mixer?.Dispose();
@@ -90,7 +90,11 @@ static class Program
                         int pid = root.TryGetProperty("pid", out var p) ? p.GetInt32() : 0;
                         if (mode == "app" && AudioApps.TreeHasForbidden(pid, selfPid))
                             throw new Exception("esse programa abre o Discord/este app: escolha \"Todo o som do PC, exceto Discord\"");
-                        mixer = new Mixer(mode == "app" ? pid : 0, selfPid);
+                        string? devId = mode == "device" && root.TryGetProperty("device", out var dv) ? dv.GetString() : null;
+                        if (mode == "device" && string.IsNullOrEmpty(devId)) throw new Exception("saída de som não informada");
+                        mixer = devId != null
+                            ? new Mixer(0, selfPid, deviceId: devId)
+                            : new Mixer(mode == "app" ? pid : 0, selfPid);
                         mixer.Start();
                         SendJson(new { id, type = "started" });
                         break;
@@ -347,6 +351,41 @@ static class AudioApps
         return safe.Where(r => !ProcTree.Ancestry(r, map).Skip(1).Any(safe.Contains)).ToHashSet();
     }
 
+    /// Saídas de som ativas (alto-falante, fone, canais virtuais do Sonar/Voicemeeter...).
+    /// self = este app já tocou som nela (capturar essa saída mandaria os amigos de volta: eco)
+    public static List<object> Devices(int selfPid)
+    {
+        var res = new List<object>();
+        var map = ProcTree.Snapshot();
+        using var en = new MMDeviceEnumerator();
+        string defId = "";
+        try { defId = en.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID; } catch { }
+        foreach (var dev in en.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        {
+            try
+            {
+                bool self = false;
+                try
+                {
+                    var mgr = dev.AudioSessionManager;
+                    mgr.RefreshSessions();
+                    var ss = mgr.Sessions;
+                    for (int i = 0; i < ss.Count; i++)
+                    {
+                        var s = ss[i];
+                        if (s.IsSystemSoundsSession) continue;
+                        int pid = (int)s.GetProcessID;
+                        if (pid != 0 && map.ContainsKey(pid) && ProcTree.IsSelf(pid, selfPid, map)) self = true;
+                    }
+                }
+                catch { }
+                res.Add(new { id = dev.ID, name = dev.FriendlyName, isDefault = dev.ID == defId, self });
+            }
+            catch { /* dispositivo sumiu durante a enumeração */ }
+        }
+        return res;
+    }
+
     public static List<AudioApp> List(int selfPid)
     {
         var map = ProcTree.Snapshot();
@@ -390,15 +429,28 @@ sealed class ProcessCapture : IDisposable
     public int Buffered => Volatile.Read(ref buffered);
 
     public readonly string Exe; // nome do .exe (volume do mixer)
+    readonly string? deviceId;  // captura uma saída de som inteira (loopback do dispositivo)
     public ProcessCapture(int pid)
     {
         Pid = pid;
         try { using var p = Process.GetProcessById(pid); Exe = p.ProcessName + ".exe"; } catch { Exe = ""; }
     }
+    public ProcessCapture(string deviceId)
+    {
+        Pid = -1;
+        Exe = "";
+        this.deviceId = deviceId;
+    }
 
     public async Task StartAsync(ProcessLoopbackMode mode)
     {
-        var client = await AudioClient.ActivateProcessLoopbackAsync((uint)Pid, mode);
+        AudioClient client;
+        if (deviceId != null)
+        {
+            using var en = new MMDeviceEnumerator();
+            client = en.GetDevice(deviceId).AudioClient;
+        }
+        else client = await AudioClient.ActivateProcessLoopbackAsync((uint)Pid, mode);
         var ev = new AutoResetEvent(false);
         AudioCaptureClient cap;
         try
@@ -408,7 +460,7 @@ sealed class ProcessCapture : IDisposable
             var fmt = new WaveFormat(Program.SampleRate, 16, Program.Channels);
             client.Initialize(AudioClientShareMode.Shared,
                 AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback | AudioClientStreamFlags.AutoConvertPcm,
-                200_000, 0, fmt, Guid.Empty);
+                deviceId != null ? 2_000_000 : 200_000, 0, fmt, Guid.Empty); // saída inteira: buffer maior (o aviso por evento pode não vir)
             client.SetEventHandle(ev.SafeWaitHandle.DangerousGetHandle());
             cap = client.AudioCaptureClient;
             client.Start();
@@ -426,7 +478,7 @@ sealed class ProcessCapture : IDisposable
             {
                 while (running)
                 {
-                    ev.WaitOne(100);
+                    ev.WaitOne(deviceId != null ? 10 : 100);
                     while (running && cap.GetNextPacketSize() > 0)
                     {
                         var ptr = cap.GetBuffer(out int frames, out var flags);
@@ -507,23 +559,26 @@ sealed class Mixer : IDisposable
 
     readonly ProcessLoopbackMode captureMode;
     readonly byte packetType;
+    readonly string? deviceId; // modo "uma saída de som" (Sonar/Voicemeeter: o canal do jogo)
 
     /// mode Include + appPid: só aquele app; appPid 0: tudo exceto Discord (várias capturas);
     /// mode Exclude + appPid: o PC inteiro menos aquela árvore (usado nos clipes, pacote tipo 4)
-    public Mixer(int appPid, int selfPid, ProcessLoopbackMode mode = ProcessLoopbackMode.IncludeTargetProcessTree, byte packetType = 2)
+    public Mixer(int appPid, int selfPid, ProcessLoopbackMode mode = ProcessLoopbackMode.IncludeTargetProcessTree, byte packetType = 2, string? deviceId = null)
     {
-        this.appPid = appPid; this.selfPid = selfPid; captureMode = mode; this.packetType = packetType;
+        this.appPid = appPid; this.selfPid = selfPid; captureMode = mode; this.packetType = packetType; this.deviceId = deviceId;
     }
 
-    void StartCapture(int pid)
+    void StartCapture(int pid) => StartCapture(new ProcessCapture(pid));
+    void StartCapture(ProcessCapture cap)
     {
-        var t = AddCapture(pid);
+        var t = AddCapture(cap);
         lock (capLock) { starting.RemoveAll(x => x.IsCompleted); starting.Add(t); }
     }
 
     public void Start()
     {
-        if (appPid != 0) StartCapture(appPid);
+        if (deviceId != null) scanTimer = new Timer(_ => CheckDevice(), null, 0, 2000);
+        else if (appPid != 0) StartCapture(appPid);
         else scanTimer = new Timer(_ => Scan(), null, 0, 2000);
         mixThread = new Thread(MixLoop) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "mixer" };
         mixThread.Start();
@@ -559,9 +614,22 @@ sealed class Mixer : IDisposable
         catch (Exception ex) { try { Program.SendJson(new { type = "warn", message = ex.Message }); } catch { } }
     }
 
-    async Task AddCapture(int pid)
+    // saída de som: liga e religa se cair (fone desconectado e conectado de novo, etc.)
+    void CheckDevice()
     {
-        var cap = new ProcessCapture(pid);
+        if (!running) return;
+        bool need;
+        lock (capLock)
+        {
+            if (captures.TryGetValue(-1, out var c) && c.Dead) { captures.Remove(-1); c.Dispose(); }
+            need = !captures.ContainsKey(-1) && !(failedUntil.TryGetValue(-1, out var until) && until > DateTime.UtcNow);
+        }
+        if (need) StartCapture(new ProcessCapture(deviceId!));
+    }
+
+    async Task AddCapture(ProcessCapture cap)
+    {
+        int pid = cap.Pid;
         lock (capLock)
         {
             if (!running || captures.ContainsKey(pid)) return;
@@ -579,7 +647,7 @@ sealed class Mixer : IDisposable
         {
             cap.Dead = true;
             lock (capLock) failedUntil[pid] = DateTime.UtcNow.AddSeconds(30); // não insiste a cada 2 s
-            Program.SendJson(new { type = "warn", message = $"Falha ao capturar o som de {(cap.Exe.Length > 0 ? cap.Exe : "?")} (pid {pid}): {ex.Message}" });
+            Program.SendJson(new { type = "warn", message = pid == -1 ? $"Falha ao capturar a saída de som escolhida: {ex.Message}" : $"Falha ao capturar o som de {(cap.Exe.Length > 0 ? cap.Exe : "?")} (pid {pid}): {ex.Message}" });
         }
     }
 

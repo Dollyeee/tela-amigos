@@ -69,7 +69,7 @@ window.Helper = (() => {
 
   return {
     list: () => request({ cmd: 'list' }, 'list'),
-    audioStart: (mode, pid) => request({ cmd: 'start', mode, pid }, 'started'),
+    audioStart: (mode, pid, device) => request({ cmd: 'start', mode, pid, device }, 'started'),
     audioGain: (exe, gain) => send({ cmd: 'audio-gain', exe, gain }),
     mediaKey: (key) => send({ cmd: 'media-key', key }),
     mixerApps: () => request({ cmd: 'mixer-apps' }, 'mixer-apps', 5000),

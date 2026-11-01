@@ -125,6 +125,7 @@ async function buildRendererDiag() {
     else {
       lines.push(`helper respondeu em ${ms} ms · opção de som="${state.settings.audio}" · enviando som=${!!(state.share && state.share.audio)}`);
       lines.push(`programas com som aberto: ${(l.apps || []).map((a) => `${a.name} [${a.exe} pid ${a.pid}${a.discord ? ' DISCORD' : ''}]`).join(' · ') || 'nenhum'}`);
+      lines.push(`saídas de som: ${(l.devices || []).map((d) => `${d.name}${d.isDefault ? ' (padrão)' : ''}${d.self ? ' [o app toca aqui]' : ''}`).join(' · ') || '?'}`);
     }
     if (state.share && state.share.audio) {
       const m = await window.Helper.mixerApps();
@@ -1246,15 +1247,36 @@ async function loadAudioOptions() {
   // já deixa o valor certo (a lista de apps demora; compartilhar antes não pode virar "sem áudio")
   sel.value = state.settings.audio === 'none' ? 'none' : 'all-except';
   const res = await window.Helper.list().catch(() => ({}));
+  state.audioDevices = [];
   if (res.type === 'list') {
     for (const a of res.apps) {
       if (a.discord) continue;
       add(`app:${a.pid}`, `Só: ${a.name}`);
     }
+    // saídas de som inteiras: Sonar/Voicemeeter têm um canal só do jogo (ex.: "Sonar - Gaming")
+    state.audioDevices = res.devices || [];
+    for (const d of state.audioDevices) add(`dev:${d.id}`, `Saída: ${d.name}${d.isDefault ? ' (padrão)' : ''}`);
   }
   const saved = state.settings.audio;
   sel.value = [...sel.options].some((o) => o.value === saved) ? saved : 'all-except';
-  if (!state.pickSecond) $('#share-note').textContent = 'O som deste app (telas dos amigos) nunca é enviado de volta.';
+  sel.onchange = updateAudioNote;
+  updateAudioNote();
+}
+
+// aviso embaixo das opções: capturar uma saída onde o próprio app toca = amigos ouvem eco
+function updateAudioNote() {
+  if (state.pickSecond) return;
+  const v = $('#opt-audio').value;
+  const dev = v.startsWith('dev:') ? (state.audioDevices || []).find((d) => `dev:${d.id}` === v) : null;
+  const note = $('#share-note');
+  if (dev && (dev.self || dev.isDefault)) {
+    note.textContent = `Atenção: o som deste app (telas dos amigos) ${dev.self ? 'toca' : 'pode tocar'} em "${dev.name}" e voltaria para eles como eco. ` +
+      'No Sonar/Voicemeeter, mande o Tela Amigos para outro canal (ex.: Chat ou Media) e deixe só o jogo nessa saída.';
+  } else if (dev) {
+    note.textContent = `Vai todo o som que toca em "${dev.name}" (ex.: o canal de jogo do Sonar/Voicemeeter).`;
+  } else {
+    note.textContent = 'O som deste app (telas dos amigos) nunca é enviado de volta.';
+  }
 }
 
 function readSettings() {
@@ -1382,10 +1404,11 @@ async function startShareInner(overrides) {
   if (settings.audio !== 'none') {
     try {
       if (state.share && state.share.audio) await window.HelperAudio.stop();
-      const [mode, pid] = settings.audio.startsWith('app:')
-        ? ['app', Number(settings.audio.slice(4))]
-        : ['all-except', 0];
-      audio = await window.HelperAudio.start(mode, pid);
+      const [mode, pid, device] = settings.audio.startsWith('app:')
+        ? ['app', Number(settings.audio.slice(4)), undefined]
+        : settings.audio.startsWith('dev:') ? ['device', 0, settings.audio.slice(4)]
+        : ['all-except', 0, undefined];
+      audio = await window.HelperAudio.start(mode, pid, device);
       sendStoredGains(); // volumes do mixer guardados
     } catch (e) {
       console.warn('áudio da transmissão:', e.message);
@@ -2638,7 +2661,10 @@ function onHelperEvent(msg) {
   }
   if (msg.type === 'boost') console.log(`prioridade de GPU (pid: nível 4=alta, 3=acima do normal): ${safeJson(msg.result)}`);
   if (msg.type === 'helper-exit') console.warn(`AudioHelper fechou (código ${msg.code})`);
-  if (msg.type === 'warn') console.warn(`AudioHelper: ${msg.message}`); // ex.: falha ao capturar o som de um jogo
+  if (msg.type === 'warn') {
+    console.warn(`AudioHelper: ${msg.message}`); // ex.: falha ao capturar o som de um jogo
+    if (/saída de som escolhida/.test(msg.message) && state.share && state.share.audio) toast(`Som: ${msg.message}`, 'error');
+  }
   if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
   }
