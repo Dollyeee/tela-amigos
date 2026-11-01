@@ -60,13 +60,11 @@ window.HelperAudio = (() => {
     dest.channelCount = 2;
     node.connect(dest);
 
-    window.native.onAudioPcm((buf) => {
-      if (!node) return;
-      const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-      node.port.postMessage(ab, [ab]);
+    window.Helper.onPcm((ab) => {
+      if (node) node.port.postMessage(ab, [ab]);
     });
 
-    const res = await window.native.audioStart(mode, pid);
+    const res = await window.Helper.audioStart(mode, pid);
     if (res.type === 'error') {
       await stop();
       throw new Error(res.message);
@@ -76,7 +74,7 @@ window.HelperAudio = (() => {
 
   async function stop() {
     if (!ctx) return;
-    try { await window.native.audioStop(); } catch {}
+    try { await window.Helper.audioStop(); } catch {}
     try { node.disconnect(); } catch {}
     try { await ctx.close(); } catch {}
     ctx = null;

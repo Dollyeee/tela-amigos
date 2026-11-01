@@ -114,23 +114,22 @@ sealed unsafe class VideoStreamer : IDisposable
     // ================================================================ início
     public void Start(VideoTarget target, int maxW, int maxH)
     {
-        MediaFactory.MFStartup(false).CheckError();
-        Log("mfstartup ok");
-        var (activate, luid) = FindHardwareEncoder();
-        Log($"encoder {EncoderName} luid {luid}");
-        CreateDevice(luid);
-        Log("device ok");
-        StartCapture(target);
-        Log($"capture ok {poolSize.Width}x{poolSize.Height}");
+        // cada etapa com nome: "erro não especificado" sozinho não ajuda a descobrir o problema
+        Step("iniciar Media Foundation", () => MediaFactory.MFStartup(false).CheckError());
+        IMFActivate activate = null!;
+        long luid = 0;
+        Step("procurar encoder H.264 da placa de vídeo", () => (activate, luid) = FindHardwareEncoder());
+        Step("abrir a placa de vídeo", () => CreateDevice(luid));
+        Step("iniciar a captura da tela/janela", () => StartCapture(target));
 
         // tamanho de saída: cabe em maxW x maxH mantendo proporção, sempre par
         double scale = Math.Min(1.0, Math.Min((double)maxW / poolSize.Width, (double)maxH / poolSize.Height));
         Width = Math.Max(64, (int)(poolSize.Width * scale) & ~1);
         Height = Math.Max(64, (int)(poolSize.Height * scale) & ~1);
 
-        CreateOutputTextures();
-        CreateEncoder(activate);
-        Log("encoder ok");
+        Step("criar texturas de conversão", CreateOutputTextures);
+        Step("configurar o encoder da placa de vídeo (se estiver no limite de sessões de codificação, " +
+             "feche OBS, gravação da NVIDIA ou outros apps que gravam a tela)", () => CreateEncoder(activate));
 
         running = true;
         eventThread = new Thread(EventLoop) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "enc-events" };
@@ -380,6 +379,12 @@ sealed unsafe class VideoStreamer : IDisposable
     }
 
     static void Log(string m) => Console.Error.WriteLine("[video] " + m);
+
+    static void Step(string what, Action action)
+    {
+        try { action(); }
+        catch (Exception ex) { throw new Exception($"Falha ao {what}: {ex.Message}", ex); }
+    }
 
     public void SetBitrate(int kbps)
     {

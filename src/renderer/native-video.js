@@ -86,7 +86,7 @@ window.NativeVideo = (() => {
     const url = URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' }));
     worker = new Worker(url);
     worker.onmessage = (e) => {
-      if (e.data.type === 'key') window.native.videoKey();
+      if (e.data.type === 'key') window.Helper.videoKey();
       else if (e.data.type === 'stats') window.NativeVideo.lastStats = e.data.peers;
     };
     return worker;
@@ -105,7 +105,7 @@ window.NativeVideo = (() => {
   function makePreviewDecoder() {
     decoder = new VideoDecoder({
       output: (f) => { if (previewWriter && (previewOn || !inject)) previewWriter.write(f).catch(() => f.close()); else f.close(); },
-      error: (e) => { console.warn('decodificação', e); decoderReady = false; window.native.videoKey(); },
+      error: (e) => { console.warn('decodificação', e); decoderReady = false; window.Helper.videoKey(); },
     });
     decoderReady = false;
   }
@@ -128,7 +128,7 @@ window.NativeVideo = (() => {
         }
       }
       if (decoderReady) {
-        if (decoder.decodeQueueSize > 8) { decoder.reset(); decoderReady = false; window.native.videoKey(); }
+        if (decoder.decodeQueueSize > 8) { decoder.reset(); decoderReady = false; window.Helper.videoKey(); }
         else decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: ts, data }));
       }
     }
@@ -165,9 +165,9 @@ window.NativeVideo = (() => {
     makePreviewDecoder();
     lastTs = -1;
     running = true;
-    window.native.onVideoFrame(onFrame);
+    window.Helper.onVideo((ab) => onFrame(new Uint8Array(ab)));
     const { inject: _i, ...helperOpts } = opts;
-    const res = await window.native.videoStart(helperOpts);
+    const res = await window.Helper.videoStart(helperOpts);
     if (res.type !== 'video-started') {
       await stop();
       throw new Error(res.message || 'falha ao iniciar a captura nativa');
@@ -183,7 +183,7 @@ window.NativeVideo = (() => {
   async function stop() {
     const was = running;
     running = false;
-    if (was) { try { await window.native.videoStop(); } catch {} }
+    if (was) { try { await window.Helper.videoStop(); } catch {} }
     try { writer && writer.close(); } catch {}
     try { previewWriter && previewWriter.close(); } catch {}
     try { generator && generator.stop(); } catch {}
@@ -206,7 +206,7 @@ window.NativeVideo = (() => {
   }
   function remove(peerId) { if (worker) worker.postMessage({ type: 'remove', id: peerId }); }
   function setPreview(on) {
-    if (on && !previewOn) { decoderReady = false; window.native.videoKey(); }
+    if (on && !previewOn) { decoderReady = false; window.Helper.videoKey(); }
     previewOn = on;
   }
 

@@ -23,11 +23,22 @@
       <div class="lobby-actions">
         <div class="lobby-box">
           <h2>Hospedar</h2>
-          <p class="muted">Seu PC vira a sala. Os amigos entram com o seu IP do Radmin.</p>
+          <p class="muted">Seu PC vira a sala. Os amigos entram com o seu IP do Radmin.
+            A sala continua aberta mesmo se você fechar ou reiniciar o app.</p>
+          <div id="my-room" class="my-room hidden">
+            <span class="dot connected"></span>
+            <span id="my-room-text"></span>
+            <button id="btn-close-my-room" class="link-btn danger-text">Fechar sala</button>
+          </div>
           <button id="btn-host" class="primary">Hospedar sala</button>
         </div>
         <div class="lobby-box">
           <h2>Entrar</h2>
+          <div class="rooms-head">
+            <span>Salas abertas</span>
+            <span id="rooms-searching" class="muted">procurando...</span>
+          </div>
+          <ul id="rooms" class="rooms"></ul>
           <label class="field">
             <span>IP de quem está hospedando</span>
             <input id="host-ip" placeholder="ex.: 26.123.45.67">
@@ -56,7 +67,8 @@
         <button id="btn-stats" class="ghost" title="Mostrar estatísticas (S)">Estatísticas</button>
         <button id="btn-share" class="primary">Compartilhar tela</button>
         <button id="btn-stop" class="danger hidden">Parar</button>
-        <button id="btn-leave" class="ghost">Sair</button>
+        <button id="btn-leave" class="ghost" title="Sai da sala; se você hospeda, a sala continua aberta">Sair</button>
+        <button id="btn-close-room" class="ghost danger-text hidden" title="Fecha a sala para todo mundo">Fechar sala</button>
       </div>
     </header>
 
@@ -165,6 +177,7 @@
     <button id="btn-check-update" class="link-btn">Procurar atualização</button>
   </div>
 
+  <script src="helper-client.js"></script>
   <script src="sdp.js"></script>
   <script src="audio.js"></script>
   <script src="native-video.js"></script>

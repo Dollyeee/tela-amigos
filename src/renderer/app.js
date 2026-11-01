@@ -55,13 +55,100 @@ async function initLobby() {
 
   $('#btn-host').onclick = async () => {
     if (!checkName()) return;
-    const res = await window.native.hostStart();
+    $('#btn-host').disabled = true;
+    const res = await window.native.hostStart(state.myName); // reaproveita a sala se já estiver aberta
+    $('#btn-host').disabled = false;
     if (!res.ok) return showLobbyError(res.error);
     const info = await window.native.netInfo();
     const radmin = info.ips.find((x) => x.radmin) || info.ips[0];
     state.hostIp = radmin ? radmin.ip : '127.0.0.1';
+    state.isHost = true;
     connect('127.0.0.1', true);
   };
+  $('#btn-close-my-room').onclick = async () => {
+    await window.native.hostStop();
+    refreshMyRoom();
+  };
+  refreshMyRoom();
+  renderRooms();
+  discoverLoop();
+}
+
+// ------------------------------------------------------------------ salas abertas / recentes
+let discovered = [];
+function recentRooms() {
+  try { return JSON.parse(localStorage.getItem('recentRooms') || '[]'); } catch { return []; }
+}
+function rememberRoom(ip, hostName) {
+  const list = recentRooms().filter((r) => r.ip !== ip);
+  list.unshift({ ip, hostName: hostName || ip, at: Date.now() });
+  localStorage.setItem('recentRooms', JSON.stringify(list.slice(0, 5)));
+}
+
+function joinRoom(ip) {
+  $('#host-ip').value = ip;
+  $('#btn-join').click();
+}
+
+function renderRooms() {
+  const ul = $('#rooms');
+  ul.innerHTML = '';
+  const seen = new Set();
+  const row = (title, sub, ip, offline) => {
+    const li = document.createElement('li');
+    if (offline) li.classList.add('offline');
+    const info = document.createElement('div');
+    info.className = 'room-info';
+    const t = document.createElement('span'); t.className = 'room-title'; t.textContent = title;
+    const s = document.createElement('span'); s.className = 'room-sub'; s.textContent = sub;
+    info.append(t, s);
+    const b = document.createElement('button');
+    b.className = offline ? 'ghost' : 'primary';
+    b.textContent = 'Entrar';
+    b.onclick = () => { if (checkName()) joinRoom(ip); };
+    li.append(info, b);
+    ul.appendChild(li);
+  };
+  for (const r of discovered) {
+    seen.add(r.ip);
+    const who = r.members ? `${r.members} na sala: ${r.names.join(', ')}` : 'ninguém na sala ainda';
+    row(`Sala de ${r.hostName}`, `${who} · ${r.ip}`, r.ip, false);
+  }
+  for (const r of recentRooms()) {
+    if (seen.has(r.ip)) continue;
+    row(`Sala de ${r.hostName}`, `recente · não encontrada agora · ${r.ip}`, r.ip, true);
+  }
+  if (!ul.children.length) {
+    const li = document.createElement('li');
+    li.className = 'empty-rooms';
+    li.textContent = 'Nenhuma sala encontrada na rede. Peça para alguém clicar em "Hospedar".';
+    ul.appendChild(li);
+  }
+}
+
+async function discoverLoop() {
+  for (;;) {
+    if (!$('#lobby').classList.contains('hidden')) {
+      $('#rooms-searching').textContent = 'procurando...';
+      discovered = await window.native.discoverRooms().catch(() => []);
+      $('#rooms-searching').textContent = discovered.length ? `${discovered.length} encontrada(s)` : '';
+      renderRooms();
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+}
+
+// Mostra no lobby se a sala deste PC continua aberta (ela não fecha junto com o app)
+async function refreshMyRoom() {
+  const st = await window.native.hostStatus().catch(() => ({ running: false }));
+  const box = $('#my-room');
+  box.classList.toggle('hidden', !st.running);
+  $('#btn-host').textContent = st.running ? 'Entrar na minha sala' : 'Hospedar sala';
+  if (st.running) {
+    $('#my-room-text').textContent = st.members
+      ? `Sua sala está aberta: ${st.names.join(', ')}`
+      : 'Sua sala está aberta (vazia)';
+  }
 
   $('#btn-join').onclick = () => {
     if (!checkName()) return;
@@ -102,8 +189,8 @@ function connect(ip, isHost) {
   ws.onclose = () => {
     clearTimeout(timeout);
     $('#btn-join').disabled = $('#btn-host').disabled = false;
+    if (ws !== state.ws) return; // conexão antiga (saiu e entrou de novo)
     if (!opened) {
-      if (isHost) window.native.hostStop();
       showLobbyError(`Não consegui conectar em ${ip}. Confira se o IP está certo, se a pessoa clicou em "Hospedar" e se o Radmin está conectado.`);
       return;
     }
@@ -120,11 +207,17 @@ function sendRelay(to, data) {
 
 function onSignal(msg) {
   switch (msg.type) {
-    case 'welcome':
+    case 'welcome': {
       state.myId = msg.id;
+      if (!state.isHost) {
+        const d = discovered.find((r) => r.ip === state.hostIp);
+        const prev = recentRooms().find((r) => r.ip === state.hostIp);
+        rememberRoom(state.hostIp, d ? d.hostName : prev ? prev.hostName : state.hostIp);
+      }
       enterRoom();
       for (const p of msg.peers) createPeer(p.id, p.name);
       break;
+    }
     case 'peer-joined':
       createPeer(msg.id, msg.name);
       toast(`${msg.name} entrou na sala`);
@@ -137,6 +230,13 @@ function onSignal(msg) {
     }
     case 'relay':
       onRelay(msg.from, msg.data);
+      break;
+    case 'room-closed':
+      toast('Quem hospeda fechou a sala.');
+      leaveRoom();
+      break;
+    case 'error':
+      showLobbyError(msg.message || 'Erro na sala');
       break;
   }
 }
@@ -410,12 +510,17 @@ async function openShareModal() {
   $('#btn-start-share').disabled = true;
   sourcesLoaded = { screen: false, window: false };
   renderSources();
-  await Promise.all([loadSources('screen'), loadSources('window'), loadAudioOptions()]);
+  // janelas só quando a aba "Janelas" for aberta (gerar as miniaturas delas é o mais pesado)
+  await Promise.all([loadSources(sourceTab), loadAudioOptions()]);
 }
 
 let sourcesLoaded = { screen: false, window: false };
+const sourcesLoading = {};
 async function loadSources(type) {
-  const list = await window.native.captureSources(type);
+  if (sourcesLoading[type]) return sourcesLoading[type];
+  sourcesLoading[type] = window.native.captureSources(type);
+  let list;
+  try { list = await sourcesLoading[type]; } finally { sourcesLoading[type] = null; }
   sources = [...sources.filter((x) => x.type !== type), ...list];
   sourcesLoaded[type] = true;
   renderSources();
@@ -431,9 +536,6 @@ function renderSources() {
     const el = document.createElement('button');
     el.className = 'source';
     if (selectedSource && selectedSource.id === src.id) el.classList.add('selected');
-    const img = document.createElement('div');
-    img.className = 'source-thumb';
-    if (src.thumbnail) img.style.backgroundImage = `url("${src.thumbnail}")`;
     const label = document.createElement('div');
     label.className = 'source-name';
     if (src.icon) {
@@ -441,8 +543,25 @@ function renderSources() {
       ic.src = src.icon;
       label.appendChild(ic);
     }
-    label.appendChild(document.createTextNode(src.name));
-    el.append(img, label);
+    const text = document.createElement('span');
+    text.textContent = src.name;
+    label.appendChild(text);
+    if (src.type === 'window') {
+      // janelas: só ícone + nome (sem miniatura = rápido e não pesa na transmissão)
+      el.classList.add('window');
+      if (!src.icon) {
+        const ph = document.createElement('div');
+        ph.className = 'source-icon-ph';
+        ph.textContent = (src.name || '?').trim().charAt(0).toUpperCase();
+        label.prepend(ph);
+      }
+      el.append(label);
+    } else {
+      const img = document.createElement('div');
+      img.className = 'source-thumb';
+      if (src.thumbnail) img.style.backgroundImage = `url("${src.thumbnail}")`;
+      el.append(img, label);
+    }
     el.onclick = () => {
       selectedSource = src;
       $('#btn-start-share').disabled = false;
@@ -470,7 +589,7 @@ async function loadAudioOptions() {
     return;
   }
   add('all-except', 'Todo o som do PC, exceto Discord');
-  const res = await window.native.audioList();
+  const res = await window.Helper.list();
   if (res.type === 'list') {
     for (const a of res.apps) {
       if (a.discord) continue;
@@ -639,7 +758,7 @@ async function adaptNativeBitrate() {
   target = Math.round(Math.max(1500, Math.min(max, target)));
   if (target !== state.nativeKbps && (Math.abs(target - state.nativeKbps) / state.nativeKbps > 0.05 || target === max)) {
     state.nativeKbps = target;
-    window.native.videoBitrate(target);
+    window.Helper.videoBitrate(target);
   }
 }
 setInterval(adaptNativeBitrate, 1000);
@@ -655,7 +774,7 @@ async function watchKeyRequests() {
     report.forEach((r) => {
       if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
       const n = (r.pliCount || 0) + (r.firCount || 0);
-      if (peer.keyReqs != null && n > peer.keyReqs) window.native.videoKey();
+      if (peer.keyReqs != null && n > peer.keyReqs) window.Helper.videoKey();
       peer.keyReqs = n;
     });
   }
@@ -695,18 +814,19 @@ function enterRoom() {
   $('#lobby').classList.add('hidden');
   $('#room').classList.remove('hidden');
   $('#btn-copy-ip').textContent = `Sala: ${state.hostIp}  (copiar)`;
+  $('#btn-close-room').classList.toggle('hidden', !state.isHost);
   render();
   // aquece o AudioHelper e a captura para o "Compartilhar" abrir rápido
-  window.native.audioAvailable().then((ok) => ok && window.native.audioList()).catch(() => {});
-  window.native.captureSources('window').catch(() => {});
+  window.native.audioAvailable().then((ok) => ok && window.Helper.list()).catch(() => {});
 }
 
 async function leaveRoom() {
   state.leaving = true;
   await stopShare();
   for (const id of [...state.peers.keys()]) removePeer(id);
-  if (state.ws) state.ws.close();
-  await window.native.hostStop();
+  // "Sair" não fecha mais a sala de quem hospeda (ela fica aberta em segundo plano)
+  if (state.ws) { const ws = state.ws; state.ws = null; ws.onclose = null; ws.close(); }
+  state.isHost = false;
   if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
   state.ws = null;
   state.order = [];
@@ -718,6 +838,13 @@ async function leaveRoom() {
   $('#room').classList.add('hidden');
   $('#lobby').classList.remove('hidden');
   $('#btn-join').disabled = $('#btn-host').disabled = false;
+  refreshMyRoom();
+}
+
+async function closeRoomForEveryone() {
+  if (!confirm('Fechar a sala para todos? Quem estiver nela vai sair.')) return;
+  await window.native.hostStop();
+  await leaveRoom();
 }
 
 const ICONS = {
@@ -750,7 +877,7 @@ function makeTile(id) {
   const video = document.createElement('video');
   video.autoplay = true;
   video.playsInline = true;
-  video.muted = isMe;
+  video.muted = true; // telas sempre abrem mutadas; desmuta no botão de volume
 
   const bar = document.createElement('div');
   bar.className = 'tile-bar';
@@ -772,7 +899,7 @@ function makeTile(id) {
     video.volume = Number(vol.value);
     vol.oninput = () => { video.volume = Number(vol.value); video.muted = false; muteBtn.innerHTML = ICONS.vol; };
     vol.onclick = (e) => e.stopPropagation();
-    const muteBtn = iconButton('vol', 'Mutar', () => {
+    const muteBtn = iconButton('mute', 'Ativar/desativar som', () => {
       video.muted = !video.muted;
       muteBtn.innerHTML = video.muted ? ICONS.mute : ICONS.vol;
     });
@@ -1100,10 +1227,11 @@ setInterval(updateStats, 1000);
 
 // ------------------------------------------------------------------ eventos de UI
 function initRoomUi() {
-  window.native.onHelperEvent(onHelperEvent);
+  window.Helper.onEvent(onHelperEvent);
   $('#btn-share').onclick = openShareModal;
   $('#btn-stop').onclick = stopShare;
   $('#btn-leave').onclick = leaveRoom;
+  $('#btn-close-room').onclick = closeRoomForEveryone;
   $('#modal-close').onclick = () => $('#share-modal').classList.add('hidden');
   $('#share-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'share-modal') $('#share-modal').classList.add('hidden'); });
   $('#btn-start-share').onclick = startShare;
@@ -1113,6 +1241,7 @@ function initRoomUi() {
       sourceTab = b.dataset.tab;
       document.querySelectorAll('.tabs .seg').forEach((x) => x.classList.toggle('active', x === b));
       renderSources();
+      if (!sourcesLoaded[sourceTab]) loadSources(sourceTab);
     };
   });
   document.querySelectorAll('.layout-switch .seg').forEach((b) => {

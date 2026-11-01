@@ -1,8 +1,12 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, screen, clipboard, shell, session } = require('electron');
+const {
+  app, BrowserWindow, ipcMain, desktopCapturer, screen, clipboard, shell, session,
+  utilityProcess, MessageChannelMain,
+} = require('electron');
 const path = require('path');
+const fs = require('fs');
 const os = require('os');
-const { createSignalingServer } = require('./signaling');
-const { AudioBridge } = require('./audio-bridge');
+const http = require('http');
+const { spawn } = require('child_process');
 
 const SIGNAL_PORT = Number(process.env.TELA_PORT) || 47800;
 
@@ -20,14 +24,8 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 if (process.env.TELA_PROFILE) app.setPath('userData', path.join(app.getPath('userData'), process.env.TELA_PROFILE));
 
 let win = null;
-let signaling = null;
 
 const toRenderer = (channel, data) => { if (win && !win.isDestroyed()) win.webContents.send(channel, data); };
-const audio = new AudioBridge({
-  onPcm: (pcm) => toRenderer('audio:pcm', pcm),
-  onVideo: (frame) => toRenderer('video:frame', frame),
-  onEvent: (msg) => toRenderer('helper:event', msg),
-});
 
 function localIPs() {
   const out = [];
@@ -39,6 +37,40 @@ function localIPs() {
     }
   }
   return out.sort((a, b) => b.radmin - a.radmin);
+}
+
+// ---------------------------------------------------------------- AudioHelper (fora do processo principal)
+// O helper roda dentro de um processo utilitário que fala direto com a interface por um
+// MessagePort. O processo principal só cria o canal; vídeo/áudio nunca passam por ele.
+function helperPath() {
+  const candidates = [
+    path.join(process.resourcesPath || '', 'AudioHelper.exe'),
+    path.join(app.getAppPath(), 'helper-bin', 'AudioHelper.exe'),
+    path.join(__dirname, '..', 'helper-bin', 'AudioHelper.exe'),
+  ];
+  return candidates.find((p) => p && fs.existsSync(p));
+}
+
+let helperHost = null;
+let quitting = false;
+
+function startHelperHost() {
+  helperHost = utilityProcess.fork(path.join(__dirname, 'helper-host.js'), [], { serviceName: 'Tela Amigos Helper' });
+  helperHost.postMessage({ type: 'config', exe: helperPath(), selfPid: process.pid });
+  helperHost.on('exit', () => {
+    helperHost = null;
+    if (quitting) return;
+    // caiu: sobe de novo e reconecta a interface
+    setTimeout(() => { startHelperHost(); connectRendererToHelper(); }, 500);
+    toRenderer('helper:restarted', null);
+  });
+}
+
+function connectRendererToHelper() {
+  if (!helperHost || !win || win.isDestroyed()) return;
+  const { port1, port2 } = new MessageChannelMain();
+  helperHost.postMessage({ type: 'port' }, [port1]);
+  win.webContents.postMessage('helper:port', null, [port2]);
 }
 
 function createWindow() {
@@ -58,6 +90,8 @@ function createWindow() {
     },
   });
   win.removeMenu();
+  // a cada carregamento (inclusive recarga) a página ganha um canal novo com o helper
+  win.webContents.on('did-finish-load', connectRendererToHelper);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -68,7 +102,7 @@ function createWindow() {
     win.webContents.on('console-message', (e) => {
       console.log(`[page] ${e.message}`);
       const m = /^SHOT (.+)$/.exec(e.message); // o script de teste pede uma captura da janela
-      if (m) win.webContents.capturePage().then((img) => require('fs').writeFileSync(m[1], img.toPNG()));
+      if (m) win.webContents.capturePage().then((img) => fs.writeFileSync(m[1], img.toPNG()));
     });
     if (process.env.TELA_TEST_ONTOP) {
       win.setAlwaysOnTop(true, 'screen-saver');
@@ -77,7 +111,7 @@ function createWindow() {
       win.focus();
     }
     win.webContents.once('did-finish-load', () => {
-      win.webContents.executeJavaScript(require('fs').readFileSync(process.env.TELA_TEST_SCRIPT, 'utf8'));
+      win.webContents.executeJavaScript(fs.readFileSync(process.env.TELA_TEST_SCRIPT, 'utf8'));
     });
   }
   // F12 abre as ferramentas de desenvolvedor (útil para depurar)
@@ -86,22 +120,100 @@ function createWindow() {
   });
 }
 
-ipcMain.handle('net:info', () => ({ ips: localIPs(), port: SIGNAL_PORT, hosting: !!signaling }));
+ipcMain.handle('net:info', () => ({ ips: localIPs(), port: SIGNAL_PORT }));
 
-ipcMain.handle('host:start', async () => {
-  if (signaling) return { ok: true };
-  try {
-    signaling = await createSignalingServer(SIGNAL_PORT);
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e.code === 'EADDRINUSE' ? 'A porta 47800 já está em uso (o app já está hospedando?)' : e.message };
+// ---------------------------------------------------------------- sala em segundo plano
+// O servidor da sala roda num processo próprio (Tela Amigos.exe como Node, sem janela) que
+// NÃO fecha junto com o app: dá para reiniciar/atualizar o app sem derrubar a sala.
+function roomStatus(timeout = 800) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: SIGNAL_PORT, path: '/', timeout }, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(body);
+          resolve(j.app === 'tela-amigos' ? { running: true, members: j.members, names: j.names } : { running: false, busy: true });
+        } catch { resolve({ running: false, busy: true }); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ running: false }); });
+    req.on('error', () => resolve({ running: false }));
+  });
+}
+
+function unpackedPath(p) {
+  // dentro do instalador os arquivos ficam em app.asar; o servidor roda da cópia "unpacked"
+  return p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+}
+
+ipcMain.handle('host:status', () => roomStatus());
+
+// Procura salas abertas: broadcast em cada rede (Radmin 26.255.255.255, rede local...) e
+// junta as respostas por ~1,2 s. A resposta chega como "unicast" para a porta que perguntou,
+// o que o firewall do Windows permite sem regra extra.
+function broadcastAddresses() {
+  const out = new Set(['255.255.255.255']);
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family !== 'IPv4' || a.internal || !a.netmask) continue;
+      const ip = a.address.split('.').map(Number);
+      const mask = a.netmask.split('.').map(Number);
+      out.add(ip.map((b, i) => (b | (~mask[i] & 255))).join('.'));
+    }
   }
+  return [...out];
+}
+
+ipcMain.handle('rooms:discover', () => new Promise((resolve) => {
+  const dgram = require('dgram');
+  const found = new Map();
+  const mine = new Set(localIPs().map((x) => x.ip));
+  const sock = dgram.createSocket('udp4');
+  sock.on('error', () => { try { sock.close(); } catch {} resolve([]); });
+  sock.on('message', (msg, rinfo) => {
+    try {
+      const j = JSON.parse(msg.toString());
+      if (j.app !== 'tela-amigos' || mine.has(rinfo.address)) return; // ignora a própria sala
+      found.set(rinfo.address, { ip: rinfo.address, port: j.port, hostName: j.hostName, members: j.members, names: j.names || [] });
+    } catch {}
+  });
+  sock.bind(0, () => {
+    sock.setBroadcast(true);
+    const probe = Buffer.from('TELA_AMIGOS_DISCOVER');
+    for (const addr of broadcastAddresses()) sock.send(probe, SIGNAL_PORT + 1, addr, () => {});
+  });
+  setTimeout(() => {
+    try { sock.close(); } catch {}
+    resolve([...found.values()]);
+  }, 1200);
+}));
+
+ipcMain.handle('host:start', async (_e, hostName) => {
+  const st = await roomStatus();
+  if (st.running) return { ok: true, reused: true };
+  if (st.busy) return { ok: false, error: `A porta ${SIGNAL_PORT} está sendo usada por outro programa.` };
+  const script = unpackedPath(path.join(__dirname, 'room-server.js'));
+  const child = spawn(process.execPath, [script, String(SIGNAL_PORT), String(hostName || 'Sala').slice(0, 30)], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  });
+  child.unref();
+  for (let i = 0; i < 30; i++) {           // espera até ~3 s a sala responder
+    await new Promise((r) => setTimeout(r, 100));
+    if ((await roomStatus(300)).running) return { ok: true };
+  }
+  return { ok: false, error: 'Não consegui abrir a sala (o firewall pode estar bloqueando).' };
 });
 
-ipcMain.handle('host:stop', () => {
-  if (signaling) signaling.close();
-  signaling = null;
-});
+// Fecha a sala para todos (o "Sair" normal não fecha mais)
+ipcMain.handle('host:stop', () => new Promise((resolve) => {
+  const req = http.get({ host: '127.0.0.1', port: SIGNAL_PORT, path: '/shutdown', timeout: 1500 }, (res) => { res.resume(); resolve(true); });
+  req.on('timeout', () => { req.destroy(); resolve(false); });
+  req.on('error', () => resolve(false));
+}));
 
 // getDisplayMedia: o renderer escolhe a fonte no nosso seletor e avisa aqui antes de chamar.
 let pendingSourceId = null;
@@ -116,51 +228,53 @@ function installDisplayMediaHandler() {
   });
 }
 
+// Miniaturas do seletor: pequenas e em JPEG (PNG travava o processo principal ~0,7 s),
+// com cache curto para abrir/trocar de aba sem refazer tudo.
+const sourcesCache = new Map(); // type -> { at, list }
 ipcMain.handle('capture:sources', async (_e, type) => {
+  const kind = type === 'window' ? 'window' : 'screen';
+  const cached = sourcesCache.get(kind);
+  if (cached && Date.now() - cached.at < 4000) return cached.list;
+  // Janelas: sem miniatura (capturar uma imagem de cada janela disputa a placa de vídeo com a
+  // transmissão e levava vários segundos); só ícone e nome. Telas (poucas) mantêm miniatura.
   const sources = await desktopCapturer.getSources({
-    types: [type === 'window' ? 'window' : 'screen'],
-    thumbnailSize: { width: 400, height: 225 },
-    fetchWindowIcons: true,
+    types: [kind],
+    thumbnailSize: kind === 'window' ? { width: 0, height: 0 } : { width: 320, height: 180 },
+    fetchWindowIcons: kind === 'window',
   });
   const displays = screen.getAllDisplays();
-  return sources.map((s) => {
-    const d = displays.find((x) => String(x.id) === s.display_id);
-    return {
-      id: s.id,
-      name: s.name,
-      type: s.id.startsWith('screen') ? 'screen' : 'window',
-      displayId: s.display_id,
-      thumbnail: s.thumbnail.isEmpty() ? null : s.thumbnail.toDataURL(),
-      icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null,
-      // resolução física do monitor (para o modo "nativa")
-      size: d ? { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) } : null,
-    };
-  });
+  const list = sources
+    .filter((s) => kind === 'screen' || (s.name && s.name.trim()))
+    .map((s) => {
+      const d = displays.find((x) => String(x.id) === s.display_id);
+      const thumb = s.thumbnail.isEmpty() ? null : `data:image/jpeg;base64,${s.thumbnail.toJPEG(70).toString('base64')}`;
+      return {
+        id: s.id,
+        name: s.name,
+        type: kind,
+        displayId: s.display_id,
+        thumbnail: thumb,
+        icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.resize({ width: 32, height: 32 }).toDataURL() : null,
+        // resolução física do monitor (para o modo "nativa")
+        size: d ? { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) } : null,
+      };
+    });
+  sourcesCache.set(kind, { at: Date.now(), list });
+  return list;
 });
 
-// Captura nativa (AudioHelper): converte o id do Electron em janela (HWND) ou ponto do monitor
-ipcMain.handle('video:start', (_e, { sourceId, displayId, fps, kbps, maxWidth, maxHeight }) => {
-  let target;
+// Captura nativa: converte o id do Electron em janela (HWND) ou ponto do monitor
+ipcMain.handle('video:target', (_e, { sourceId, displayId }) => {
   const m = /^window:(\d+):/.exec(sourceId);
-  if (m) {
-    target = { type: 'window', hwnd: Number(m[1]) };
-  } else {
-    const displays = screen.getAllDisplays();
-    const d = displays.find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
-    const center = { x: Math.round(d.bounds.x + d.bounds.width / 2), y: Math.round(d.bounds.y + d.bounds.height / 2) };
-    const p = screen.dipToScreenPoint ? screen.dipToScreenPoint(center) : center;
-    target = { type: 'monitor', x: Math.round(p.x), y: Math.round(p.y) };
-  }
-  return audio.videoStart({ target, fps, kbps, maxWidth, maxHeight });
+  if (m) return { type: 'window', hwnd: Number(m[1]) };
+  const displays = screen.getAllDisplays();
+  const d = displays.find((x) => String(x.id) === String(displayId)) || screen.getPrimaryDisplay();
+  const center = { x: Math.round(d.bounds.x + d.bounds.width / 2), y: Math.round(d.bounds.y + d.bounds.height / 2) };
+  const p = screen.dipToScreenPoint ? screen.dipToScreenPoint(center) : center;
+  return { type: 'monitor', x: Math.round(p.x), y: Math.round(p.y) };
 });
-ipcMain.handle('video:stop', () => audio.videoStop());
-ipcMain.on('video:key', () => audio.videoKey());
-ipcMain.on('video:bitrate', (_e, kbps) => audio.videoBitrate(kbps));
 
-ipcMain.handle('audio:available', () => audio.available());
-ipcMain.handle('audio:list', () => audio.list());
-ipcMain.handle('audio:start', (_e, { mode, pid }) => audio.start(mode, pid));
-ipcMain.handle('audio:stop', () => audio.stop());
+ipcMain.handle('audio:available', () => !!helperPath());
 
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
 
@@ -208,7 +322,8 @@ function setupAutoUpdate() {
   });
   ipcMain.handle('update:check', () => check(true));
   ipcMain.handle('update:install', () => {
-    audio.kill(); // para a captura com calma antes de o instalador substituir os arquivos
+    quitting = true;
+    if (helperHost) helperHost.postMessage({ type: 'quit' }); // para a captura com calma
     setTimeout(() => autoUpdater.quitAndInstall(true, true), 1500);
   });
 }
@@ -217,12 +332,13 @@ ipcMain.handle('app:version', () => app.getVersion());
 
 app.whenReady().then(() => {
   installDisplayMediaHandler();
+  startHelperHost();
   createWindow();
   setupAutoUpdate();
 });
 
 app.on('window-all-closed', () => {
-  audio.kill();
-  if (signaling) signaling.close();
+  quitting = true;
+  if (helperHost) helperHost.postMessage({ type: 'quit' });
   app.quit();
 });

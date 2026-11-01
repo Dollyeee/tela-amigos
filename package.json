@@ -34,6 +34,11 @@
       "src/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "src/room-server.js",
+      "src/signaling.js",
+      "node_modules/ws/**"
+    ],
     "extraResources": [
       {
         "from": "helper-bin/AudioHelper.exe",
