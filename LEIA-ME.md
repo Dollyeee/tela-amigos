@@ -34,8 +34,8 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - **Câmera** estilo streamer: com tela + câmera, a câmera fica no canto da imagem.
 - **Sobreposição**: janelinha da tela de um amigo sempre por cima do jogo; "Travar" deixa o mouse atravessar.
 - **Chat**, **reações** com emoji e **mãozinha**: segure o botão direito sobre a tela de alguém e mova;
-  clique esquerdo (ou clique rápido com o direito) "aperta"; Shift desenha um rastro. Quem transmite vê a mãozinha
-  no próprio monitor, sem aparecer na transmissão.
+  clique esquerdo (ou clique rápido com o direito) "aperta"; Shift desenha um rastro. Quem transmite vê a mãozinha,
+  os desenhos e os emotes no próprio monitor, sem aparecer na transmissão (cada um com sua opção em Opções).
 - A **câmera** de cada amigo pode ser arrastada e redimensionada (rodinha) na tela dele; fica salvo por amigo.
 - **Clipes**: ligue o replay numa tela e salve os últimos 30 s em MP4 (Vídeos\Tela Amigos).
 - **Gravação longa**: botão de câmera de vídeo na tela grava sem limite de tempo (com a câmera do amigo e o

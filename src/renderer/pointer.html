@@ -15,6 +15,13 @@
     @keyframes press { 0% { transform: scale(1); } 40% { transform: scale(.82) translateY(3px); } 100% { transform: scale(1); } }
     .ripple { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; border: 4px solid var(--c);
       animation: ripple .65s ease-out forwards; }
+    /* emotes dos amigos subindo no canto inferior direito do monitor */
+    .emote { position: absolute; bottom: 8%; font-size: 64px; text-align: center; pointer-events: none;
+      animation: up 2.6s ease-out forwards; filter: drop-shadow(0 4px 10px rgba(0,0,0,.55)); }
+    .emote small { display: block; font-size: 14px; font-weight: 700; color: #fff; background: var(--c); border-radius: 6px;
+      padding: 1px 8px; margin-top: 2px; }
+    @keyframes up { 0% { transform: translateY(0) scale(.5); opacity: 0; } 12% { opacity: 1; transform: translateY(-30px) scale(1.15); }
+      100% { transform: translateY(-340px) scale(1); opacity: 0; } }
     @keyframes ripple { 0% { transform: scale(.4); opacity: 1; } 100% { transform: scale(4.5); opacity: 0; } }
   </style>
 </head>
@@ -42,6 +49,19 @@
     if (lines.length) requestAnimationFrame(drawTrail); else animating = false;
   }
   window.pointerApi.onPointer((p) => {
+    if (p.react) {
+      const e = document.createElement('div');
+      e.className = 'emote';
+      e.style.right = `${3 + Math.random() * 14}%`; // canto direito: longe da mira/HUD central
+      e.style.setProperty('--c', p.color || '#6c7cff');
+      e.textContent = p.react;
+      const s = document.createElement('small');
+      s.textContent = p.name;
+      e.appendChild(s);
+      document.body.appendChild(e);
+      setTimeout(() => e.remove(), 2700);
+      return;
+    }
     // caneta: lote de traços que ficam alguns segundos; ou "limpar" os traços de alguém
     if (p.inkClear) {
       for (let i = lines.length - 1; i >= 0; i--) if (lines[i].id === p.id) lines.splice(i, 1);

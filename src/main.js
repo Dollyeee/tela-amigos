@@ -632,16 +632,19 @@ ipcMain.on('pointer:show', (_e, p) => {
   const d = displayById(p.displayId);
   const px = Math.round(d.bounds.x + p.x * d.bounds.width - HAND_TIP.x);
   const py = Math.round(d.bounds.y + p.y * d.bounds.height - HAND_TIP.y);
-  let h = handWins.get(p.id);
-  if (!h || h.win.isDestroyed()) {
-    h = { win: overlayWindow({ x: px, y: py, width: 240, height: 120 }, 'hand.html'), timer: null };
-    handWins.set(p.id, h);
-  } else {
-    h.win.setPosition(px, py);
-  }
-  sendWhenReady(h.win, 'pointer', p, true);
-  clearTimeout(h.timer);
-  h.timer = setTimeout(() => destroyHand(p.id), 1500);
+  // noHand: a pessoa escondeu as mãozinhas mas quer ver os desenhos
+  if (!p.noHand) {
+    let h = handWins.get(p.id);
+    if (!h || h.win.isDestroyed()) {
+      h = { win: overlayWindow({ x: px, y: py, width: 240, height: 120 }, 'hand.html'), timer: null };
+      handWins.set(p.id, h);
+    } else {
+      h.win.setPosition(px, py);
+    }
+    sendWhenReady(h.win, 'pointer', p, true);
+    clearTimeout(h.timer);
+    h.timer = setTimeout(() => destroyHand(p.id), 1500);
+  } else destroyHand(p.id);
 
   // rastro (Shift): só aí usa uma janela do tamanho do monitor, destruída logo depois
   if (p.drawing) {
@@ -660,6 +663,21 @@ ipcMain.on('pointer:show', (_e, p) => {
   }
 });
 ipcMain.on('pointer:hide', (_e, id) => destroyHand(id));
+
+// Emote na minha tela: sobe no meu monitor (mesma janela transparente do rastro/caneta)
+ipcMain.on('react:show', (_e, p) => {
+  const d = displayById(p.displayId);
+  if (!trailWin || trailWin.isDestroyed() || trailDisplay !== d.id) {
+    if (trailWin && !trailWin.isDestroyed()) trailWin.destroy();
+    trailWin = overlayWindow({ ...d.bounds }, 'pointer.html');
+    trailDisplay = d.id;
+    trailDeadline = 0;
+  }
+  sendWhenReady(trailWin, 'pointer', { react: String(p.emoji).slice(0, 8), name: String(p.name || '').slice(0, 30), color: p.color }, true);
+  trailDeadline = Math.max(trailDeadline, Date.now() + 3000);
+  clearTimeout(trailTimer);
+  trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, trailDeadline - Date.now());
+});
 
 // Caneta: traços que ficam alguns segundos no meu monitor (mesma janela do rastro, mantida
 // aberta até o último traço apagar)

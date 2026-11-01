@@ -448,7 +448,13 @@ function onRelay(from, data) {
       if (!document.hasFocus()) Sfx.play('chat');
       break;
     case 'react':
-      if (typeof data.emoji === 'string' && data.emoji.length <= 8) showReaction(String(data.target), data.emoji, peer.name);
+      if (typeof data.emoji === 'string' && data.emoji.length <= 8) {
+        showReaction(String(data.target), data.emoji, peer.name);
+        // emote na MINHA tela: sobe também no meu monitor
+        if (sendToMyDesktop(String(data.target), from, 'react')) {
+          deskSend('react', { displayId: state.share.source.displayId, emoji: data.emoji, name: peer.name, color: `hsl(${nameHue(peer.name)}, 85%, 55%)` });
+        }
+      }
       break;
     case 'point':
       if (Number.isFinite(data.x) && Number.isFinite(data.y)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y, !!data.draw);
@@ -1505,14 +1511,14 @@ function showInk(target, fromId, name, segs) {
     for (const [x1, y1, x2, y2] of segs) tile.trailLines.push({ x1, y1, x2, y2, color, t, life: INK_LIFE, from: fromId });
     tile.trailDraw();
   }
-  if (sendToMyDesktop(target, fromId)) {
-    window.native.ink({ displayId: state.share.source.displayId, id: fromId, segs, color, life: INK_LIFE });
+  if (sendToMyDesktop(target, fromId, 'ink')) {
+    deskSend('ink', { displayId: state.share.source.displayId, id: fromId, segs, color, life: INK_LIFE });
   }
 }
 function clearInk(target, fromId) {
   const tile = tileByOwner(target);
   if (tile && tile.trailLines) { tile.trailLines = tile.trailLines.filter((s) => s.from !== fromId); tile.trailDraw && tile.trailDraw(); }
-  if (target === state.myId) window.native.ink({ clear: true, id: fromId });
+  if (target === state.myId) deskSend('ink', { clear: true, id: fromId });
 }
 
 function setPen(tile, id, on) {
@@ -1579,9 +1585,14 @@ function attachPen(tile, id) {
   tile.el.addEventListener('dblclick', (e) => { if (tile.pen && !e.target.closest('.tile-bar')) e.stopPropagation(); }, true);
 }
 
-function sendToMyDesktop(target, fromId) {
-  return target === state.myId && fromId !== 'me' && state.share && state.share.source &&
-    state.share.source.type === 'screen' && localStorage.getItem('laserDesk') !== '0';
+// algo que um amigo fez na MINHA tela aparece também no meu monitor (por cima do jogo, fora da
+// transmissão). Cada tipo tem sua opção: 'hand' mãozinha, 'ink' desenhos, 'react' emotes.
+// envio para as janelas por cima do meu monitor (um ponto só: fácil de simular no teste)
+function deskSend(method, p) { window.native[method](p); }
+const DESK_KEYS = { hand: 'laserDesk', ink: 'inkDesk', react: 'reactDesk' };
+function sendToMyDesktop(target, fromId, kind = 'hand') {
+  return String(target) === String(state.myId) && fromId !== 'me' && state.share && state.share.source &&
+    state.share.source.type === 'screen' && localStorage.getItem(DESK_KEYS[kind]) !== '0';
 }
 
 function showLaser(target, fromId, name, x, y, drawing = false) {
@@ -1616,8 +1627,11 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
     l.timer = setTimeout(() => hideLaser(target, fromId), 1500);
   }
   // apontaram para a MINHA tela: mostra também no meu monitor, por cima do jogo
-  if (sendToMyDesktop(target, fromId)) {
-    window.native.pointer({ displayId: state.share.source.displayId, id: fromId, x, y, color, name, drawing });
+  // mão e rastro (Shift) obedecem opções separadas
+  const handOk = sendToMyDesktop(target, fromId, 'hand');
+  const inkOk = drawing && sendToMyDesktop(target, fromId, 'ink');
+  if (handOk || inkOk) {
+    deskSend('pointer', { displayId: state.share.source.displayId, id: fromId, x, y, color, name, drawing: inkOk, noHand: !handOk });
   }
 }
 
@@ -1639,7 +1653,7 @@ function showPress(target, fromId, name, x, y) {
     setTimeout(() => r.remove(), 700);
   }
   if (sendToMyDesktop(target, fromId)) {
-    window.native.pointer({ displayId: state.share.source.displayId, id: fromId, x, y, color, name, press: true });
+    deskSend('pointer', { displayId: state.share.source.displayId, id: fromId, x, y, color, name, press: true });
   }
 }
 
@@ -2930,6 +2944,10 @@ function initRoomUi() {
   $('#opt-clipsys').onchange = () => localStorage.setItem('clipSys', $('#opt-clipsys').checked ? '1' : '0');
   $('#opt-laserdesk').checked = localStorage.getItem('laserDesk') !== '0';
   $('#opt-laserdesk').onchange = () => localStorage.setItem('laserDesk', $('#opt-laserdesk').checked ? '1' : '0');
+  $('#opt-inkdesk').checked = localStorage.getItem('inkDesk') !== '0';
+  $('#opt-inkdesk').onchange = () => localStorage.setItem('inkDesk', $('#opt-inkdesk').checked ? '1' : '0');
+  $('#opt-reactdesk').checked = localStorage.getItem('reactDesk') !== '0';
+  $('#opt-reactdesk').onchange = () => localStorage.setItem('reactDesk', $('#opt-reactdesk').checked ? '1' : '0');
   $('#btn-region').onclick = () => pickRegion().catch((e) => toast(`Falha ao escolher a área: ${e.message}`, 'error'));
   $('#btn-region-clear').onclick = () => { if (selectedSource) delete selectedSource.crop; updateRegionUi(); };
   $('#opt-leveler').checked = localStorage.getItem('leveler') !== '0';

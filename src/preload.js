@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('native', {
   pointer: (p) => ipcRenderer.send('pointer:show', p),
   pointerHide: (id) => ipcRenderer.send('pointer:hide', id),
   ink: (p) => ipcRenderer.send('ink:show', p),
+  react: (p) => ipcRenderer.send('react:show', p),
   onHotkey: (cb) => ipcRenderer.on('hotkey', (_e, action) => cb(action)),
   getHotkeys: () => ipcRenderer.invoke('hotkeys:get'),
   unlockOverlays: () => ipcRenderer.send('overlay:unlock-all'),
