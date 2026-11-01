@@ -330,7 +330,21 @@ function setupAutoUpdate() {
 
 ipcMain.handle('app:version', () => app.getVersion());
 
-app.whenReady().then(() => {
+// Uma cópia só: abrir de novo traz a janela existente para frente (duas cópias disputariam a
+// sala, a captura e o áudio). Perfis de teste (TELA_PROFILE) têm a própria trava.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
+if (gotLock) app.whenReady().then(() => {
   installDisplayMediaHandler();
   startHelperHost();
   createWindow();

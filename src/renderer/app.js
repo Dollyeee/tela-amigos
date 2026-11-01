@@ -21,6 +21,7 @@ const state = {
   hidden: new Set(),     // telas ocultadas por mim
   showStats: false,
   pipId: null,
+  meMini: localStorage.getItem('meMini') !== '0', // sua prévia no canto (padrão)
   leaving: false,
   share: null,           // { stream, video, audio, settings, sourceName }
   settings: {
@@ -48,6 +49,35 @@ function saveSettings() {
 function loadSettings() {
   try { Object.assign(state.settings, JSON.parse(localStorage.getItem('settings') || '{}')); } catch {}
 }
+
+// ------------------------------------------------------------------ sons de aviso
+// Tons curtos gerados na hora (sem arquivos). Volume baixo para não atrapalhar o jogo/voz.
+const Sfx = (() => {
+  let ctx = null;
+  const tones = { join: [660, 880], leave: [700, 470], share: [523, 659, 784] };
+  return {
+    play(kind) {
+      if (localStorage.getItem('sounds') === '0') return;
+      try {
+        ctx = ctx || new AudioContext();
+        const notes = tones[kind] || [];
+        notes.forEach((f, i) => {
+          const t = ctx.currentTime + i * 0.09;
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = f;
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(0.05, t + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+          osc.connect(g).connect(ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.18);
+        });
+      } catch {}
+    },
+  };
+})();
 
 // ------------------------------------------------------------------ lobby
 async function initLobby() {
@@ -278,10 +308,11 @@ function onSignal(msg) {
     case 'peer-joined':
       createPeer(msg.id, msg.name);
       toast(`${msg.name} entrou na sala`);
+      Sfx.play('join');
       break;
     case 'peer-left': {
       const p = state.peers.get(msg.id);
-      if (p) toast(`${p.name} saiu`);
+      if (p) { toast(`${p.name} saiu`); Sfx.play('leave'); }
       removePeer(msg.id);
       break;
     }
@@ -313,6 +344,7 @@ function onRelay(from, data) {
         peer.sourceName = data.sourceName || '';
         if (data.sharing && !was) {
           toast(`${peer.name} começou a compartilhar`);
+          Sfx.play('share');
           if (!state.order.includes(peer.id)) state.order.push(peer.id);
         }
         render();
@@ -591,10 +623,17 @@ let sources = [];
 let selectedSource = null;
 let sourceTab = 'screen';
 
+// esconde opções que não fazem efeito no tipo de captura escolhido
+function updateEngineFields() {
+  const direct = $('#opt-engine').value === 'native-direct';
+  $('#opt-codec').closest('.field').classList.toggle('hidden', direct); // direto é sempre H.264
+}
+
 async function openShareModal() {
   $('#share-modal').classList.remove('hidden');
   const s = state.settings;
   $('#opt-engine').value = s.engine || 'native';
+  updateEngineFields();
   $('#opt-res').value = s.res;
   $('#opt-fps').value = String(s.fps);
   $('#opt-mode').value = s.mode;
@@ -750,6 +789,7 @@ async function startShareInner(overrides) {
         fps: settings.fps, kbps: direct ? state.nativeKbps : 50000, maxWidth: maxW, maxHeight: maxH,
       });
       video = nativeInfo.track;
+      if (!direct) video.contentHint = settings.mode; // "Prioridade" vale também no modo adaptativo
       preview = nativeInfo.preview;
       stream = new MediaStream([video]);
     } catch (e) {
@@ -1049,6 +1089,7 @@ const ICONS = {
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.5C4.3 9 3 12 3 12s4 6 9 6a9 9 0 0 0 4.2-1"/></svg>',
   vol: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+  corner: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="5" width="8" height="6" rx="1" class="fill"/></svg>',
 };
 
 function iconButton(icon, title, onClick) {
@@ -1076,7 +1117,12 @@ function makeTile(id) {
 
   const bar = document.createElement('div');
   bar.className = 'tile-bar';
-  bar.draggable = true;
+  // arrastar para reorganizar só pela alça (antes a barra inteira arrastava e atrapalhava o volume)
+  const grip = document.createElement('span');
+  grip.className = 'tile-grip';
+  grip.title = 'Arraste para reorganizar';
+  grip.textContent = '⋮⋮';
+  grip.draggable = true;
   const label = document.createElement('span');
   label.className = 'tile-name';
   const actions = document.createElement('div');
@@ -1086,46 +1132,78 @@ function makeTile(id) {
   tile.stats.className = 'tile-stats';
 
   if (!isMe) {
+    // volume lembrado pelo NOME do amigo (o id muda a cada vez que ele entra);
+    // a tela sempre abre mutada, mas já no volume de antes
+    const peerName = (state.peers.get(id) || {}).name || id;
+    const volKey = `vol:${peerName}`;
     const volWrap = document.createElement('div');
     volWrap.className = 'vol';
     const vol = document.createElement('input');
     vol.type = 'range'; vol.min = 0; vol.max = 1; vol.step = 0.01;
-    vol.value = localStorage.getItem(`vol:${id}`) ?? 1;
+    vol.value = localStorage.getItem(volKey) ?? 1;
+    const pct = document.createElement('span');
+    pct.className = 'vol-pct';
     video.volume = Number(vol.value);
-    vol.oninput = () => { video.volume = Number(vol.value); video.muted = false; muteBtn.innerHTML = ICONS.vol; };
-    vol.onclick = (e) => e.stopPropagation();
     const muteBtn = iconButton('mute', 'Ativar/desativar som', () => {
       video.muted = !video.muted;
-      muteBtn.innerHTML = video.muted ? ICONS.mute : ICONS.vol;
+      refresh();
     });
-    volWrap.append(muteBtn, vol);
+    const refresh = () => {
+      muteBtn.innerHTML = video.muted ? ICONS.mute : ICONS.vol;
+      pct.textContent = video.muted ? 'mudo' : `${Math.round(video.volume * 100)}%`;
+      vol.value = video.volume;
+    };
+    tile.setVolume = (v) => {
+      video.volume = Math.max(0, Math.min(1, v));
+      video.muted = false;
+      localStorage.setItem(volKey, String(video.volume));
+      refresh();
+    };
+    vol.oninput = () => tile.setVolume(Number(vol.value));
+    vol.onclick = (e) => e.stopPropagation();
+    vol.ondblclick = (e) => e.stopPropagation();
+    volWrap.append(muteBtn, vol, pct);
     tile.vol = volWrap;
     actions.appendChild(volWrap);
+    refresh();
+
+    // rodinha do mouse sobre a tela: volume de 5 em 5%
+    el.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      tile.setVolume(video.volume + (e.deltaY < 0 ? 0.05 : -0.05));
+      showVolumeOverlay(el, video.volume);
+    }, { passive: false });
   }
   actions.append(
     iconButton('focus', 'Focar nesta tela / voltar para a grade', () => toggleFocus(id)),
     iconButton('pip', 'Picture-in-picture (janela flutuante)', () => togglePip(id)),
     iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
-    iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)),
   );
-  bar.append(label, actions);
+  if (isMe) actions.append(iconButton('corner', 'Minimizar para o canto / colocar na grade', () => {
+    state.meMini = !state.meMini;
+    localStorage.setItem('meMini', state.meMini ? '1' : '0');
+    render();
+  }));
+  actions.append(iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)));
+  bar.append(grip, label, actions);
   el.append(video, tile.stats, bar);
 
   // duplo clique: em tela cheia sai dela; na tela em foco volta para a grade; senão foca
   el.ondblclick = () => {
     if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    if (el.parentNode && el.parentNode.id === 'me-mini') { state.meMini = false; localStorage.setItem('meMini', '0'); render(); return; }
     toggleFocus(id);
   };
   el.onclick = () => {
     if (state.layout === 'focus' && state.focusId !== id) setFocus(id);
   };
 
-  // arrastar para reorganizar
-  bar.addEventListener('dragstart', (e) => {
+  // arrastar para reorganizar (pela alça)
+  grip.addEventListener('dragstart', (e) => {
     e.dataTransfer.setData('text/tile', id);
     el.classList.add('dragging');
   });
-  bar.addEventListener('dragend', () => el.classList.remove('dragging'));
+  grip.addEventListener('dragend', () => el.classList.remove('dragging'));
   el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });
   el.addEventListener('dragleave', () => el.classList.remove('drop'));
   el.addEventListener('drop', (e) => {
@@ -1143,6 +1221,19 @@ function makeTile(id) {
   video.addEventListener('enterpictureinpicture', () => { state.pipId = id; render(); });
   video.addEventListener('leavepictureinpicture', () => { if (state.pipId === id) state.pipId = null; render(); });
   return tile;
+}
+
+function showVolumeOverlay(el, v) {
+  let o = el.querySelector('.vol-overlay');
+  if (!o) {
+    o = document.createElement('div');
+    o.className = 'vol-overlay';
+    el.appendChild(o);
+  }
+  o.textContent = `Volume ${Math.round(v * 100)}%`;
+  o.classList.add('show');
+  clearTimeout(o.timer);
+  o.timer = setTimeout(() => o.classList.remove('show'), 900);
 }
 
 function getTile(id) {
@@ -1227,7 +1318,10 @@ function render() {
   }
   if (state.share && !state.order.includes('me')) state.order.unshift('me');
 
-  const visible = state.order.filter((id) => isSharing(id) && !state.hidden.has(id));
+  const allVisible = state.order.filter((id) => isSharing(id) && !state.hidden.has(id));
+  // sua prévia vira uma janelinha no canto quando há telas de amigos para ver
+  const meMini = state.meMini && allVisible.includes('me') && allVisible.some((id) => id !== 'me');
+  const visible = meMini ? allVisible.filter((id) => id !== 'me') : allVisible;
   const stage = $('#stage');
   const main = $('#stage-main');
   const strip = $('#stage-strip');
@@ -1236,10 +1330,18 @@ function render() {
   const all = [meTile, ...[...state.peers.values()].map((p) => p.tile)].filter(Boolean);
   for (const t of all) {
     const id = t.el.dataset.id;
-    if (!visible.includes(id) && state.pipId !== id) t.el.remove();
+    if (!allVisible.includes(id) && state.pipId !== id) t.el.remove();
+  }
+  const mini = $('#me-mini');
+  mini.classList.toggle('hidden', !meMini);
+  if (meMini) {
+    const t = getTile('me');
+    t.el.classList.remove('thumb', 'focused');
+    if (t.el.parentNode !== mini) mini.appendChild(t.el);
+    if (t.video.paused) t.video.play().catch(() => {});
   }
 
-  $('#empty').style.display = visible.length ? 'none' : '';
+  $('#empty').style.display = allVisible.length ? 'none' : '';
   let focus = state.focusId;
   if (state.layout === 'focus' && (!focus || !visible.includes(focus))) {
     focus = visible.find((id) => id !== 'me') || visible[0] || null;
@@ -1440,6 +1542,12 @@ function initRoomUi() {
   $('#btn-leave').onclick = leaveRoom;
   $('#btn-close-room').onclick = closeRoomForEveryone;
   $('#btn-adjust').onclick = openAdjust;
+  $('#opt-engine').onchange = updateEngineFields;
+  $('#opt-sounds').checked = localStorage.getItem('sounds') !== '0';
+  $('#opt-sounds').onchange = () => {
+    localStorage.setItem('sounds', $('#opt-sounds').checked ? '1' : '0');
+    if ($('#opt-sounds').checked) Sfx.play('join');
+  };
   $('#adj-bitrate').oninput = () => { $('#adj-bitrate-label').textContent = `${$('#adj-bitrate').value} Mbps`; };
   $('#adj-bitrate').onchange = () => applyLiveBitrate(Number($('#adj-bitrate').value));
   $('#adj-apply').onclick = applyAdjust;
