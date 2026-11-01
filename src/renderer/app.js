@@ -1103,17 +1103,18 @@ function makeTile(id) {
     actions.appendChild(volWrap);
   }
   actions.append(
-    iconButton('focus', 'Focar nesta tela', () => setFocus(id)),
+    iconButton('focus', 'Focar nesta tela / voltar para a grade', () => toggleFocus(id)),
     iconButton('pip', 'Picture-in-picture (janela flutuante)', () => togglePip(id)),
-    iconButton('full', 'Tela cheia', () => el.requestFullscreen().catch(() => {})),
+    iconButton('full', 'Tela cheia (Esc sai)', () => toggleFullscreen(el)),
     iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)),
   );
   bar.append(label, actions);
   el.append(video, tile.stats, bar);
 
+  // duplo clique: em tela cheia sai dela; na tela em foco volta para a grade; senão foca
   el.ondblclick = () => {
-    if (state.layout === 'focus' && state.focusId === id) el.requestFullscreen().catch(() => {});
-    else setFocus(id);
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    toggleFocus(id);
   };
   el.onclick = () => {
     if (state.layout === 'focus' && state.focusId !== id) setFocus(id);
@@ -1171,6 +1172,17 @@ function setFocus(id) {
   state.layout = 'focus';
   state.focusId = id;
   render();
+}
+
+// foca a tela; se ela já está em foco, volta para a grade
+function toggleFocus(id) {
+  if (state.layout === 'focus' && state.focusId === id) { state.layout = 'grid'; render(); }
+  else setFocus(id);
+}
+
+function toggleFullscreen(el) {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else el.requestFullscreen().catch(() => {});
 }
 
 function hideTile(id) {
@@ -1451,6 +1463,12 @@ function initRoomUi() {
 
   window.addEventListener('resize', () => render());
   window.addEventListener('keydown', (e) => {
+    // Esc: no Electron a tela cheia NÃO sai sozinha com Esc (no Chrome sai)
+    if (e.key === 'Escape') {
+      if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+      if (!$('#adjust-panel').classList.contains('hidden')) { $('#adjust-panel').classList.add('hidden'); return; }
+      if ($('#share-modal').classList.contains('hidden') && state.layout === 'focus') { state.layout = 'grid'; render(); return; }
+    }
     if (e.target.matches('input, select, textarea') || $('#room').classList.contains('hidden')) return;
     if (!$('#share-modal').classList.contains('hidden')) {
       if (e.key === 'Escape') $('#share-modal').classList.add('hidden');
