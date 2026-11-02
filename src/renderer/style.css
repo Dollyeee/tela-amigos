@@ -430,6 +430,13 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
   .tile-actions .icon-btn.opt { display: none; }
   .tile-actions .more-btn { display: inline-block; }
 }
+@container (max-width: 600px) {
+  .tile-actions .icon-btn.opt2 { display: none; }
+  .tile-actions .vol input { width: 70px; }
+}
+@container (max-width: 400px) {
+  .tile-actions .vol-pct { display: none; }
+}
 .tile-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .menu-pop .menu-icon { display: flex; align-items: center; gap: 10px; }
 .menu-pop .menu-icon svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -439,3 +446,7 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .settings { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .settings .field { min-width: 0; }
 .settings select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+
+/* amigo transmitindo sem som: aviso no lugar do volume */
+.icon-btn.no-audio { opacity: .55; background: rgba(239, 68, 68, .25); }
+.icon-btn.no-audio:hover { opacity: 1; }

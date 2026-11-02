@@ -522,6 +522,7 @@ function onRelay(from, data) {
         const was = peer.sharing;
         peer.sharing = data.sharing;
         peer.hasAudio = data.audio;
+        peer.audioWhy = String(data.audioWhy || '').slice(0, 200);
         peer.h265 = !!data.h265;
         peer.av1 = !!data.av1;
         // "Nativa direta" em AV1/H.265 e entrou alguém que não decodifica: troca de codec
@@ -852,6 +853,7 @@ function sendState(to) {
     kind: 'state',
     sharing: !!state.share,
     audio: !!(state.share && state.share.audio),
+    audioWhy: state.share ? state.share.audioWhy || '' : '',
     sourceName: state.share ? state.share.sourceName : '',
     cam: !!state.camera,
     // ids dos streams desta conexão: quem recebe separa tela de câmera
@@ -1400,7 +1402,7 @@ async function startShareInner(overrides) {
     preview = stream;
   }
 
-  let audio = null;
+  let audio = null, audioErr = '';
   if (settings.audio !== 'none') {
     try {
       if (state.share && state.share.audio) await window.HelperAudio.stop();
@@ -1412,6 +1414,7 @@ async function startShareInner(overrides) {
       sendStoredGains(); // volumes do mixer guardados
     } catch (e) {
       console.warn('áudio da transmissão:', e.message);
+      audioErr = e.message;
       toast(`Áudio indisponível: ${e.message}`, 'error');
     }
   } else if (state.share && state.share.audio) {
@@ -1430,6 +1433,8 @@ async function startShareInner(overrides) {
     codec: nativeInfo && direct ? nativeInfo.codec : null, // 'hevc' / 'h264' na "Nativa direta"
     autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
     smartH: settings.smartH || 0,        // resolução reduzida pela rede (0 = cheia)
+    // por que não vai som (quem assiste vê no lugar do volume): 'none' = escolheu "Sem áudio"
+    audioWhy: settings.audio === 'none' ? 'none' : audio ? '' : (audioErr || 'não ligou'),
   };
   // resolução cheia (antes da redução pela rede): para saber até onde pode voltar
   state.share.fullW = settings.smartH ? settings.fullW : state.share.width;
@@ -2990,7 +2995,11 @@ function makeTile(id) {
     vol.ondblclick = (e) => { e.stopPropagation(); tile.setVolume(1); }; // duplo clique: volta a 100%
     volWrap.append(muteBtn, vol, pct);
     tile.vol = volWrap;
-    actions.appendChild(volWrap);
+    // transmitindo sem som: em vez de o volume sumir, um aviso dizendo o porquê
+    tile.noAudio = iconButton('mute', '', () => toast(tile.noAudio.title));
+    tile.noAudio.classList.add('no-audio');
+    tile.noAudio.style.display = 'none';
+    actions.append(tile.noAudio, volWrap);
     apply();
     refresh();
 
@@ -3036,7 +3045,11 @@ function makeTile(id) {
     render();
   }));
   // tela estreita (várias na grade): os botões menos usados vão para o "⋯"
-  for (const b of actions.querySelectorAll('.icon-btn')) if (OPT_ICONS.has(b.dataset.icon)) b.classList.add('opt');
+  // muito estreita: só volume, tela cheia e o "⋯" ficam na barra (o resto também vai para o menu)
+  for (const b of actions.querySelectorAll('.icon-btn')) {
+    if (OPT_ICONS.has(b.dataset.icon)) b.classList.add('opt');
+    else if (!['mute', 'full'].includes(b.dataset.icon)) b.classList.add('opt2');
+  }
   const more = document.createElement('button');
   more.className = 'icon-btn more-btn';
   more.title = 'Mais opções';
@@ -3200,6 +3213,15 @@ function getTile(id) {
   setTileLabel(peer.tile, peer.name, peer.name + (what ? ` — ${what}` : ''));
   updateResButton(peer);
   peer.tile.vol.style.display = peer.hasAudio ? '' : 'none';
+  const noAudio = peer.sharing && !peer.hasAudio;
+  peer.tile.noAudio.style.display = noAudio ? '' : 'none';
+  if (noAudio) {
+    peer.tile.noAudio.title = peer.audioWhy === 'none'
+      ? `${peer.name} está transmitindo sem som (escolheu "Sem áudio").`
+      : peer.audioWhy
+        ? `O som de ${peer.name} não ligou (${peer.audioWhy}). Peça para ele parar e transmitir de novo; se continuar, reiniciar o app.`
+        : `${peer.name} não está mandando som.`;
+  }
   return peer.tile;
 }
 
@@ -3780,8 +3802,9 @@ function openMoreMenu(actions, btn) {
   const m = document.createElement('div');
   m.className = 'menu-pop';
   m.dataset.for = 'more';
-  for (const b of actions.querySelectorAll('.icon-btn.opt')) {
-    if (b.classList.contains('hidden')) continue;
+  // o menu mostra o que a largura da tela escondeu da barra
+  for (const b of actions.querySelectorAll('.icon-btn.opt, .icon-btn.opt2')) {
+    if (b.classList.contains('hidden') || b.style.display === 'none' || getComputedStyle(b).display !== 'none') continue;
     const it = document.createElement('button');
     it.className = 'menu-icon' + (b.classList.contains('active') ? ' on' : '');
     it.innerHTML = b.innerHTML;
