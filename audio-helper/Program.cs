@@ -22,7 +22,7 @@ static class Program
     public const int SampleRate = 48000;
     public const int Channels = 2;
     static Mixer? mixer;
-    static VideoStreamer? video;
+    static volatile VideoStreamer? video; // só a thread "video-cmd" cria/encerra
     static GameWatcher? gameWatcher;
     static Mixer? clipMixer; // áudio do PC inteiro (menos este app) para os clipes
 
@@ -63,9 +63,73 @@ static class Program
 
     public static void SendJson(object obj) => Send(1, JsonSerializer.SerializeToUtf8Bytes(obj));
 
+    // ---- vídeo numa fila própria: uma chamada da placa que trava (driver, notebook com duas placas)
+    // não pode deixar o som e a lista de programas sem resposta
+    static readonly BlockingCollection<(string what, Action run)> videoQueue = new();
+    static long videoBusySince;       // Stopwatch.GetTimestamp() do comando em andamento; 0 = livre
+    static volatile string videoBusyWhat = "";
+    static int videoGen;              // cada video-start/stop novo invalida os anteriores
+    static volatile bool videoStuckWarned;
+    static Timer? videoWatchdog;
+    const double VideoStuckSecs = 12;
+
+    static double VideoBusySecs()
+    {
+        long since = Volatile.Read(ref videoBusySince);
+        return since == 0 ? 0 : (Stopwatch.GetTimestamp() - since) / (double)Stopwatch.Frequency;
+    }
+
+    static string StuckMessage() =>
+        $"a placa de vídeo travou ao {videoBusyWhat} (etapa: {VideoStreamer.CurrentStep}); o som continua funcionando, " +
+        "mas a captura nativa só volta reiniciando o app";
+
+    static void StartVideoWorker()
+    {
+        new Thread(() =>
+        {
+            foreach (var (what, run) in videoQueue.GetConsumingEnumerable())
+            {
+                videoBusyWhat = what;
+                Volatile.Write(ref videoBusySince, Stopwatch.GetTimestamp());
+                try { run(); } catch { }
+                Volatile.Write(ref videoBusySince, 0);
+                if (videoStuckWarned)
+                {
+                    videoStuckWarned = false;
+                    SendJson(new { type = "warn", message = $"A placa de vídeo destravou ({what})" });
+                }
+            }
+        }) { IsBackground = true, Name = "video-cmd" }.Start();
+        videoWatchdog = new Timer(_ =>
+        {
+            if (!videoStuckWarned && VideoBusySecs() > VideoStuckSecs)
+            {
+                videoStuckWarned = true;
+                SendJson(new { type = "video-stuck", message = StuckMessage() });
+            }
+        }, null, 2000, 2000);
+    }
+
+    /// Põe um comando de vídeo na fila. Se a placa já está travada, responde erro na hora
+    /// (quiet: comandos sem resposta, como bitrate/keyframe, só são descartados).
+    static void VideoCmd(int? id, string what, Action run, bool quiet = false)
+    {
+        if (VideoBusySecs() > VideoStuckSecs)
+        {
+            if (!quiet) SendJson(new { id, type = "error", message = StuckMessage() });
+            return;
+        }
+        videoQueue.Add((what, () =>
+        {
+            try { run(); }
+            catch (Exception ex) { if (!quiet) SendJson(new { id, type = "error", message = ex.Message }); }
+        }));
+    }
+
     static async Task Main()
     {
         StartWriter();
+        StartVideoWorker();
         SendJson(new { type = "ready" });
         string? line;
         while ((line = await Console.In.ReadLineAsync()) != null)
@@ -106,8 +170,6 @@ static class Program
 
                     case "video-start":
                     {
-                        video?.Dispose();
-                        video = null;
                         var t = root.GetProperty("target");
                         var target = new VideoTarget(
                             t.GetProperty("type").GetString()!,
@@ -120,25 +182,36 @@ static class Program
                             target = target with { CropX = F("x", 0), CropY = F("y", 0), CropW = Math.Max(0.05, F("w", 1)), CropH = Math.Max(0.05, F("h", 1)) };
                         }
                         string vcodec = root.TryGetProperty("codec", out var vc) ? vc.GetString() ?? "h264" : "h264";
-                        var v = new VideoStreamer(root.GetProperty("fps").GetInt32(), root.GetProperty("kbps").GetInt32(), vcodec);
-                        try
+                        int vfps = root.GetProperty("fps").GetInt32(), vkbps = root.GetProperty("kbps").GetInt32();
+                        int vmaxW = root.GetProperty("maxWidth").GetInt32(), vmaxH = root.GetProperty("maxHeight").GetInt32();
+                        int gen = Interlocked.Increment(ref videoGen);
+                        var vid = id;
+                        VideoCmd(id, "iniciar a captura", () =>
                         {
-                            v.Start(target, root.GetProperty("maxWidth").GetInt32(), root.GetProperty("maxHeight").GetInt32());
-                        }
-                        catch
-                        {
-                            v.Dispose();
-                            throw;
-                        }
-                        video = v;
-                        SendJson(new { id, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec });
+                            video?.Dispose();
+                            video = null;
+                            var v = new VideoStreamer(vfps, vkbps, vcodec);
+                            try { v.Start(target, vmaxW, vmaxH); }
+                            catch { v.Dispose(); throw; }
+                            // demorou e o app já desistiu (pediu outra coisa): não deixa capturando sozinho
+                            if (Volatile.Read(ref videoGen) != gen) { v.Dispose(); throw new Exception("início cancelado"); }
+                            video = v;
+                            SendJson(new { id = vid, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec });
+                        });
                         break;
                     }
                     case "video-stop":
-                        video?.Dispose();
-                        video = null;
-                        SendJson(new { id, type = "video-stopped" });
+                    {
+                        Interlocked.Increment(ref videoGen);
+                        var vid = id;
+                        VideoCmd(id, "parar a captura", () =>
+                        {
+                            video?.Dispose();
+                            video = null;
+                            SendJson(new { id = vid, type = "video-stopped" });
+                        });
                         break;
+                    }
                     case "sysaudio-start":
                         clipMixer?.Dispose();
                         clipMixer = new Mixer(selfPid, selfPid, ProcessLoopbackMode.ExcludeTargetProcessTree, 4);
@@ -156,10 +229,13 @@ static class Program
                         SendJson(new { id, type = "game-watch", on = gameWatcher != null });
                         break;
                     case "video-diag":
-                        SendJson(new { id, type = "video-diag", info = VideoStreamer.Diagnose() });
+                    {
+                        var vid = id;
+                        VideoCmd(id, "listar placas/encoders", () => SendJson(new { id = vid, type = "video-diag", info = VideoStreamer.Diagnose() }));
                         break;
+                    }
                     case "video-key":
-                        video?.RequestKeyFrame();
+                        VideoCmd(null, "pedir quadro-chave", () => video?.RequestKeyFrame(), quiet: true);
                         break;
                     case "boost":
                     {
@@ -185,8 +261,11 @@ static class Program
                         SendJson(new { id, type = "mixer-apps", apps = mixer?.Apps() ?? new List<object>() });
                         break;
                     case "video-bitrate":
-                        video?.SetBitrate(root.GetProperty("kbps").GetInt32());
+                    {
+                        int kb = root.GetProperty("kbps").GetInt32();
+                        VideoCmd(null, "mudar o bitrate", () => video?.SetBitrate(kb), quiet: true);
                         break;
+                    }
                 }
             }
             catch (Exception ex)
@@ -197,7 +276,13 @@ static class Program
         // stdin fechou: o app principal saiu
         mixer?.Dispose();
         clipMixer?.Dispose();
-        video?.Dispose();
+        // vídeo pela fila (se a placa travou, não espera para sempre: o processo sai assim mesmo)
+        using var videoDone = new ManualResetEventSlim(false);
+        if (VideoBusySecs() < VideoStuckSecs)
+        {
+            videoQueue.Add(("fechar", () => { try { video?.Dispose(); video = null; } finally { videoDone.Set(); } }));
+            videoDone.Wait(5000);
+        }
     }
 }
 

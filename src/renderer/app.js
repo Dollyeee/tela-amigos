@@ -1337,7 +1337,9 @@ async function startShareInner(overrides) {
   // native-direct = envia o H.264 nativo direto (máxima qualidade, só para rede perfeita)
   const direct = settings.engine === 'native-direct';
   let stream, video, preview, nativeInfo = null;
-  if (settings.engine.startsWith('native') && (await window.native.audioAvailable())) {
+  if (settings.engine.startsWith('native') && state.nativeStuck) {
+    toast(`A placa de vídeo travou na captura nativa (${state.nativeStuck}). Usando a captura do Chromium até reiniciar o app.`, 'error');
+  } else if (settings.engine.startsWith('native') && (await window.native.audioAvailable())) {
     try {
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
@@ -1373,6 +1375,7 @@ async function startShareInner(overrides) {
       preview = nativeInfo.preview;
       stream = new MediaStream([video]);
     } catch (e) {
+      if (/placa de vídeo travou/.test(e.message)) state.nativeStuck = e.message.slice(0, 160);
       toast(`Captura nativa falhou (${e.message}). Usando a captura do Chromium.`, 'error');
     }
   }
@@ -2669,6 +2672,14 @@ function onHelperEvent(msg) {
   if (msg.type === 'warn') {
     console.warn(`AudioHelper: ${msg.message}`); // ex.: falha ao capturar o som de um jogo
     if (/saída de som escolhida/.test(msg.message) && state.share && state.share.audio) toast(`Som: ${msg.message}`, 'error');
+  }
+  if (msg.type === 'helper-exit') state.nativeStuck = ''; // helper novo: a placa pode funcionar de novo
+  if (msg.type === 'video-stuck') {
+    // chamada da placa presa no helper (driver/notebook com duas placas): o som segue funcionando,
+    // a imagem passa para a captura do Chromium
+    console.warn(`AudioHelper: ${msg.message}`);
+    state.nativeStuck = String(msg.message || '').slice(0, 160);
+    if (state.share && state.share.native) recoverShare('a placa de vídeo travou');
   }
   if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');

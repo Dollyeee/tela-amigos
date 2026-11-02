@@ -657,8 +657,12 @@ sealed unsafe class VideoStreamer : IDisposable
 
     static void Log(string m) => Console.Error.WriteLine("[video] " + m);
 
+    /// Etapa atual da placa (aparece no aviso quando a placa trava).
+    public static volatile string CurrentStep = "-";
+
     static void Step(string what, Action action)
     {
+        CurrentStep = what;
         try { action(); }
         catch (Exception ex) { throw new Exception($"Falha ao {what}: {ex.Message}", ex); }
     }
@@ -958,6 +962,7 @@ sealed unsafe class VideoStreamer : IDisposable
     {
         running = false;
         if (droppedHandler != null && Program.OnVideoDropped == droppedHandler) Program.OnVideoDropped = null;
+        CurrentStep = "parar o encoder";
         bool tickDone = tickThread == null || tickThread.Join(3000);
         try
         {
@@ -978,7 +983,9 @@ sealed unsafe class VideoStreamer : IDisposable
             try { session?.Dispose(); } catch { }
             return;
         }
+        CurrentStep = "liberar a placa de vídeo";
         ReleaseAll();
+        CurrentStep = "-";
     }
 
     /// Libera tudo o que uma tentativa de início criou (também usado entre tentativas que falham).
