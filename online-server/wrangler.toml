@@ -13,3 +13,10 @@ new_sqlite_classes = ["Room"]
 # TURN (opcional, para quem não conecta direto por causa de CGNAT):
 #   npx wrangler secret put TURN_KEY_ID
 #   npx wrangler secret put TURN_KEY_API_TOKEN
+
+# Servidor de vídeo (Cloudflare Realtime SFU), opção "Transmitir pelo servidor (beta)":
+#   npx wrangler secret put SFU_APP_ID
+#   npx wrangler secret put SFU_APP_TOKEN
+# Limite mensal em GB (padrão 900, abaixo dos 1.000 GB grátis); depois disso volta para a conexão direta:
+[vars]
+SFU_MONTHLY_GB = "900"

@@ -7,6 +7,10 @@ const GRACE_MS = 20000;            // quem cai tem 20 s para voltar sem os outro
 const IDLE_MS = 30000;             // sem nenhuma mensagem (o app manda ping a cada 5 s): desconecta
 const CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
 const STUN = [{ urls: 'stun:stun.cloudflare.com:3478' }, { urls: 'stun:stun.l.google.com:19302' }];
+// Servidor de vídeo (Cloudflare Realtime SFU): quem transmite manda uma vez só e o servidor
+// repassa para cada amigo. A chave (SFU_APP_TOKEN) fica só aqui; o app pede cada operação pela sala.
+const SFU_API = 'https://rtc.live.cloudflare.com/v1/apps';
+const USAGE_ROOM = '__usage__'; // Durable Object que soma os GB do mês (não é um código de sala válido)
 
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
@@ -31,6 +35,7 @@ export default {
 
 export class Room {
   constructor(state, env) {
+    this.state = state;
     this.env = env;
     this.members = new Map(); // id -> { ws, name, token, grace, seen }
     this.nextId = 1;
@@ -39,6 +44,8 @@ export class Room {
   }
 
   async fetch(req) {
+    const url = new URL(req.url);
+    if (url.hostname === 'usage') return this.usage(req, url.pathname); // só chamado por outro Durable Object
     if (req.headers.get('Upgrade') !== 'websocket') {
       return json({ app: 'tela-amigos', members: this.members.size, names: [...this.members.values()].map((m) => m.name) });
     }
@@ -50,6 +57,80 @@ export class Room {
   }
 
   send(ws, msg) { try { ws.send(JSON.stringify(msg)); } catch {} }
+
+  // ---------------------------------------------------------------- servidor de vídeo
+  sfuOn() { return !!(this.env.SFU_APP_ID && this.env.SFU_APP_TOKEN); }
+  monthlyLimitGb() { return Number(this.env.SFU_MONTHLY_GB) || 900; } // grátis: 1.000 GB/mês
+
+  // contador do mês (instância própria do Durable Object)
+  async usage(req, path) {
+    const month = new Date().toISOString().slice(0, 7);
+    const st = this.state.storage;
+    const cur = (await st.get(`gb:${month}`)) || 0;
+    if (path === '/add' && req.method === 'POST') {
+      const { bytes } = await req.json().catch(() => ({}));
+      const add = Math.max(0, Math.min(Number(bytes) || 0, 4e9)) / 1e9;
+      await st.put(`gb:${month}`, cur + add);
+      return json({ gb: cur + add });
+    }
+    return json({ gb: cur, month });
+  }
+  usageStub() { return this.env.ROOMS.get(this.env.ROOMS.idFromName(USAGE_ROOM)); }
+  async usedGb() {
+    try { return (await (await this.usageStub().fetch('https://usage/get')).json()).gb || 0; } catch { return 0; }
+  }
+
+  async sfuCall(path, method, body) {
+    const r = await fetch(`${SFU_API}/${this.env.SFU_APP_ID}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${this.env.SFU_APP_TOKEN}`, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let data = {};
+    try { data = await r.json(); } catch {}
+    if (!r.ok || data.errorCode) throw new Error(data.errorDescription || data.errorCode || `HTTP ${r.status}`);
+    return data;
+  }
+
+  roomHasSession(sid) {
+    for (const [, m] of this.members) if (m.sfu && m.sfu.has(String(sid))) return true;
+    return false;
+  }
+
+  async onSfu(ws, id, msg) {
+    const reply = (ok, data) => this.send(ws, ok ? { type: 'sfu-res', req: msg.req, ok: true, data } : { type: 'sfu-res', req: msg.req, ok: false, error: data });
+    try {
+      if (!this.sfuOn()) throw new Error('servidor de vídeo não configurado');
+      const m = this.members.get(id);
+      if (!m) throw new Error('fora da sala');
+      m.sfu = m.sfu || new Set();
+      // cada um só mexe nas próprias sessões
+      const own = (sid) => { if (!m.sfu.has(String(sid))) throw new Error('sessão desconhecida'); return encodeURIComponent(String(sid)); };
+      const body = msg.body && typeof msg.body === 'object' ? msg.body : {};
+      switch (msg.op) {
+        case 'new': {
+          if (m.sfu.size >= 4) throw new Error('sessões demais');
+          const used = await this.usedGb();
+          if (used >= this.monthlyLimitGb()) throw new Error(`limite do mês do servidor de vídeo atingido (${Math.round(used)} GB)`);
+          const d = await this.sfuCall('/sessions/new', 'POST');
+          m.sfu.add(String(d.sessionId));
+          return reply(true, { sessionId: d.sessionId, usedGb: Math.round(used) });
+        }
+        case 'tracks': {
+          const tracks = Array.isArray(body.tracks) ? body.tracks : [];
+          // só puxa transmissões de quem está nesta sala
+          for (const t of tracks) if (t && t.location === 'remote' && !this.roomHasSession(t.sessionId)) throw new Error('transmissão de fora da sala');
+          return reply(true, await this.sfuCall(`/sessions/${own(msg.sid)}/tracks/new`, 'POST', body));
+        }
+        case 'renegotiate': return reply(true, await this.sfuCall(`/sessions/${own(msg.sid)}/renegotiate`, 'PUT', body));
+        case 'update': return reply(true, await this.sfuCall(`/sessions/${own(msg.sid)}/tracks/update`, 'PUT', body));
+        case 'close': return reply(true, await this.sfuCall(`/sessions/${own(msg.sid)}/tracks/close`, 'PUT', body));
+        default: throw new Error('operação desconhecida');
+      }
+    } catch (e) {
+      reply(false, String((e && e.message) || e).slice(0, 300));
+    }
+  }
 
   // STUN sempre; TURN (Cloudflare Realtime) só se as chaves estiverem configuradas
   async iceServers() {
@@ -87,6 +168,12 @@ export class Room {
       if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
 
       if (msg.type === 'ping') { this.send(ws, { type: 'pong' }); return; }
+      if (msg.type === 'sfu' && id) { this.onSfu(ws, id, msg); return; }
+      if (msg.type === 'sfu-usage' && id) { // GB recebidos do servidor de vídeo (conta o limite do mês)
+        const bytes = Number(msg.bytes) || 0;
+        if (bytes > 0) this.usageStub().fetch('https://usage/add', { method: 'POST', body: JSON.stringify({ bytes }) }).catch(() => {});
+        return;
+      }
       if (msg.type === 'leave') { ws.leaving = true; try { ws.close(1000, 'saiu'); } catch {} this.onClose(ws, id); return; }
 
       if (msg.type === 'join' && !id && !joining) {
@@ -102,14 +189,14 @@ export class Room {
           old.grace = null;
           if (old.ws !== ws) { try { old.ws.close(1000, 'substituída'); } catch {} }
           old.ws = ws; old.seen = seen;
-          this.send(ws, { type: 'welcome', id, token: old.token, resumed: true, peers: peersOf(id), ice, online: true });
+          this.send(ws, { type: 'welcome', id, token: old.token, resumed: true, peers: peersOf(id), ice, online: true, sfu: this.sfuOn() });
           return;
         }
         if (this.members.size >= MAX_MEMBERS) { this.send(ws, { type: 'error', message: 'Sala cheia' }); try { ws.close(1000, 'cheia'); } catch {} return; }
         id = String(this.nextId++);
         const name = String(msg.name || 'Anônimo').slice(0, 30);
         const token = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
-        this.send(ws, { type: 'welcome', id, token, peers: peersOf(id), ice, online: true });
+        this.send(ws, { type: 'welcome', id, token, peers: peersOf(id), ice, online: true, sfu: this.sfuOn() });
         for (const [, m] of this.members) this.send(m.ws, { type: 'peer-joined', id, name });
         this.members.set(id, { ws, name, token, grace: null, seen });
         return;

@@ -293,21 +293,21 @@ const scriptB = common + `
     log('caminho antes: ' + peer().routePath);
     setRoutePref(peer().id, 'net');
     await until(() => peer().routeUse === 'net' && peer().routePath === 'net', 20000, 'conectar pela internet direta');
-    let d0 = await decoded(); await sleep(3000);
-    if (await decoded() - d0 < 30) throw new Error('imagem parada na rota pela internet');
+    let rd0 = await decoded(); await sleep(3000);
+    if (await decoded() - rd0 < 30) throw new Error('imagem parada na rota pela internet');
     log('rota pela internet ok (' + peer().route + ')');
     // falha simulada: com a internet "bloqueada", volta sozinho para o Radmin e a imagem segue
     setRoutePref(peer().id, 'any');
     await sleep(4000);
     window.__routeBlockAll = true;
-    d0 = await decoded();
+    rd0 = await decoded();
     setRoutePref(peer().id, 'net');
     await until(() => peer().routeUse === 'any', 25000, 'voltar sozinho depois de não conectar');
-    const during = await decoded() - d0;
+    const during = await decoded() - rd0;
     window.__routeBlockAll = false;
     await until(() => peer().pc.connectionState === 'connected', 15000, 'conexão de volta');
-    d0 = await decoded(); await sleep(3000);
-    if (await decoded() - d0 < 30) throw new Error('imagem não voltou depois da falha na rota');
+    rd0 = await decoded(); await sleep(3000);
+    if (await decoded() - rd0 < 30) throw new Error('imagem não voltou depois da falha na rota');
     log('rota: falha simulada voltou sozinha (quadros durante a tentativa: ' + during + ')');
     // foto da tela
     const shot = await takeShot(peer().id);

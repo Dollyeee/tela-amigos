@@ -98,3 +98,6 @@ Requer Node.js, .NET 10 SDK e `gh` logado.
   Publicar: `cd online-server && npx wrangler login && npx wrangler deploy`; depois pôr a URL `wss://...`
   em `ONLINE_SERVER_DEFAULT` (`src/renderer/app.js`). TURN opcional: `npx wrangler secret put TURN_KEY_ID`
   e `TURN_KEY_API_TOKEN` (chave TURN do Cloudflare Realtime).
+  Servidor de vídeo (opção "Transmitir pelo servidor (beta)"): criar um app de SFU em Cloudflare Realtime e
+  `npx wrangler secret put SFU_APP_ID` / `SFU_APP_TOKEN`. O servidor da sala soma os GB do mês e recusa
+  novas sessões acima de `SFU_MONTHLY_GB` (padrão 900, abaixo dos 1.000 GB grátis).

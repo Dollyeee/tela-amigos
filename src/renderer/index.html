@@ -157,6 +157,8 @@
           <input type="checkbox" id="opt-gamehide"> Esconder minha prévia ao jogar</label>
         <label class="sound-toggle" title="Com um jogo em tela cheia aberto, as telas dos amigos ganham ~0,15 s de buffer para não engasgarem (o app também fica com prioridade maior na placa de vídeo)">
           <input type="checkbox" id="opt-gamebuffer"> Telas lisas enquanto jogo</label>
+        <label class="sound-toggle" title="Só na sala online: sua tela vai uma vez para o servidor de vídeo e ele repassa para cada amigo a qualidade que a conexão dele aguenta (como no Discord). Seu upload não é dividido entre os amigos.">
+          <input type="checkbox" id="opt-sfu"> Transmitir pelo servidor (beta)</label>
         <label class="sound-toggle" title="Mostra fps e ping no canto de cada tela e, quando piora, de quem é o problema: rede, PC do amigo ou o seu PC">
           <input type="checkbox" id="opt-status"> Status nas telas</label>
         <label class="sound-toggle" title="Quando alguém usa a mãozinha (segurando o botão direito) na sua tela, ela aparece também no seu monitor, por cima do jogo. Não aparece na transmissão.">
@@ -321,6 +323,7 @@
   <script src="sdp.js"></script>
   <script src="audio.js"></script>
   <script src="native-video.js"></script>
+  <script src="sfu.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

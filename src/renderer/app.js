@@ -101,7 +101,7 @@ async function buildRendererDiag() {
   for (const p of state.peers.values()) {
     lines.push('');
     lines.push(`--- ${p.name} (id ${p.id}) conn=${p.pc.connectionState} ice=${p.pc.iceConnectionState} sinal=${p.pc.signalingState} ` +
-      `compartilhando=${p.sharing} rota=${p.route || '?'} caminho=${p.routePath || '?'} rotaUso=${p.routeUse || '-'} rotaPref=${p.routePref || '-'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
+      `compartilhando=${p.sharing} servidor=${p.sfuIn ? 'recebendo' : p.sfuPub ? 'disponível' : '-'}${p.sfuPulling ? ' (ele recebe minha tela pelo servidor)' : ''} rota=${p.route || '?'} caminho=${p.routePath || '?'} rotaUso=${p.routeUse || '-'} rotaPref=${p.routePref || '-'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
       `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant} uploadMedido=${p.upMbps || '?'}Mb/s ` +
       `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} av1=${p.av1} codecDireta=${state.share ? state.share.codec : '-'} ` +
       `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'} resInteligente=${p.smartH || 'cheia'}`);
@@ -413,6 +413,7 @@ function openSocket(ip, reconnecting) {
     opened = true;
     clearTimeout(timeout);
     ws.send(JSON.stringify({ type: 'join', name: state.myName, resume: state.resume }));
+    window.Sfu.setSender((m) => { if (state.ws === ws && ws.readyState === 1) ws.send(JSON.stringify(m)); else throw new Error('sala desconectada'); });
     // sinal de vida: se a sala ficar 15 s sem responder (PC de quem hospeda caiu, Radmin travou),
     // considera a conexão perdida e reconecta
     clearInterval(heartbeat);
@@ -426,6 +427,7 @@ function openSocket(ip, reconnecting) {
     lastMsg = Date.now();
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
+    if (window.Sfu.onMessage(msg)) return;
     onSignal(msg);
   };
   ws.onclose = () => {
@@ -478,6 +480,7 @@ function onSignal(msg) {
     case 'welcome': {
       const wasInRoom = !$('#room').classList.contains('hidden');
       if (Array.isArray(msg.ice) && msg.ice.length) ICE_SERVERS = msg.ice.slice(0, 6);
+      state.sfuServer = !!msg.sfu; // a sala online tem servidor de vídeo configurado
       setReconnectBanner(false);
       state.resume = { id: msg.id, token: msg.token };
       if (wasInRoom) {
@@ -582,6 +585,12 @@ function onRelay(from, data) {
         if (peer.share2 && !had2) toast(`${peer.name} adicionou uma 2ª tela (aparece no canto da tela dele; ⇄ troca)`);
         if (!peer.share2 && peer.tile) peer.tile.swapped = false;
         peer.sourceName = data.sourceName || '';
+        // transmissão pelo servidor de vídeo: puxa de lá (ids conferidos pelo servidor da sala)
+        const sp = data.sfu && typeof data.sfu === 'object' && typeof data.sfu.s === 'string' && typeof data.sfu.v === 'string'
+          ? { s: data.sfu.s.slice(0, 64), v: data.sfu.v.slice(0, 64), a: typeof data.sfu.a === 'string' ? data.sfu.a.slice(0, 64) : null } : null;
+        if (!sp) peer.sfuFailedKey = null;
+        peer.sfuPub = sp;
+        sfuPullSync(peer);
         const hadCam = peer.hasCam;
         peer.hasCam = !!data.cam;
         if (data.screenId) { peer.remoteScreenId = data.screenId; peer.remoteCamId = data.camId; resolveTracks(peer); }
@@ -607,6 +616,10 @@ function onRelay(from, data) {
       peer.theyWantH = Number(data.maxH) > 0 ? Number(data.maxH) : 0; // resolução que ele escolheu (0 = original)
       applySendParams(peer);
       refreshBudget();
+      break;
+    case 'sfu-pull': // o amigo está recebendo minha tela pelo servidor: paro de mandar direto
+      peer.sfuPulling = !!data.on;
+      applySendParams(peer);
       break;
     case 'want2':
       peer.theyWant2 = ['off', 'thumb', 'full'].includes(data.level) ? data.level : 'off';
@@ -742,9 +755,7 @@ function createPeer(id, name) {
   };
   pc.ontrack = (e) => {
     if (e.track.kind === 'audio') {
-      const st = peer.remoteStream;
-      for (const t of st.getAudioTracks()) st.removeTrack(t);
-      st.addTrack(e.track);
+      peer.p2pAudio = e.track; // resolveTracks escolhe entre este e o do servidor de vídeo
     } else {
       // vídeo: tela ou câmera? decide em resolveTracks (o amigo informa os ids no "state")
       const sid = (e.streams && e.streams[0] && e.streams[0].id) || `sem-id-${peer.videoTracks.size}`;
@@ -945,6 +956,10 @@ async function routeWatch() {
       if (l && r) {
         path = l.candidateType === 'relay' || r.candidateType === 'relay' ? 'relay'
           : VPN_ADDR.test(l.address || '') || VPN_ADDR.test(r.address || '') ? 'vpn' : 'net';
+        // depois de reiniciar o ICE o Chromium continua no par antigo até o novo funcionar:
+        // par de uma rodada anterior não conta como "conectou pela rota nova"
+        const ufrag = (/a=ice-ufrag:(\S+)/.exec((pc.localDescription && pc.localDescription.sdp) || '') || [])[1];
+        if (ufrag && l.usernameFragment && l.usernameFragment !== ufrag) path = 'antigo';
       }
     }
     peer.routePath = path;
@@ -993,9 +1008,81 @@ async function routeWatch() {
 }
 setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000);
 
+// ------------------------------------------------------------------ servidor de vídeo (beta)
+// Na sala online, com a opção ligada, quem transmite manda a tela UMA vez para o servidor de vídeo
+// (sfu.js) e cada amigo puxa de lá a qualidade que aguenta. Quem puxou avisa ("sfu-pull") e eu paro
+// de mandar direto para ele. Qualquer falha: volta para a conexão direta.
+function sfuWanted() { return isOnlineCode(state.hostIp) && !!state.sfuServer && localStorage.getItem('sfu') === '1'; }
+function sfuKbps(s) { return Math.min(Number(s.bitrate) || 8, Number(localStorage.getItem('sfuMaxMbps')) || 8) * 1000; } // limite: GB do mês
+
+let sfuSyncing = Promise.resolve();
+function sfuSync() {
+  sfuSyncing = sfuSyncing.then(sfuSyncInner).catch((e) => console.warn('servidor de vídeo', e));
+  return sfuSyncing;
+}
+async function sfuSyncInner() {
+  const share = state.share;
+  const want = !!(share && sfuWanted() && !share.direct);
+  if (want) {
+    try {
+      const s = share.settings;
+      const info = await window.Sfu.publish({ video: share.video, audio: share.audio || null, kbps: sfuKbps(s), fps: Number(s.fps) || 60 });
+      if (state.share !== share) return; // trocou de tela no meio: a próxima sincronização cuida
+      const changed = !share.sfu || share.sfu.s !== info.s || share.sfu.v !== info.v || share.sfu.a !== info.a;
+      share.sfu = info;
+      if (changed) {
+        console.log('servidor de vídeo: transmitindo pelo servidor');
+        for (const peer of state.peers.values()) sendState(peer.id);
+      }
+    } catch (e) {
+      share.sfu = null;
+      toast(`Servidor de vídeo indisponível (${e.message}). Transmitindo direto para os amigos.`, 'error');
+      for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
+    }
+  } else if (window.Sfu.published()) {
+    if (share) share.sfu = null;
+    await window.Sfu.unpublish();
+    for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
+  }
+}
+
+// lado de quem assiste: puxa do servidor quando o amigo transmite por lá (e eu estou vendo)
+function sfuPullSync(peer) {
+  peer.sfuChain = (peer.sfuChain || Promise.resolve()).then(() => sfuPullInner(peer)).catch((e) => console.warn('servidor de vídeo (receber)', e));
+}
+async function sfuPullInner(peer) {
+  if (!state.peers.has(peer.id)) return;
+  const pub = peer.sharing ? peer.sfuPub : null;
+  const level = peer.iWant || 'full';
+  const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !peer.sfuFailedKey;
+  const key = pub ? `${pub.s}/${pub.v}` : null;
+  const rid = level === 'thumb' ? 'q' : peer.iWantH && peer.iWantH <= 540 ? 'h' : 'f';
+  if (peer.sfuIn && (!want || peer.sfuIn.key !== key)) {
+    const old = peer.sfuIn;
+    peer.sfuIn = null;
+    resolveTracks(peer);
+    sendRelay(peer.id, { kind: 'sfu-pull', on: false });
+    await window.Sfu.unpull(old.key);
+  }
+  if (!want) return;
+  if (peer.sfuIn) { await window.Sfu.setRid(key, rid).catch((e) => console.warn('servidor de vídeo: qualidade', e.message)); return; }
+  try {
+    const res = await window.Sfu.pull(key, pub, rid);
+    if (!state.peers.has(peer.id) || !peer.sfuPub || `${peer.sfuPub.s}/${peer.sfuPub.v}` !== key) { await window.Sfu.unpull(key); return; }
+    peer.sfuIn = { key, video: res.video, audio: res.audio, videoRecv: res.videoRecv };
+    resolveTracks(peer);
+    sendRelay(peer.id, { kind: 'sfu-pull', on: true });
+    console.log(`servidor de vídeo: recebendo ${peer.name} pelo servidor`);
+  } catch (e) {
+    peer.sfuFailedKey = key; // não insiste nessa transmissão; continua pela conexão direta
+    toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Continuando direto.`, 'error');
+  }
+}
+
 function removePeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
+  if (peer.sfuIn) { window.Sfu.unpull(peer.sfuIn.key).catch(() => {}); peer.sfuIn = null; }
   if (histOpen === id) closeHistory();
   closeMenus();
   peer.pc.close();
@@ -1033,6 +1120,7 @@ function sendState(to) {
     share2: !!state.share2,
     share2Name: state.share2 ? state.share2.sourceName : '',
     s2Id: peer ? peer.s2MS.id : null,
+    sfu: state.share && state.share.sfu ? state.share.sfu : null, // transmitindo pelo servidor de vídeo
   });
 }
 
@@ -1045,7 +1133,14 @@ function resolveTracks(peer) {
   } else if (peer.videoTracks.size) {
     screen = [...peer.videoTracks.values()][0]; // amigo em versão antiga: só tela
   }
+  if (peer.sfuIn && peer.sfuIn.video) screen = peer.sfuIn.video; // vindo pelo servidor de vídeo
   const st = peer.remoteStream;
+  // som: o do servidor quando a tela vem por lá; senão o da conexão direta
+  const wantA = (peer.sfuIn && peer.sfuIn.audio) || peer.p2pAudio || null;
+  if (wantA && !st.getAudioTracks().includes(wantA)) {
+    for (const t of st.getAudioTracks()) st.removeTrack(t);
+    st.addTrack(wantA);
+  }
   if (screen && !st.getVideoTracks().includes(screen)) {
     for (const t of st.getVideoTracks()) st.removeTrack(t);
     st.addTrack(screen);
@@ -1081,8 +1176,9 @@ async function doApplySendParams(peer) {
   const vSender = peer.vT.sender;
   const aSender = peer.aT.sender;
 
-  const wantVideo = share && level !== 'off' ? share.video : null;
-  const wantAudio = share && level !== 'off' ? share.audio || null : null;
+  const viaSfu = !!(share && share.sfu && peer.sfuPulling); // recebe pelo servidor de vídeo
+  const wantVideo = share && level !== 'off' && !viaSfu ? share.video : null;
+  const wantAudio = share && level !== 'off' && !viaSfu ? share.audio || null : null;
 
   // modo nativo: o vídeo precisa sair em H.264 e passar pelo transform que injeta nossos quadros
   const native = !!(share && share.direct); // envio direto do H.264 nativo
@@ -1504,6 +1600,9 @@ async function startShareInner(overrides) {
 
   // native        = captura nativa 60 fps + WebRTC recodifica e se adapta à rede (padrão)
   // native-direct = envia o H.264 nativo direto (máxima qualidade, só para rede perfeita)
+  // pelo servidor de vídeo a imagem sai pelo encoder do Chromium em 3 qualidades (a "direta" não
+  // dá para dividir): usa a nativa adaptativa
+  if (settings.engine === 'native-direct' && sfuWanted()) settings.engine = 'native';
   const direct = settings.engine === 'native-direct';
   let stream, video, preview, nativeInfo = null;
   if (settings.engine.startsWith('native') && state.nativeStuck) {
@@ -1635,6 +1734,7 @@ async function startShareInner(overrides) {
     sendState(peer.id);
   }
   render();
+  sfuSync();
 }
 
 // ------------------------------------------------------------------ teste de conexão
@@ -2757,7 +2857,9 @@ async function healthLoop() {
     const mainTrack = peer.remoteStream.getVideoTracks()[0];
     const mainId = mainTrack ? mainTrack.id : null;
     try {
-      (await peer.pc.getStats()).forEach((r) => {
+      const reports = [await peer.pc.getStats()];
+      if (peer.sfuIn && peer.sfuIn.videoRecv) reports.push(await peer.sfuIn.videoRecv.getStats());
+      for (const rep of reports) rep.forEach((r) => {
         if (r.type !== 'inbound-rtp' || r.kind !== 'video') return;
         if (mainId && r.trackIdentifier) { if (r.trackIdentifier === mainId) v = r; return; }
         if (!v || (r.bytesReceived || 0) > (v.bytesReceived || 0)) v = r;
@@ -2985,7 +3087,9 @@ async function stopShare() {
   if (share.native) await window.NativeVideo.stop();
   else share.stream.getTracks().forEach((t) => t.stop());
   if (share.audio) await window.HelperAudio.stop();
+  sfuSync();
   for (const peer of state.peers.values()) {
+    peer.sfuPulling = false;
     applySendParams(peer);
     sendState(peer.id);
   }
@@ -3026,6 +3130,8 @@ async function leaveRoom() {
   if (window.Clips.isOn('me')) window.Clips.stop('me');
   if (state.camera) { state.camera.track.stop(); state.camera = null; $('#btn-camera').textContent = 'Câmera'; $('#btn-camera').classList.remove('active'); }
   for (const id of [...state.peers.keys()]) removePeer(id);
+  window.Sfu.reset();
+  state.sfuServer = false;
   // "Sair" não fecha mais a sala de quem hospeda (ela fica aberta em segundo plano)
   clearInterval(heartbeat);
   setReconnectBanner(false);
@@ -3765,6 +3871,7 @@ function render() {
       peer.iWant = level;
       peer.iWantH = maxH;
       sendRelay(peer.id, { kind: 'want', level, maxH });
+      if (peer.sfuPub || peer.sfuIn) sfuPullSync(peer);
     }
     if (peer.iWant2 !== level2) {
       peer.iWant2 = level2;
@@ -4387,6 +4494,13 @@ function initRoomUi() {
   $('#opt-status').checked = localStorage.getItem('status') !== '0';
   $('#stage').classList.toggle('nostatus', !$('#opt-status').checked);
   $('#opt-status').onchange = () => { localStorage.setItem('status', $('#opt-status').checked ? '1' : '0'); $('#stage').classList.toggle('nostatus', !$('#opt-status').checked); };
+  $('#opt-sfu').checked = localStorage.getItem('sfu') === '1';
+  $('#opt-sfu').onchange = () => {
+    localStorage.setItem('sfu', $('#opt-sfu').checked ? '1' : '0');
+    if ($('#opt-sfu').checked && !sfuWanted()) toast(isOnlineCode(state.hostIp) && !state.sfuServer ? 'Esta sala online ainda não tem servidor de vídeo configurado.' : 'Vale só na sala online (sem Radmin).');
+    else if (state.share && state.share.direct && sfuWanted()) toast('Pelo servidor a "Nativa direta" não é usada: reinicie a transmissão para ir pelo servidor.');
+    sfuSync();
+  };
   $('#opt-gamebuffer').checked = localStorage.getItem('gamebuffer') !== '0';
   $('#opt-gamebuffer').onchange = () => { localStorage.setItem('gamebuffer', $('#opt-gamebuffer').checked ? '1' : '0'); applyPlayoutBuffer(); };
   // teclas globais (funcionam com o jogo em primeiro plano)

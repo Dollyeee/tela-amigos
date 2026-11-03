@@ -29,10 +29,10 @@ window.NativeVideo = (() => {
   // e é grande: pedir um a cada queda dele trava a rede de todo mundo. Quedas seguidas do mesmo
   // amigo esperam cada vez mais (até 8 s) antes do próximo pedido; os keyframes pedidos pelos
   // outros continuam destravando ele.
-  function flushPeer(p) {
+  function flushPeer(p, noBackoff) {
     const now = Date.now();
     p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1;
-    p.backoff = p.lastFlush && now - p.lastFlush < 10000 ? Math.min(8000, Math.max(1000, (p.backoff || 0) * 2)) : 0;
+    p.backoff = !noBackoff && p.lastFlush && now - p.lastFlush < 10000 ? Math.min(8000, Math.max(1000, (p.backoff || 0) * 2)) : 0;
     p.lastFlush = now;
     p.keyAt = now + p.backoff;
     if (!p.backoff) reqKey();
@@ -93,7 +93,8 @@ window.NativeVideo = (() => {
     // fila crescendo sem keyframe na frente (o envio ficou para trás): recomeça num keyframe.
     // (mesmo limite da entrada: os quadros que chegam enquanto o keyframe espera o lugar dele
     //  não podem disparar isso logo depois, senão vira um ciclo de keyframes)
-    if (item && p.q.length > 12 && !item.key) { flushPeer(p); item = null; }
+    // (AV1 sem a espera crescente: aqui a fila cresce de propósito enquanto o keyframe espera o lugar)
+    if (item && p.q.length > 12 && !item.key) { flushPeer(p, true); item = null; }
     if (!item) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; }
     p.q.shift();
     frame.data = item.data;
