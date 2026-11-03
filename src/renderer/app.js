@@ -95,6 +95,7 @@ async function buildRendererDiag() {
   lines.push(`nome=${state.myName} id=${state.myId} sala=${state.hostIp} anfitriao=${!!state.isHost} layout=${state.layout}`);
   lines.push(`servidor de vídeo: sala=${state.sfuServer ? 'tem' : 'não tem'} opção=${localStorage.getItem('sfu') === '1' ? 'ligada' : 'desligada'} ` +
     `minhaTransmissão=${state.share && state.share.sfu ? 'pelo servidor' : '-'} conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
+  try { for (const l of await window.Sfu.stats()) lines.push(`  ${l}`); } catch {}
   lines.push(`config=${safeJson(state.settings)}`);
   lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} modoLeve=${!!state.lightMode}` : ''}`);
   if (state.nativeStats) lines.push(`helper=${safeJson(state.nativeStats)}`);

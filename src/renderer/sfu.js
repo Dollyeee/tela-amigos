@@ -104,6 +104,8 @@ window.Sfu = (() => {
       const r = await call('tracks', { sid, body: { sessionDescription: { type: 'offer', sdp: pc.localDescription.sdp }, tracks } });
       for (const t of r.tracks || []) if (t.errorCode) throw new Error(t.errorDescription || t.errorCode);
       await pc.setRemoteDescription(r.sessionDescription);
+      // sem isso, com a "Imagem lisa" o Chrome só baixa a resolução quando aperta (fica lisa mas borrada)
+      try { const p = vT.sender.getParameters(); p.degradationPreference = 'balanced'; await vT.sender.setParameters(p); } catch {}
       pub = { vT, aT, info: { s: sid, v: names.v, a: names.a } };
       return pub.info;
     });
@@ -189,8 +191,30 @@ window.Sfu = (() => {
   }
   setInterval(() => { reportUsage().catch(() => {}); }, 60000);
 
+  // para o diagnóstico: o que sai para o servidor (cada camada) e o que chega dele
+  async function stats() {
+    const out = [];
+    if (!pc) return out;
+    const rep = await pc.getStats();
+    const mids = new Map();
+    for (const [k, p] of pulls) if (p.videoMid != null) mids.set(p.videoMid, `${k} pedi=${p.rid}`);
+    rep.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') {
+        out.push(`conexão: ping=${Math.round((r.currentRoundTripTime || 0) * 1000)}ms saídaDisponível=${r.availableOutgoingBitrate ? (r.availableOutgoingBitrate / 1e6).toFixed(1) + 'Mb/s' : '?'}`);
+      } else if (r.type === 'outbound-rtp' && r.kind === 'video') {
+        out.push(`enviando camada ${r.rid || '?'}: ${r.frameWidth || 0}x${r.frameHeight || 0} ${Math.round(r.framesPerSecond || 0)}fps ` +
+          `alvo=${r.targetBitrate ? (r.targetBitrate / 1e6).toFixed(1) + 'Mb/s' : '?'} ativa=${r.active !== false} limite=${r.qualityLimitationReason || '-'} ` +
+          `encoder=${r.encoderImplementation || '?'} enviado=${((r.bytesSent || 0) / 1e6).toFixed(0)}MB`);
+      } else if (r.type === 'inbound-rtp' && r.kind === 'video') {
+        out.push(`recebendo (${mids.get(String(r.mid)) || r.mid}): ${r.frameWidth || 0}x${r.frameHeight || 0} ${Math.round(r.framesPerSecond || 0)}fps ` +
+          `decoder=${r.decoderImplementation || '?'} perdidos=${r.packetsLost || 0} travadas=${r.freezeCount || 0} recebido=${((r.bytesReceived || 0) / 1e6).toFixed(0)}MB`);
+      }
+    });
+    return out;
+  }
+
   return {
-    setSender, onMessage, publish, unpublish, setQuality, pull, unpull, setRid, reset,
+    setSender, onMessage, publish, unpublish, setQuality, pull, unpull, setRid, reset, stats,
     published: () => (pub ? pub.info : null),
     state: () => (pc ? pc.connectionState : 'sem conexão'),
     onState: null,
