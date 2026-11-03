@@ -683,7 +683,9 @@ function createPeer(id, name) {
     statsPrev: null,
     stats: null,
     routePref: loadRoutePref(name), // 'auto' | 'any' (Radmin/VPN) | 'net' (internet direta)
-    routeUse: 'any',                // 'net' = candidatos da VPN ignorados
+    // 'net' = candidatos da VPN ignorados. Na sala online começa pela internet (se os dois têm
+    // Radmin, o ICE escolheria o Radmin); se não conectar em 15 s, routeWatch libera o Radmin.
+    routeUse: isOnlineCode(state.hostIp) && loadRoutePref(name) !== 'any' ? 'net' : 'any',
     routePath: '?',
     routeSince: performance.now(),
   };
