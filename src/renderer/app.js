@@ -590,7 +590,7 @@ function onRelay(from, data) {
         peer.sourceName = data.sourceName || '';
         // transmissão pelo servidor de vídeo: puxa de lá (ids conferidos pelo servidor da sala)
         const sp = data.sfu && typeof data.sfu === 'object' && typeof data.sfu.s === 'string' && typeof data.sfu.v === 'string'
-          ? { s: data.sfu.s.slice(0, 64), v: data.sfu.v.slice(0, 64), a: typeof data.sfu.a === 'string' ? data.sfu.a.slice(0, 64) : null } : null;
+          ? { s: data.sfu.s.slice(0, 64), v: data.sfu.v.slice(0, 64), a: typeof data.sfu.a === 'string' ? data.sfu.a.slice(0, 64) : null, n: data.sfu.n === 1 ? 1 : 3 } : null;
         if (!sp) peer.sfuFail = null;
         peer.sfuPub = sp;
         sfuPullSync(peer);
@@ -623,6 +623,13 @@ function onRelay(from, data) {
     case 'sfu-pull': // o amigo está recebendo minha tela pelo servidor: paro de mandar direto
       peer.sfuPulling = !!data.on;
       applySendParams(peer);
+      // nativa pelo servidor: quem acabou de entrar precisa de um quadro completo logo
+      if (peer.sfuPulling && state.share && state.share.direct && state.share.sfu) {
+        for (const ms of [0, 700, 1800]) setTimeout(() => { if (state.share && state.share.direct) window.NativeVideo.key(); }, ms);
+      }
+      break;
+    case 'sfu-rx': // quem recebe pelo servidor está perdendo pacotes/travando (a imagem é uma só para todos)
+      if (data.bad) peer.sfuRxBadAt = Date.now();
       break;
     case 'want2':
       peer.theyWant2 = ['off', 'thumb', 'full'].includes(data.level) ? data.level : 'off';
@@ -1025,11 +1032,15 @@ function sfuSync() {
 }
 async function sfuSyncInner() {
   const share = state.share;
-  const want = !!(share && sfuWanted() && !share.direct);
+  const want = !!(share && sfuWanted());
   if (want) {
     try {
       const s = share.settings;
-      const info = await window.Sfu.publish({ video: share.video, audio: share.audio || null, kbps: sfuKbps(s), fps: Number(s.fps) || 60 });
+      const native = share.direct ? { codec: share.codec || 'h264', attach: (sender) => window.NativeVideo.attach(sender, 'sfu') } : null;
+      const info = await window.Sfu.publish({ video: share.video, audio: share.audio || null, kbps: sfuKbps(s), fps: Number(s.fps) || 60, native });
+      // a placa de vídeo manda os quadros para o servidor também (pelo transform da trilha vazia)
+      window.NativeVideo.setMode('sfu', !!native, !!native && state.share === share);
+      if (native) window.NativeVideo.key();
       if (state.share !== share) return; // trocou de tela no meio: a próxima sincronização cuida
       const changed = !share.sfu || share.sfu.s !== info.s || share.sfu.v !== info.v || share.sfu.a !== info.a;
       share.sfu = info;
@@ -1039,6 +1050,7 @@ async function sfuSyncInner() {
       }
     } catch (e) {
       share.sfu = null;
+      window.NativeVideo.setMode('sfu', false, false);
       console.warn(`servidor de vídeo: não deu para transmitir por ele: ${e.message}`);
       state.sfuLastErr = `transmitir: ${e.message}`;
       toast(`Servidor de vídeo indisponível (${e.message}). Transmitindo direto para os amigos.`, 'error');
@@ -1046,6 +1058,7 @@ async function sfuSyncInner() {
     }
   } else if (window.Sfu.published()) {
     if (share) share.sfu = null;
+    window.NativeVideo.setMode('sfu', false, false);
     await window.Sfu.unpublish();
     for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
   }
@@ -1064,7 +1077,9 @@ async function sfuPullInner(peer) {
   const f = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail : null;
   const blocked = !!f && (f.n >= 3 || Date.now() - f.at < 10000 * f.n);
   const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !blocked;
-  const rid = level === 'thumb' ? 'q' : peer.iWantH && peer.iWantH <= 540 ? 'h' : 'f';
+  let rid = level === 'thumb' ? 'q' : peer.iWantH && peer.iWantH <= 540 ? 'h' : 'f';
+  // a rede até mim não está dando conta da qualidade cheia: média por um tempo (sfuRxFeedback)
+  if (rid === 'f' && Date.now() < (peer.sfuCapUntil || 0)) rid = 'h';
   if (peer.sfuIn && (!want || peer.sfuIn.key !== key)) {
     const old = peer.sfuIn;
     peer.sfuIn = null;
@@ -1077,8 +1092,9 @@ async function sfuPullInner(peer) {
   try {
     const res = await window.Sfu.pull(key, pub, rid);
     if (!state.peers.has(peer.id) || !peer.sfuPub || `${peer.sfuPub.s}/${peer.sfuPub.v}` !== key) { await window.Sfu.unpull(key); return; }
-    peer.sfuIn = { key, video: res.video, audio: res.audio, videoRecv: res.videoRecv };
+    peer.sfuIn = { key, video: res.video, audio: res.audio, videoRecv: res.videoRecv, audioRecv: res.audioRecv, one: pub.n === 1 };
     resolveTracks(peer);
+    applyPlayoutBuffer();
     sendRelay(peer.id, { kind: 'sfu-pull', on: true });
     console.log(`servidor de vídeo: recebendo ${peer.name} pelo servidor`);
   } catch (e) {
@@ -1090,6 +1106,25 @@ async function sfuPullInner(peer) {
     if (n < 3) setTimeout(() => sfuPullSync(peer), 10000 * n + 500);
     else toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Continuando direto.`, 'error');
   }
+}
+
+// Recebendo pelo servidor com a rede até mim reclamando:
+//  - avisa quem transmite (na nativa pelo servidor a imagem é uma só e ele baixa o bitrate);
+//  - com 3 qualidades: 2 medições ruins seguidas -> qualidade média por 30 s (60 s, 120 s... se
+//    voltar a reclamar logo depois de subir), depois tenta a cheia de novo.
+function sfuRxFeedback(peer, bad) {
+  if (bad) sendRelay(peer.id, { kind: 'sfu-rx', bad: true });
+  if (peer.sfuIn.one) return;
+  peer.sfuBadN = bad ? (peer.sfuBadN || 0) + 1 : 0;
+  if (peer.sfuBadN < 2 || Date.now() < (peer.sfuCapUntil || 0)) return;
+  peer.sfuBadN = 0;
+  const again = peer.sfuCapEnd && Date.now() - peer.sfuCapEnd < 60000;
+  peer.sfuCapMs = again ? Math.min(240000, (peer.sfuCapMs || 30000) * 2) : 30000;
+  peer.sfuCapUntil = Date.now() + peer.sfuCapMs;
+  peer.sfuCapEnd = peer.sfuCapUntil;
+  console.log(`servidor de vídeo: rede até mim apertada, recebendo ${peer.name} na qualidade média por ${peer.sfuCapMs / 1000} s`);
+  sfuPullSync(peer);
+  setTimeout(() => sfuPullSync(peer), peer.sfuCapMs + 200);
 }
 
 function removePeer(id) {
@@ -1613,9 +1648,8 @@ async function startShareInner(overrides) {
 
   // native        = captura nativa 60 fps + WebRTC recodifica e se adapta à rede (padrão)
   // native-direct = envia o H.264 nativo direto (máxima qualidade, só para rede perfeita)
-  // pelo servidor de vídeo a imagem sai pelo encoder do Chromium em 3 qualidades (a "direta" não
-  // dá para dividir): usa a nativa adaptativa
-  if (settings.engine === 'native-direct' && sfuWanted()) settings.engine = 'native';
+  // pelo servidor de vídeo: a nativa direta manda a imagem da placa UMA vez para o servidor (como o
+  // Discord); a adaptativa manda 3 qualidades feitas pelo Chromium
   const direct = settings.engine === 'native-direct';
   let stream, video, preview, nativeInfo = null;
   if (settings.engine.startsWith('native') && state.nativeStuck) {
@@ -1625,6 +1659,7 @@ async function startShareInner(overrides) {
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
       state.nativeKbps = directMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
+      if (direct && sfuWanted()) state.nativeKbps = sfuKbps(settings); // pelo servidor: uma cópia só, teto do mês
       // troca de resolução pela rede: continua de onde estava (começar no máximo entupiria de novo)
       if (settings.startKbps) state.nativeKbps = Math.min(state.nativeKbps, settings.startKbps);
       baseRtt = Infinity;
@@ -1942,8 +1977,27 @@ let lastCut = 0, baseRtt = Infinity, netCeiling = 0, netCeilingAt = 0;
 async function adaptNativeBitrate() {
   const share = state.share;
   if (!share || !share.direct || !state.nativeKbps) return;
-  const max = directMbps(share.settings.bitrate) * 1000;
+  const viaSfu = !!share.sfu && [...state.peers.values()].some((p) => p.sfuPulling);
+  const anyDirect = [...state.peers.values()].some((p) => p.vT.sender.track);
+  // pelo servidor sai uma cópia só (teto do mês); quem ainda recebe direto divide o upload
+  const max = viaSfu ? Math.min(sfuKbps(share.settings), anyDirect ? directMbps(share.settings.bitrate) * 1000 : Infinity)
+    : directMbps(share.settings.bitrate) * 1000;
   let avail = Infinity, loss = 0, rtt = 0, nack = 0, pli = 0, any = false;
+  if (viaSfu && window.Sfu.pc() && window.Sfu.pubSender()) {
+    try {
+      const report = await window.Sfu.pc().getStats();
+      let mainOut = null;
+      (await window.Sfu.pubSender().getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') mainOut = r; });
+      report.forEach((r) => {
+        if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) avail = Math.min(avail, r.availableOutgoingBitrate / 1000);
+        if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && (!mainOut || r.localId === mainOut.id)) {
+          loss = Math.max(loss, r.fractionLost || 0);
+          rtt = Math.max(rtt, r.roundTripTime || 0);
+        }
+      });
+      if (mainOut) { nack += mainOut.nackCount || 0; pli += mainOut.pliCount || 0; any = true; }
+    } catch {}
+  }
   for (const peer of state.peers.values()) {
     if (!peer.vT.sender.track || peer.pc.connectionState !== 'connected') continue;
     let report;
@@ -1972,7 +2026,10 @@ async function adaptNativeBitrate() {
   const ns = window.NativeVideo.lastStats || {};
   const flushes = Object.values(ns).reduce((a, p) => a + (p && p.active ? p.flush || 0 : 0), 0);
   const severe = loss > 0.08 || extra > 0.3;
-  const congested = severe || loss > 0.02 || extra > 0.08 || flushes > 0;
+  // alguém recebendo pelo servidor reclamou (a imagem é uma só: segue o mais fraco, como o Discord),
+  // mas sem afundar todo mundo por causa de um só: no máx. até 40% do teto
+  const rxBad = viaSfu && state.nativeKbps > max * 0.4 && [...state.peers.values()].some((p) => p.sfuPulling && Date.now() - (p.sfuRxBadAt || 0) < 2500);
+  const congested = severe || loss > 0.02 || extra > 0.08 || flushes > 0 || rxBad;
   let target = state.nativeKbps;
   const now = performance.now();
   // depois de um corte o ping demora a baixar (a fila precisa esvaziar): espera antes de cortar de novo
@@ -2090,18 +2147,21 @@ async function smartResDirect() {
 setInterval(smartResDirect, 1000);
 
 // Pedidos de keyframe reais (PLI/FIR) vindos de quem assiste: lidos das estatísticas do envio.
+const sfuKeyReqs = { keyReqs: null };
 async function watchKeyRequests() {
   if (!state.share || !state.share.direct) return;
-  for (const peer of state.peers.values()) {
-    const sender = peer.vT.sender;
+  const senders = [...state.peers.values()].map((peer) => [peer, peer.vT.sender]);
+  const ss = state.share.sfu && window.Sfu.pubSender();
+  if (ss) senders.push([sfuKeyReqs, ss]); // o servidor pede quando alguém entra ou perde a imagem
+  for (const [who, sender] of senders) {
     if (!sender.track) continue;
     let report;
     try { report = await sender.getStats(); } catch { continue; }
     report.forEach((r) => {
       if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
       const n = (r.pliCount || 0) + (r.firCount || 0);
-      if (peer.keyReqs != null && n > peer.keyReqs) window.Helper.videoKey();
-      peer.keyReqs = n;
+      if (who.keyReqs != null && n > who.keyReqs) window.NativeVideo.key();
+      who.keyReqs = n;
     });
   }
 }
@@ -2843,7 +2903,7 @@ async function healthLoop() {
     const now = Date.now();
     if (cpu) { cpuStrikes++; cpuSeenAt = now; } else cpuStrikes = 0;
     const sh = state.share;
-    if (cpuStrikes >= 2 && sh.native && !sh.direct && !sh.autoDirect && !sh.sfu && !sfuWanted() && localStorage.getItem('autoDirect') !== '0') {
+    if (cpuStrikes >= 2 && sh.native && !sh.direct && !sh.autoDirect && localStorage.getItem('autoDirect') !== '0') {
       // Captura nativa adaptativa: o WebRTC recodifica a tela uma vez POR AMIGO e, com um jogo
       // pesado disputando a placa, cada quadro chegava a levar 200+ ms. A "Nativa direta" manda o
       // vídeo que o helper já codifica (prioridade alta na placa) para todos: bem mais leve.
@@ -2931,6 +2991,7 @@ async function healthLoop() {
     }
     if (loss > 0.05 || fps < badFps || freezes >= 2) level = 'bad';
     peer.quality = { level, reason };
+    if (peer.sfuIn) sfuRxFeedback(peer, !mineBad && !senderSlow && !thumb && (loss > 0.03 || (freezes >= 1 && lostD > 0)));
     // histórico (gráfico de qualidade): um ponto a cada ~2 s, últimos 10 min, guardado pelo nome
     let hist = state.hist.get(peer.name);
     if (!hist) { hist = []; state.hist.set(peer.name, hist); }
@@ -3007,7 +3068,10 @@ function applyPlayoutBuffer() {
   for (const peer of state.peers.values()) {
     const mode = latencyMode(peer);
     const target = mode === 'low' ? null : mode === 'smooth' ? 350 : gameBuf;
-    for (const r of peer.pc.getReceivers()) {
+    const recvs = [...peer.pc.getReceivers()];
+    // pelo servidor de vídeo a imagem e o som chegam por outra conexão (antes a "Imagem lisa" não valia lá)
+    if (peer.sfuIn) recvs.push(...[peer.sfuIn.videoRecv, peer.sfuIn.audioRecv].filter(Boolean));
+    for (const r of recvs) {
       if (r.track && (r.track.kind === 'video' || mode === 'smooth')) { try { r.jitterBufferTarget = target; } catch {} }
     }
     if (peer.tile && peer.tile.latBtn) {
@@ -4511,7 +4575,6 @@ function initRoomUi() {
   $('#opt-sfu').onchange = () => {
     localStorage.setItem('sfu', $('#opt-sfu').checked ? '1' : '0');
     if ($('#opt-sfu').checked && !sfuWanted()) toast(isOnlineCode(state.hostIp) && !state.sfuServer ? 'Esta sala online ainda não tem servidor de vídeo configurado.' : 'Vale só na sala online (sem Radmin).');
-    else if (state.share && state.share.direct && sfuWanted()) toast('Pelo servidor a "Nativa direta" não é usada: reinicie a transmissão para ir pelo servidor.');
     sfuSync();
   };
   $('#opt-gamebuffer').checked = localStorage.getItem('gamebuffer') !== '0';

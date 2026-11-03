@@ -557,15 +557,19 @@ sealed unsafe class VideoStreamer : IDisposable
 
         Guid iid = IID_ICodecAPI;
         if (Marshal.QueryInterface(encoder.NativePointer, ref iid, out codecApi) != 0) codecApi = IntPtr.Zero;
-        // taxa constante (sem picos na rede), baixa latência, sem B-frames, keyframe a cada 4 s
+        // taxa constante (sem picos na rede), baixa latência, sem B-frames, keyframe a cada 30 s
         SetCodec(CODECAPI_RateControlMode, 0u);               // CBR
         SetCodec(CODECAPI_MeanBitRate, (uint)bitrateKbps * 1000);
-        // VBV de ~4 quadros (66 ms a 60 fps): segura melhor explosões/movimento rápido sem
-        // aumentar muito o atraso (com 2 quadros a imagem borrava nas cenas pesadas)
-        SetCodec(CODECAPI_BufferSize, (uint)bitrateKbps * 1000 / (uint)fps * 4);
+        // VBV de ~8 quadros (133 ms a 60 fps). Com 4 quadros cada quadro tinha um orçamento rígido:
+        // keyframes e cenas pesadas saíam borrados e os bits não usados se perdiam (o Discord
+        // mediu o mesmo: janela maior = imagem melhor e bitrate médio mais perto do alvo)
+        SetCodec(CODECAPI_BufferSize, (uint)bitrateKbps * 1000 / (uint)fps * 8);
         SetCodecBool(CODECAPI_LowLatencyMode, true);
         SetCodec(CODECAPI_BPictureCount, 0u);
-        SetCodec(CODECAPI_GOPSize, (uint)fps * 4);
+        // keyframe custa 6 a 10 quadros normais: com um a cada 4 s a imagem "respirava" (borrava) a
+        // cada 4 s. Quem entra ou perde a imagem pede um na hora (PLI), então quase não precisa dos
+        // automáticos (o Discord usa ~1 por minuto)
+        SetCodec(CODECAPI_GOPSize, (uint)fps * 30);
         SetCodec(CODECAPI_QualityVsSpeed, 75u); // preset de mais qualidade (NVENC aguenta folgado a 1080p60)
 
         // Formato de saída: tenta o completo (High + cores BT.709); se o encoder recusar,

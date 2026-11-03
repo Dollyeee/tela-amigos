@@ -79,6 +79,12 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Estatísticas** (S): FPS, bitrate, ping, buffer, travadas, perdas, rota, encoder.
 - **Rota por amigo** (menu de resolução na tela dele → "Conexão"): *Automática* troca sozinha para a internet direta quando o Radmin trava (ping alto/perdas por ~30 s) e volta se não conectar em 15 s; *Pelo Radmin/VPN* ou *Internet direta* fixam. Fica salvo por amigo.
 - **Freio na "Nativa direta"**: quando o ping começa a subir (fila se formando no caminho) o bitrate cai na hora e volta devagar; quedas seguidas do mesmo amigo não disparam uma enxurrada de quadros-chave para todos.
+- **Transmitir pelo servidor (beta, sala online)**: você manda uma cópia só e o servidor repassa para cada amigo.
+  Na *Nativa direta* vai a imagem da placa de vídeo (H.264/H.265/AV1, uma qualidade, como o Discord): o bitrate
+  segue a sua conexão até o servidor e o amigo mais fraco. Na *Nativa adaptativa* o Chromium manda 3 qualidades
+  e cada amigo recebe a que a rede dele aguenta (o app baixa para a média por um tempo quando há perda).
+- **Quadros-chave raros** (a cada 30 s, ou na hora quando alguém entra/perde a imagem): antes a imagem "respirava"
+  a cada 4 s.
 
 ## Desenvolver
 ```

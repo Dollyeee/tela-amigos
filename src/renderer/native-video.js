@@ -304,5 +304,7 @@ window.NativeVideo = (() => {
     previewOn = on;
   }
 
-  return { start, stop, attach, setMode, remove, setPreview, isRunning: () => running, dbg };
+  // pedido de keyframe (no teste automático vai para o gerador do teste)
+  function key() { if (pushKey) pushKey(); else window.Helper.videoKey(); }
+  return { start, stop, attach, setMode, remove, setPreview, key, isRunning: () => running, dbg };
 })();
