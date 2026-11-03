@@ -128,6 +128,7 @@ export class Room {
         default: throw new Error('operação desconhecida');
       }
     } catch (e) {
+      console.log(`sfu ${msg.op} falhou: ${(e && e.message) || e}`); // aparece nos logs do Worker
       reply(false, String((e && e.message) || e).slice(0, 300));
     }
   }

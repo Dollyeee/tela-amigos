@@ -93,6 +93,8 @@ async function buildRendererDiag() {
   const lines = [];
   const s = state.share;
   lines.push(`nome=${state.myName} id=${state.myId} sala=${state.hostIp} anfitriao=${!!state.isHost} layout=${state.layout}`);
+  lines.push(`servidor de vídeo: sala=${state.sfuServer ? 'tem' : 'não tem'} opção=${localStorage.getItem('sfu') === '1' ? 'ligada' : 'desligada'} ` +
+    `minhaTransmissão=${state.share && state.share.sfu ? 'pelo servidor' : '-'} conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
   lines.push(`config=${safeJson(state.settings)}`);
   lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} modoLeve=${!!state.lightMode}` : ''}`);
   if (state.nativeStats) lines.push(`helper=${safeJson(state.nativeStats)}`);
@@ -588,7 +590,7 @@ function onRelay(from, data) {
         // transmissão pelo servidor de vídeo: puxa de lá (ids conferidos pelo servidor da sala)
         const sp = data.sfu && typeof data.sfu === 'object' && typeof data.sfu.s === 'string' && typeof data.sfu.v === 'string'
           ? { s: data.sfu.s.slice(0, 64), v: data.sfu.v.slice(0, 64), a: typeof data.sfu.a === 'string' ? data.sfu.a.slice(0, 64) : null } : null;
-        if (!sp) peer.sfuFailedKey = null;
+        if (!sp) peer.sfuFail = null;
         peer.sfuPub = sp;
         sfuPullSync(peer);
         const hadCam = peer.hasCam;
@@ -1036,6 +1038,8 @@ async function sfuSyncInner() {
       }
     } catch (e) {
       share.sfu = null;
+      console.warn(`servidor de vídeo: não deu para transmitir por ele: ${e.message}`);
+      state.sfuLastErr = `transmitir: ${e.message}`;
       toast(`Servidor de vídeo indisponível (${e.message}). Transmitindo direto para os amigos.`, 'error');
       for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
     }
@@ -1054,8 +1058,11 @@ async function sfuPullInner(peer) {
   if (!state.peers.has(peer.id)) return;
   const pub = peer.sharing ? peer.sfuPub : null;
   const level = peer.iWant || 'full';
-  const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !peer.sfuFailedKey;
   const key = pub ? `${pub.s}/${pub.v}` : null;
+  // falhou há pouco com esta transmissão: espera (10 s, 20 s, 30 s) e desiste depois de 3 tentativas
+  const f = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail : null;
+  const blocked = !!f && (f.n >= 3 || Date.now() - f.at < 10000 * f.n);
+  const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !blocked;
   const rid = level === 'thumb' ? 'q' : peer.iWantH && peer.iWantH <= 540 ? 'h' : 'f';
   if (peer.sfuIn && (!want || peer.sfuIn.key !== key)) {
     const old = peer.sfuIn;
@@ -1074,8 +1081,13 @@ async function sfuPullInner(peer) {
     sendRelay(peer.id, { kind: 'sfu-pull', on: true });
     console.log(`servidor de vídeo: recebendo ${peer.name} pelo servidor`);
   } catch (e) {
-    peer.sfuFailedKey = key; // não insiste nessa transmissão; continua pela conexão direta
-    toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Continuando direto.`, 'error');
+    // continua pela conexão direta; tenta de novo daqui a pouco (no máx. 3 vezes por transmissão)
+    const n = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail.n + 1 : 1;
+    peer.sfuFail = { key, n, at: Date.now() };
+    state.sfuLastErr = `receber ${peer.name}: ${e.message}`;
+    console.warn(`servidor de vídeo: não deu para receber ${peer.name} (tentativa ${n}): ${e.message}`);
+    if (n < 3) setTimeout(() => sfuPullSync(peer), 10000 * n + 500);
+    else toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Continuando direto.`, 'error');
   }
 }
 
@@ -2830,7 +2842,7 @@ async function healthLoop() {
     const now = Date.now();
     if (cpu) { cpuStrikes++; cpuSeenAt = now; } else cpuStrikes = 0;
     const sh = state.share;
-    if (cpuStrikes >= 2 && sh.native && !sh.direct && !sh.autoDirect && localStorage.getItem('autoDirect') !== '0') {
+    if (cpuStrikes >= 2 && sh.native && !sh.direct && !sh.autoDirect && !sh.sfu && !sfuWanted() && localStorage.getItem('autoDirect') !== '0') {
       // Captura nativa adaptativa: o WebRTC recodifica a tela uma vez POR AMIGO e, com um jogo
       // pesado disputando a placa, cada quadro chegava a levar 200+ ms. A "Nativa direta" manda o
       // vídeo que o helper já codifica (prioridade alta na placa) para todos: bem mais leve.
