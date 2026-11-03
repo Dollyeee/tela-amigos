@@ -17,6 +17,10 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 3. Os outros veem a sala em **Salas abertas** e clicam em **Entrar** (ou digitam o IP `26.x.x.x`).
 4. Na primeira vez, o Windows pergunta sobre o firewall para quem hospeda: marque **redes públicas e privadas**.
 
+**Sem Radmin (sala online):** uma pessoa clica em **Criar sala online** e manda o código de 6 letras/números
+(aparece no topo da sala, clique para copiar). Os outros digitam o código no campo de entrar. O vídeo vai
+direto entre os PCs pela internet; só as mensagens de conexão passam pelo servidor.
+
 ## Recursos
 - **Captura nativa 60 fps** (Windows Graphics Capture + H.264 na placa de vídeo) que se adapta à rede;
   "Nativa direta" para rede perfeita; "Chromium" para compatibilidade.
@@ -73,6 +77,8 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 - Atalhos globais: **Ctrl+Shift+S** transmitir/parar · **M** mutar todos · **O** destravar sobreposição · **C** salvar clipe.
 - **Enviar diagnóstico**: gera um .txt na Área de Trabalho com tudo o que ajuda a achar problemas.
 - **Estatísticas** (S): FPS, bitrate, ping, buffer, travadas, perdas, rota, encoder.
+- **Rota por amigo** (menu de resolução na tela dele → "Conexão"): *Automática* troca sozinha para a internet direta quando o Radmin trava (ping alto/perdas por ~30 s) e volta se não conectar em 15 s; *Pelo Radmin/VPN* ou *Internet direta* fixam. Fica salvo por amigo.
+- **Freio na "Nativa direta"**: quando o ping começa a subir (fila se formando no caminho) o bitrate cai na hora e volta devagar; quedas seguidas do mesmo amigo não disparam uma enxurrada de quadros-chave para todos.
 
 ## Desenvolver
 ```
@@ -88,3 +94,7 @@ Requer Node.js, .NET 10 SDK e `gh` logado.
 - `src/helper-host.js` – processo que roda o AudioHelper e fala direto com a interface
 - `src/renderer/` – interface, WebRTC, `native-video.js` (vídeo nativo no WebRTC)
 - `audio-helper/` – `VideoStreamer.cs` (captura + encoder), `HdrToneMapper.cs`, `Program.cs` (áudio por app)
+- `online-server/` – sala online (Cloudflare Worker + Durable Object; mesmo protocolo de `signaling.js`).
+  Publicar: `cd online-server && npx wrangler login && npx wrangler deploy`; depois pôr a URL `wss://...`
+  em `ONLINE_SERVER_DEFAULT` (`src/renderer/app.js`). TURN opcional: `npx wrangler secret put TURN_KEY_ID`
+  e `TURN_KEY_API_TOKEN` (chave TURN do Cloudflare Realtime).

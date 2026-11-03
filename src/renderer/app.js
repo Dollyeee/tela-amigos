@@ -7,7 +7,18 @@
 const $ = (s) => document.querySelector(s);
 let SIGNAL_PORT = 47800;
 window.native.netInfo().then((i) => { SIGNAL_PORT = i.port; });
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+let ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]; // a sala online manda os dela (STUN + TURN)
+
+// Sala online (sem Radmin): sinalização num servidor na internet (online-server/, Cloudflare).
+// Entra-se com um código de 6 letras/números em vez do IP do Radmin.
+const ONLINE_SERVER_DEFAULT = 'wss://tela-amigos.telaamigos-dolle.workers.dev';
+function onlineServer() { return (localStorage.getItem('onlineServer') || ONLINE_SERVER_DEFAULT).replace(/\/+$/, ''); }
+const ONLINE_CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
+function isOnlineCode(s) { return ONLINE_CODE_RE.test(String(s || '').toUpperCase()); }
+function newOnlineCode() {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return [...crypto.getRandomValues(new Uint8Array(6))].map((x) => A[x % A.length]).join('');
+}
 
 const state = {
   myId: null,
@@ -90,7 +101,7 @@ async function buildRendererDiag() {
   for (const p of state.peers.values()) {
     lines.push('');
     lines.push(`--- ${p.name} (id ${p.id}) conn=${p.pc.connectionState} ice=${p.pc.iceConnectionState} sinal=${p.pc.signalingState} ` +
-      `compartilhando=${p.sharing} rota=${p.route || '?'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
+      `compartilhando=${p.sharing} rota=${p.route || '?'} caminho=${p.routePath || '?'} rotaUso=${p.routeUse || '-'} rotaPref=${p.routePref || '-'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
       `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant} uploadMedido=${p.upMbps || '?'}Mb/s ` +
       `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} av1=${p.av1} codecDireta=${state.share ? state.share.codec : '-'} ` +
       `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'} resInteligente=${p.smartH || 'cheia'}`);
@@ -224,6 +235,17 @@ async function initLobby() {
     localStorage.setItem('lastRole', 'host');
     connect('127.0.0.1', true);
   };
+  $('#btn-host-online').onclick = () => {
+    if (!checkName()) return;
+    if (!onlineServer()) return showLobbyError('Sala online ainda não está disponível nesta versão.');
+    const code = newOnlineCode();
+    $('#host-ip').value = code;
+    localStorage.setItem('hostIp', code);
+    localStorage.setItem('lastRole', 'guest');
+    state.hostIp = code;
+    state.isHost = false;
+    connect(code, false);
+  };
   $('#btn-close-my-room').onclick = async () => {
     await window.native.hostStop();
     refreshMyRoom();
@@ -298,7 +320,8 @@ function renderRooms() {
   }
   for (const r of recentRooms()) {
     if (seen.has(r.ip)) continue;
-    row(`Sala de ${r.hostName}`, `recente · não encontrada agora · ${r.ip}`, r.ip, true);
+    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, `recente · código ${r.ip}`, r.ip, false);
+    else row(`Sala de ${r.hostName}`, `recente · não encontrada agora · ${r.ip}`, r.ip, true);
   }
   if (!ul.children.length) {
     const li = document.createElement('li');
@@ -334,8 +357,12 @@ async function refreshMyRoom() {
 
   $('#btn-join').onclick = () => {
     if (!checkName()) return;
-    const ip = $('#host-ip').value.trim();
-    if (!/^[\w.-]+$/.test(ip)) return showLobbyError('Digite o IP de quem está hospedando.');
+    let ip = $('#host-ip').value.trim();
+    if (isOnlineCode(ip)) {
+      ip = ip.toUpperCase();
+      if (!onlineServer()) return showLobbyError('Sala online ainda não está disponível nesta versão.');
+    }
+    if (!/^[\w.-]+$/.test(ip)) return showLobbyError('Digite o IP do Radmin de quem hospeda ou o código da sala online.');
     localStorage.setItem('hostIp', ip);
     localStorage.setItem('lastRole', 'guest');
     state.hostIp = ip;
@@ -368,7 +395,15 @@ function connect(ip, isHost) {
 
 let heartbeat = null;
 function openSocket(ip, reconnecting) {
-  const ws = new WebSocket(`ws://${ip}:${SIGNAL_PORT}`);
+  const online = isOnlineCode(ip);
+  let ws;
+  try {
+    ws = new WebSocket(online ? `${onlineServer()}/sala/${ip.toUpperCase()}` : `ws://${ip}:${SIGNAL_PORT}`);
+  } catch (e) {
+    $('#btn-join').disabled = $('#btn-host').disabled = false;
+    showLobbyError(`Endereço inválido (${e.message}).`);
+    return;
+  }
   state.ws = ws;
   let opened = false;
   let lastMsg = Date.now();
@@ -398,7 +433,9 @@ function openSocket(ip, reconnecting) {
     if (ws !== state.ws) return; // conexão antiga (saiu e entrou de novo)
     if (!opened && !reconnecting) {
       $('#btn-join').disabled = $('#btn-host').disabled = false;
-      showLobbyError(`Não consegui conectar em ${ip}. Confira se o IP está certo, se a pessoa clicou em "Hospedar" e se o Radmin está conectado.`);
+      showLobbyError(online
+        ? `Não consegui conectar na sala online ${ip.toUpperCase()}. Confira sua internet e tente de novo.`
+        : `Não consegui conectar em ${ip}. Confira se o IP está certo, se a pessoa clicou em "Hospedar" e se o Radmin está conectado.`);
       return;
     }
     if (state.leaving) return;
@@ -440,6 +477,7 @@ function onSignal(msg) {
   switch (msg.type) {
     case 'welcome': {
       const wasInRoom = !$('#room').classList.contains('hidden');
+      if (Array.isArray(msg.ice) && msg.ice.length) ICE_SERVERS = msg.ice.slice(0, 6);
       setReconnectBanner(false);
       state.resume = { id: msg.id, token: msg.token };
       if (wasInRoom) {
@@ -466,7 +504,8 @@ function onSignal(msg) {
       if (!state.isHost) {
         const d = discovered.find((r) => r.ip === state.hostIp);
         const prev = recentRooms().find((r) => r.ip === state.hostIp);
-        rememberRoom(state.hostIp, d ? d.hostName : prev ? prev.hostName : state.hostIp);
+        const onlineName = isOnlineCode(state.hostIp) && !prev ? (msg.peers[0] ? msg.peers[0].name : state.myName) : null;
+        rememberRoom(state.hostIp, onlineName || (d ? d.hostName : prev ? prev.hostName : state.hostIp));
       }
       enterRoom();
       for (const p of msg.peers) createPeer(p.id, p.name);
@@ -510,6 +549,12 @@ function onRelay(from, data) {
   const peer = state.peers.get(from);
   if (!peer) return;
   switch (data.kind) {
+    case 'route': // o amigo trocou a rota entre nós (ele reinicia o ICE)
+      if (data.use === 'net' || data.use === 'any') {
+        if (data.use === 'net') peer.netTriedAt = performance.now();
+        setRouteUse(peer, data.use, `pedido de ${peer.name}`, false);
+      }
+      break;
     case 'state-req': // o amigo reconectou à sala: reenvia meu estado e destrava a negociação
       sendState(from);
       unstickNegotiation(peer);
@@ -637,6 +682,10 @@ function createPeer(id, name) {
     tile: null,
     statsPrev: null,
     stats: null,
+    routePref: loadRoutePref(name), // 'auto' | 'any' (Radmin/VPN) | 'net' (internet direta)
+    routeUse: 'any',                // 'net' = candidatos da VPN ignorados
+    routePath: '?',
+    routeSince: performance.now(),
   };
   // cada trilha num "stream" identificado: quem recebe sabe o que é tela e o que é câmera
   peer.screenMS = new MediaStream();
@@ -685,7 +734,9 @@ function createPeer(id, name) {
     }
   };
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate && !isIPv6Candidate(candidate)) sendRelay(id, { kind: 'ice', candidate: demoteVpnCandidate(candidate.toJSON()) });
+    if (candidate && !isIPv6Candidate(candidate) && !(peer.routeUse === 'net' && isVpnCandidate(candidate))) {
+      sendRelay(id, { kind: 'ice', candidate: demoteVpnCandidate(candidate.toJSON()) });
+    }
   };
   pc.ontrack = (e) => {
     if (e.track.kind === 'audio') {
@@ -702,7 +753,11 @@ function createPeer(id, name) {
   };
   pc.onconnectionstatechange = () => {
     peer.conn = pc.connectionState;
-    if (pc.connectionState === 'failed') pc.restartIce();
+    if (pc.connectionState === 'failed') {
+      // pela internet não deu: volta a aceitar o Radmin (setRouteUse já reinicia o ICE)
+      if (peer.routeUse === 'net' && peer.hadVpn) { peer.netFailedAt = performance.now(); setRouteUse(peer, 'any', 'conexão pela internet caiu'); }
+      else pc.restartIce();
+    }
     if (pc.connectionState === 'connected') applySendParams(peer);
     renderPeople();
   };
@@ -738,7 +793,7 @@ async function negotiate(peer) {
     if (pc.signalingState !== 'stable') { peer.pendingNegotiation = true; return; }
     offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000, native: !!(state.share && state.share.direct) });
     await pc.setLocalDescription(offer);
-    sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
+    sendRelay(peer.id, { kind: 'sdp', description: outDesc(peer, pc.localDescription) });
   } catch (e) {
     console.error('negotiate', e);
     peer.pendingNegotiation = true;
@@ -766,7 +821,7 @@ async function handleDescription(peer, description) {
     try {
       await pc.setRemoteDescription({
         type: description.type,
-        sdp: window.Sdp.munge(description.sdp, {
+        sdp: window.Sdp.munge(routeIn(peer, description.sdp), {
           videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000,
           native: !!(state.share && state.share.direct),
         }),
@@ -783,7 +838,7 @@ async function handleDescription(peer, description) {
       const answer = await pc.createAnswer();
       answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000, native: !!(state.share && state.share.direct) });
       await pc.setLocalDescription(answer);
-      sendRelay(peer.id, { kind: 'sdp', description: pc.localDescription });
+      sendRelay(peer.id, { kind: 'sdp', description: outDesc(peer, pc.localDescription) });
     }
   } catch (e) {
     console.error('sdp', e);
@@ -811,6 +866,7 @@ function demoteVpnCandidate(c) {
 
 async function handleCandidate(peer, candidate) {
   if (candidate && candidate.candidate && isIPv6Candidate(candidate)) return; // amigo com versão antiga
+  if (candidate && candidate.candidate && peer.routeUse === 'net' && isVpnCandidate(candidate)) return; // rota pela internet
   // chegou antes de existir uma descrição remota (ex.: a oferta dele foi descartada numa
   // colisão): guarda e aplica depois. Antes eram jogados fora e a conexão às vezes nunca fechava.
   if (!peer.pc.remoteDescription) {
@@ -823,6 +879,117 @@ async function handleCandidate(peer, candidate) {
     if (!peer.ignoreOffer) console.warn('ice', e);
   }
 }
+
+// ------------------------------------------------------------------ rota: Radmin x internet direta
+// Pelo Radmin os pacotes às vezes ficam presos numa fila (canal TCP/relay: ping de 1 a 20 s) e a
+// tela trava por segundos. A rota de cada amigo pode passar para a internet direta (STUN, UDP):
+// em "net" os candidatos da VPN são ignorados nos dois sentidos (os meus não saem, os dele não
+// entram) e o ICE reinicia. Basta um lado filtrar, então funciona até com amigo em versão antiga.
+// Se não conectar em 15 s, volta para o Radmin.
+const VPN_ADDR = /^(26|25)\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./;
+const ROUTE_LABELS = { auto: 'Automática', any: 'Pelo Radmin/VPN', net: 'Internet direta' };
+function candidateAddr(c) { return (c && (c.address || String(c.candidate || '').split(' ')[4])) || ''; }
+function isVpnAddr(a) { return !!window.__routeBlockAll || VPN_ADDR.test(a); } // __routeBlockAll: teste de falha
+function isVpnCandidate(c) { return isVpnAddr(candidateAddr(c)); }
+function stripVpnSdp(sdp) {
+  return String(sdp).split('\r\n').filter((l) => !(l.startsWith('a=candidate:') && isVpnAddr(l.split(' ')[4] || ''))).join('\r\n');
+}
+function outDesc(peer, d) { return d && peer.routeUse === 'net' ? { type: d.type, sdp: stripVpnSdp(d.sdp) } : d; }
+function routeIn(peer, sdp) { return peer.routeUse === 'net' ? stripVpnSdp(sdp) : sdp; }
+function loadRoutePref(name) { const v = localStorage.getItem(`route:${name}`); return v === 'any' || v === 'net' ? v : 'auto'; }
+
+function setRouteUse(peer, use, why, tell = true) {
+  if (peer.routeUse === use) return;
+  peer.routeUse = use;
+  peer.routeSince = performance.now();
+  peer.routeBad = [];
+  peer.netOkShown = false;
+  console.log(`rota com ${peer.name}: ${use === 'net' ? 'internet direta' : 'Radmin/VPN liberado'} (${why})`);
+  if (!tell) return; // quem pediu reinicia o ICE; a oferta dele chega em seguida
+  sendRelay(peer.id, { kind: 'route', use });
+  try { peer.pc.restartIce(); } catch (e) { console.warn('reiniciar ICE', e); }
+}
+
+function setRoutePref(id, pref) {
+  const peer = state.peers.get(id);
+  if (!peer) return;
+  peer.routePref = pref;
+  if (pref === 'auto') localStorage.removeItem(`route:${peer.name}`); else localStorage.setItem(`route:${peer.name}`, pref);
+  peer.netFailedAt = 0;
+  if (pref === 'net') { peer.netTriedAt = performance.now(); setRouteUse(peer, 'net', 'escolhido por você'); toast(`Conectando com ${peer.name} direto pela internet...`); }
+  else if (pref === 'any') setRouteUse(peer, 'any', 'escolhido por você');
+}
+
+async function routeWatch() {
+  const now = performance.now();
+  for (const peer of state.peers.values()) {
+    const pc = peer.pc;
+    if (pc.connectionState === 'closed') continue;
+    let report;
+    try { report = await pc.getStats(); } catch { continue; }
+    let pairId = null, rin = 0, lost = 0, recv = 0;
+    const pairs = new Map(), cands = new Map();
+    report.forEach((r) => {
+      if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId;
+      else if (r.type === 'candidate-pair') pairs.set(r.id, r);
+      else if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands.set(r.id, r);
+      else if (r.type === 'remote-inbound-rtp' && r.kind === 'video') rin = Math.max(rin, r.roundTripTime || 0);
+      else if (r.type === 'inbound-rtp' && r.kind === 'video') { lost += r.packetsLost || 0; recv += r.packetsReceived || 0; }
+    });
+    const pair = pairs.get(pairId);
+    let path = '?';
+    if (pair && pc.connectionState === 'connected') {
+      const l = cands.get(pair.localCandidateId), r = cands.get(pair.remoteCandidateId);
+      if (l && r) {
+        path = l.candidateType === 'relay' || r.candidateType === 'relay' ? 'relay'
+          : VPN_ADDR.test(l.address || '') || VPN_ADDR.test(r.address || '') ? 'vpn' : 'net';
+      }
+    }
+    peer.routePath = path;
+    if (path === 'vpn') peer.hadVpn = true;
+    // amostra ruim: ping do caminho alto ou perdendo pacotes
+    const rtt = Math.max((pair && pair.currentRoundTripTime) || 0, rin);
+    const dl = lost - (peer.routeLost != null ? peer.routeLost : lost), dr = recv - (peer.routeRecv != null ? peer.routeRecv : recv);
+    peer.routeLost = lost; peer.routeRecv = recv;
+    const loss = dl + dr > 50 ? Math.max(0, dl) / (Math.max(0, dl) + Math.max(0, dr)) : 0;
+    const bad = rtt > 0.35 || loss > 0.05;
+    peer.routeBad = peer.routeBad || [];
+    peer.routeBad.push(bad);
+    if (peer.routeBad.length > 15) peer.routeBad.shift();
+    const badN = peer.routeBad.filter(Boolean).length;
+    const since = now - (peer.routeSince || 0);
+
+    if (peer.routeUse === 'net') {
+      if (path === 'net' || path === 'relay') {
+        if (!peer.netOkShown) { peer.netOkShown = true; toast(`${peer.name}: conectado direto pela internet${path === 'relay' ? ' (por servidor)' : ''}.`); }
+        // a internet direta também ficou ruim por um bom tempo e o Radmin existe: tenta voltar
+        if (peer.routePref === 'auto' && peer.hadVpn && since > 60000 && peer.routeBad.length >= 15 && badN >= 10) {
+          peer.netTriedAt = now;
+          setRouteUse(peer, 'any', 'internet direta também ruim');
+        }
+      } else if (since > 15000) {
+        // não fechou pela internet: volta para o Radmin (e não tenta de novo tão cedo)
+        peer.netFailedAt = now;
+        setRouteUse(peer, 'any', 'internet direta não conectou');
+        toast(`Não deu para conectar com ${peer.name} direto pela internet. Voltando para o Radmin.`, 'error');
+        if (peer.routePref === 'net') { peer.routePref = 'auto'; localStorage.removeItem(`route:${peer.name}`); }
+      }
+      continue;
+    }
+    if (pc.connectionState !== 'connected') continue;
+    // escolhido "Internet direta" para este amigo (vale também depois de reconectar)
+    if (peer.routePref === 'net' && !peer.netFailedAt) { peer.netTriedAt = now; setRouteUse(peer, 'net', 'preferência salva'); continue; }
+    // automático: Radmin ruim por ~30 s -> tenta a internet (no máx. a cada 10 min)
+    if (peer.routePref === 'auto' && path === 'vpn' && localStorage.getItem('autoRoute') !== '0' &&
+        peer.routeBad.length >= 15 && badN >= 8 && since > 30000 &&
+        (!peer.netTriedAt || now - peer.netTriedAt > 600000)) {
+      peer.netTriedAt = now;
+      setRouteUse(peer, 'net', `Radmin ruim (ping ${Math.round(rtt * 1000)} ms, perda ${Math.round(loss * 100)}%)`);
+      toast(`A conexão com ${peer.name} pelo Radmin está ruim: tentando direto pela internet...`);
+    }
+  }
+}
+setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000);
 
 function removePeer(id) {
   const peer = state.peers.get(id);
@@ -1656,7 +1823,7 @@ async function runNetTest() {
 //  - rede limpa: volta a subir ~6% por segundo até o máximo
 // (A estimativa de banda do WebRTC é conservadora demais pelo Radmin: só serve de informação.)
 state.netInfo = { avail: null, loss: 0, rtt: null, nack: 0, pli: 0 };
-let lastCut = 0, baseRtt = Infinity;
+let lastCut = 0, baseRtt = Infinity, netCeiling = 0, netCeilingAt = 0;
 async function adaptNativeBitrate() {
   const share = state.share;
   if (!share || !share.direct || !state.nativeKbps) return;
@@ -1685,15 +1852,31 @@ async function adaptNativeBitrate() {
   state.netInfo = { avail: isFinite(avail) ? avail : null, loss, rtt, nack, pli };
 
   if (rtt > 0) baseRtt = Math.min(baseRtt, rtt);
-  const congested = loss > 0.02 || (rtt > 0 && isFinite(baseRtt) && rtt > baseRtt + 0.08);
+  const extra = rtt > 0 && isFinite(baseRtt) ? rtt - baseRtt : 0; // fila se formando no caminho
+  // amigo cujo envio ficou para trás (quadros descartados à espera de keyframe)
+  const ns = window.NativeVideo.lastStats || {};
+  const flushes = Object.values(ns).reduce((a, p) => a + (p && p.active ? p.flush || 0 : 0), 0);
+  const severe = loss > 0.08 || extra > 0.3;
+  const congested = severe || loss > 0.02 || extra > 0.08 || flushes > 0;
   let target = state.nativeKbps;
   const now = performance.now();
+  // depois de um corte o ping demora a baixar (a fila precisa esvaziar): espera antes de cortar de novo
+  const gap = Math.min(3000, Math.max(severe ? 1000 : 2000, rtt * 1000));
   if (congested) {
-    if (now - lastCut > 2000) { target = state.nativeKbps * 0.75; lastCut = now; }
-  } else if (loss < 0.005 && now - lastCut > 3000) {
-    target = state.nativeKbps * 1.06 + 200;
+    if (now - lastCut > gap) {
+      target = state.nativeKbps * (severe ? 0.5 : 0.75);
+      lastCut = now;
+      netCeiling = state.nativeKbps; netCeilingAt = now;
+      if (severe) console.log(`bitrate da direta: freio forte (ping +${Math.round(extra * 1000)} ms, perda ${Math.round(loss * 100)}%) -> ${Math.round(target)} kb/s`);
+    }
+  } else if (extra > 0.04) {
+    // ping subindo um pouco: segura onde está
+  } else if (loss < 0.005 && now - lastCut > 6000) {
+    // sobe devagar; perto de onde a rede reclamou há pouco, mais devagar ainda
+    const near = netCeiling && state.nativeKbps > netCeiling * 0.85 && now - netCeilingAt < 120000;
+    target = state.nativeKbps * (near ? 1.01 : 1.04) + 100;
   }
-  target = Math.round(Math.max(1500, Math.min(max, target)));
+  target = Math.round(Math.max(1000, Math.min(max, target)));
   if (target !== state.nativeKbps && (Math.abs(target - state.nativeKbps) / state.nativeKbps > 0.05 || target === max)) {
     state.nativeKbps = target;
     window.Helper.videoBitrate(target);
@@ -2606,7 +2789,10 @@ async function healthLoop() {
     const lowFps = thumb ? 12 : Math.min(40, (h.target || 60) * 0.75), badFps = thumb ? 5 : 15;
     const senderSlow = h.cpu || (h.cap != null && h.target && h.cap < h.target * 0.75);
     const netBad = loss > 0.01 || (rtt && rtt > 0.12) || (freezes >= 1 && lostD > 0);
-    const mineBad = renderDrop > 0.1 || decMs > 25 || (recvFps > fps + 10);
+    const kbpsIn = ((q.bytes - prev.bytes) * 8) / dt / 1000;
+    // dados chegando e nada aparecendo: quadros sem o quadro-chave de antes (não é o seu PC)
+    const noPicture = fps < badFps && kbpsIn > 300 && renderDrop <= 0.1 && decMs <= 25;
+    const mineBad = !noPicture && (renderDrop > 0.1 || decMs > 25 || (recvFps > fps + 10));
     let level = 'good', reason = 'tudo certo', short = '';
     if (fps < lowFps || freezes >= 1 || netBad || senderSlow || mineBad) {
       level = 'warn';
@@ -2620,6 +2806,9 @@ async function healthLoop() {
       } else if (mineBad) {
         reason = `seu PC está ocupado (${renderDrop > 0.1 ? `${Math.round(renderDrop * 100)}% dos quadros não desenhados` : `decodificação lenta ${Math.round(decMs)} ms`})`;
         short = 'seu PC';
+      } else if (noPicture) {
+        reason = `chegando ${Math.round(kbpsIn / 100) / 10} Mb/s mas sem imagem (esperando quadro-chave)`;
+        short = 'esperando imagem';
       } else if (freezes >= 1) { reason = 'travou um pouco'; short = 'travou'; }
       else { reason = `poucos quadros (${Math.round(fps)} fps) — a tela pode estar parada`; short = 'tela parada?'; }
     }
@@ -2813,7 +3002,7 @@ async function stopShare() {
 function enterRoom() {
   $('#lobby').classList.add('hidden');
   $('#room').classList.remove('hidden');
-  $('#btn-copy-ip').textContent = `Sala: ${state.hostIp}  (copiar)`;
+  $('#btn-copy-ip').textContent = isOnlineCode(state.hostIp) ? `Sala online: ${state.hostIp}  (copiar código)` : `Sala: ${state.hostIp}  (copiar)`;
   $('#btn-close-room').classList.toggle('hidden', !state.isHost);
   render();
   // detecta jogo em tela cheia: com jogo pesado, as telas dos amigos ganham um respiro (buffer)
@@ -3856,6 +4045,19 @@ function openResMenu(id, btn) {
     b.onclick = (e) => { e.stopPropagation(); closeMenus(); setResMode(id, k); };
     m.appendChild(b);
   }
+  const head2 = document.createElement('div');
+  head2.className = 'menu-head';
+  const pathTxt = { vpn: 'agora pelo Radmin/VPN', net: 'agora direto pela internet', relay: 'agora por servidor' }[peer.routePath] || 'conectando';
+  head2.textContent = `Conexão com ${peer.name} (${pathTxt}):`;
+  m.appendChild(head2);
+  for (const k of ['auto', 'any', 'net']) {
+    const b = document.createElement('button');
+    b.className = k === peer.routePref ? 'on' : '';
+    b.textContent = (k === peer.routePref ? '✓ ' : '') + ROUTE_LABELS[k] +
+      (k === 'auto' ? ' (troca para a internet se o Radmin travar)' : k === 'net' ? ' (sem Radmin; volta se não conectar)' : '');
+    b.onclick = (e) => { e.stopPropagation(); closeMenus(); setRoutePref(id, k); };
+    m.appendChild(b);
+  }
   m.onpointerdown = (e) => e.stopPropagation();
   m.ondblclick = (e) => e.stopPropagation();
   document.body.appendChild(m);
@@ -4233,7 +4435,10 @@ function initRoomUi() {
     b.onclick = () => { state.layout = b.dataset.layout; render(); };
   });
   $('#btn-stats').onclick = () => { state.showStats = !state.showStats; render(); updateStats(); };
-  $('#btn-copy-ip').onclick = () => { window.native.copy(state.hostIp); toast('IP copiado. Mande para os amigos.'); };
+  $('#btn-copy-ip').onclick = () => {
+    window.native.copy(state.hostIp);
+    toast(isOnlineCode(state.hostIp) ? 'Código copiado. Os amigos entram com ele (não precisa de Radmin).' : 'IP copiado. Mande para os amigos.');
+  };
 
   window.addEventListener('resize', () => render());
   window.addEventListener('keydown', (e) => {

@@ -25,13 +25,25 @@ window.NativeVideo = (() => {
     if (wait <= 0) { lastKeyReq = Date.now(); postMessage({ type: 'key' }); return; }
     if (!keyTimer) keyTimer = setTimeout(() => { keyTimer = null; reqKey(); }, wait);
   }
+  // Um amigo com rede ruim fica para trás repetidamente. O keyframe vai para TODOS (um encoder só)
+  // e é grande: pedir um a cada queda dele trava a rede de todo mundo. Quedas seguidas do mesmo
+  // amigo esperam cada vez mais (até 8 s) antes do próximo pedido; os keyframes pedidos pelos
+  // outros continuam destravando ele.
+  function flushPeer(p) {
+    const now = Date.now();
+    p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1;
+    p.backoff = p.lastFlush && now - p.lastFlush < 10000 ? Math.min(8000, Math.max(1000, (p.backoff || 0) * 2)) : 0;
+    p.lastFlush = now;
+    p.keyAt = now + p.backoff;
+    if (!p.backoff) reqKey();
+  }
   // enquanto alguém estiver esperando o primeiro keyframe, insiste a cada segundo
   // (o encoder quase não gera keyframes sozinho; um pedido perdido deixaria a tela preta)
   setInterval(() => {
-    for (const p of peers.values()) if (p.active && p.waitingKey) { reqKey(); break; }
+    for (const p of peers.values()) if (p.active && p.waitingKey && Date.now() >= (p.keyAt || 0)) { reqKey(); break; }
     // diagnóstico: quantos quadros foram enviados/pulados/descartados por amigo
     const s = {};
-    for (const [id, p] of peers) { s[id] = { all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey }; p.all = p.sent = p.empty = p.flush = 0; }
+    for (const [id, p] of peers) { s[id] = { all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey, backoff: p.backoff || 0 }; p.all = p.sent = p.empty = p.flush = 0; }
     postMessage({ type: 'stats', peers: s });
   }, 1000);
 
@@ -48,7 +60,7 @@ window.NativeVideo = (() => {
         if (p.waitingKey) { if (!m.key) return; p.waitingKey = false; }
         p.q.push({ key: m.key, data: i === list.length - 1 ? m.data : m.data.slice(0) });
         // o encoder do Chromium ficou para trás: descarta e recomeça num keyframe
-        if (p.q.length > (av1 ? 12 : 4)) { p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1; reqKey(); }
+        if (p.q.length > (av1 ? 12 : 4)) flushPeer(p);
       });
     } else if (m.type === 'mode') {
       const p = get(m.id);
@@ -81,7 +93,7 @@ window.NativeVideo = (() => {
     // fila crescendo sem keyframe na frente (o envio ficou para trás): recomeça num keyframe.
     // (mesmo limite da entrada: os quadros que chegam enquanto o keyframe espera o lugar dele
     //  não podem disparar isso logo depois, senão vira um ciclo de keyframes)
-    if (item && p.q.length > 12 && !item.key) { p.q.length = 0; p.waitingKey = true; p.flush = (p.flush || 0) + 1; item = null; reqKey(); }
+    if (item && p.q.length > 12 && !item.key) { flushPeer(p); item = null; }
     if (!item) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; }
     p.q.shift();
     frame.data = item.data;

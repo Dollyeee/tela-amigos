@@ -6,6 +6,7 @@ window.Helper = (() => {
   const pending = new Map(); // id -> { expect, resolve, timer }
   const queue = [];          // comandos enviados antes do canal existir
   let onPcm = null, onVideo = null, onSys = null;
+  let lastKey = -1e9, keyTimer = null;
   const eventListeners = [];
 
   window.addEventListener('message', (e) => {
@@ -83,7 +84,13 @@ window.Helper = (() => {
       }, 'video-started', 15000);
     },
     videoStop: () => request({ cmd: 'video-stop' }, 'video-stopped'),
-    videoKey: () => send({ cmd: 'video-key' }),
+    // keyframe vai para todos os amigos (um encoder só) e é grande: pedidos juntos viram um só,
+    // no máximo um a cada 0,7 s (vários amigos pedindo ao mesmo tempo não viram uma enxurrada)
+    videoKey: () => {
+      const wait = lastKey + 700 - performance.now();
+      if (wait <= 0) { lastKey = performance.now(); send({ cmd: 'video-key' }); return; }
+      if (!keyTimer) keyTimer = setTimeout(() => { keyTimer = null; lastKey = performance.now(); send({ cmd: 'video-key' }); }, wait);
+    },
     diag: () => request({ cmd: 'video-diag' }, 'video-diag', 8000),
     gameWatch: (on) => request({ cmd: 'game-watch', on }, 'game-watch'),
     videoBitrate: (kbps) => send({ cmd: 'video-bitrate', kbps }),

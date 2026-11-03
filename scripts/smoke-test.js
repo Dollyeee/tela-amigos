@@ -9,7 +9,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = 47911; // porta de teste (nunca a da sala de verdade)
-const TIMEOUT_MS = 240000;
+const TIMEOUT_MS = 300000;
 const electronPath = require(path.join(ROOT, 'node_modules', 'electron'));
 const { createSignalingServer } = require(path.join(ROOT, 'src', 'signaling'));
 
@@ -173,7 +173,7 @@ const scriptA = common + `
     window.inkCheck = () => inkSeen;
     setTimeout(async () => { for (const p of state.peers.values()) { let o = ''; (await p.pc.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') o += JSON.stringify({ sent: r.framesSent, enc: r.framesEncoded, w: r.frameWidth, lim: r.qualityLimitationReason }); }); log('envio ' + o + ' trilha=' + p.vT.sender.track + ' estado=' + track.readyState); } }, 8000);
     // espera o B terminar (ele sai da sala) ou o tempo acabar
-    await until(() => state.peers.size === 0, 225000, 'B terminar');
+    await until(() => state.peers.size === 0, 285000, 'B terminar');
     if (!window.inkCheck()) throw new Error('o desenho da caneta do B não chegou');
     log('A OK');
   } catch (e) { log('FALHOU A: ' + e.message); }
@@ -288,6 +288,27 @@ const scriptB = common + `
     await until(async () => (await inMain()).frameHeight === 720, 45000, 'resolução inteligente voltar');
     log('resolução inteligente voltou (720p)');
     await sleep(5000); // encoder assentar no tamanho cheio antes das próximas trocas
+    // rota pela internet direta (sem os candidatos do Radmin): reconecta e a imagem continua
+    const decoded = async () => (await inMain()).framesDecoded || 0;
+    log('caminho antes: ' + peer().routePath);
+    setRoutePref(peer().id, 'net');
+    await until(() => peer().routeUse === 'net' && peer().routePath === 'net', 20000, 'conectar pela internet direta');
+    let d0 = await decoded(); await sleep(3000);
+    if (await decoded() - d0 < 30) throw new Error('imagem parada na rota pela internet');
+    log('rota pela internet ok (' + peer().route + ')');
+    // falha simulada: com a internet "bloqueada", volta sozinho para o Radmin e a imagem segue
+    setRoutePref(peer().id, 'any');
+    await sleep(4000);
+    window.__routeBlockAll = true;
+    d0 = await decoded();
+    setRoutePref(peer().id, 'net');
+    await until(() => peer().routeUse === 'any', 25000, 'voltar sozinho depois de não conectar');
+    const during = await decoded() - d0;
+    window.__routeBlockAll = false;
+    await until(() => peer().pc.connectionState === 'connected', 15000, 'conexão de volta');
+    d0 = await decoded(); await sleep(3000);
+    if (await decoded() - d0 < 30) throw new Error('imagem não voltou depois da falha na rota');
+    log('rota: falha simulada voltou sozinha (quadros durante a tentativa: ' + during + ')');
     // foto da tela
     const shot = await takeShot(peer().id);
     if (!shot) throw new Error('foto não salvou');
