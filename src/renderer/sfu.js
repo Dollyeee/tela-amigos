@@ -12,8 +12,28 @@ window.Sfu = (() => {
   let pub = null;            // { vT, aT, info }
   const pulls = new Map();   // chave -> { mids, video, audio, videoRecv, videoMid, info }
   let lastBytes = 0;
+  let downTimer = null;
 
   function setSender(fn) { sendFn = fn; }
+
+  // A conexão com o servidor morreu (caiu, ou ficou num estado que o servidor não aceita mais:
+  // "Session appears to be disconnected", negociação pela metade). Antes ela ficava assim para
+  // sempre e todo mundo via a tela preta até sair e entrar na sala. Agora: joga a sessão fora e
+  // avisa o app (window.Sfu.onLost), que volta para a conexão direta e refaz tudo numa sessão nova.
+  const DEAD = /Session appears to be disconnected|sessão desconhecida|signaling state|out-of-order|session.*not found/i;
+  function lost(why) {
+    if (!pc && !sid) return;
+    console.warn(`servidor de vídeo: conexão perdida (${why})`);
+    reset();
+    const cb = window.Sfu && window.Sfu.onLost;
+    if (cb) setTimeout(() => { try { cb(why); } catch (e) { console.warn('servidor de vídeo: recuperar', e); } }, 0);
+  }
+  function lostErr(e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    err.sfuLost = true;
+    lost(err.message);
+    return err;
+  }
 
   // respostas da sala ("sfu-res"); devolve true se a mensagem era daqui
   function onMessage(msg) {
@@ -22,7 +42,10 @@ window.Sfu = (() => {
     if (!p) return true;
     pending.delete(msg.req);
     clearTimeout(p.timer);
-    if (msg.ok) p.resolve(msg.data || {}); else p.reject(new Error(msg.error || 'erro no servidor de vídeo'));
+    if (msg.ok) { p.resolve(msg.data || {}); return true; }
+    const err = new Error(msg.error || 'erro no servidor de vídeo');
+    if (DEAD.test(err.message)) err.sfuDead = true;
+    p.reject(err);
     return true;
   }
 
@@ -44,6 +67,7 @@ window.Sfu = (() => {
   }
 
   function reset() {
+    clearTimeout(downTimer); downTimer = null;
     for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('servidor de vídeo encerrado')); }
     pending.clear();
     try { pc && pc.close(); } catch {}
@@ -53,10 +77,17 @@ window.Sfu = (() => {
   async function ensure() {
     if (pc && sid && !['failed', 'closed'].includes(pc.connectionState)) return;
     reset();
-    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }], bundlePolicy: 'max-bundle' });
+    const me = pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }], bundlePolicy: 'max-bundle' });
     pc.onconnectionstatechange = () => {
-      if (pc && pc.connectionState === 'failed') console.warn('servidor de vídeo: conexão falhou');
-      if (window.Sfu.onState) window.Sfu.onState(pc ? pc.connectionState : 'closed');
+      if (pc !== me) return; // sessão antiga
+      const st = me.connectionState;
+      if (st === 'failed' || st === 'closed') { lost('conexão falhou'); return; }
+      // caiu: o navegador às vezes volta sozinho em poucos segundos; se não voltar em 5 s, refaz
+      if (st === 'disconnected') {
+        clearTimeout(downTimer);
+        downTimer = setTimeout(() => { if (pc === me && me.connectionState !== 'connected') lost('conexão caiu'); }, 5000);
+      } else if (st === 'connected') { clearTimeout(downTimer); downTimer = null; }
+      if (window.Sfu.onState) window.Sfu.onState(st);
     };
     const r = await call('new');
     sid = r.sessionId;
@@ -64,6 +95,21 @@ window.Sfu = (() => {
   }
 
   const name = (k) => `${k}-${Math.random().toString(36).slice(2, 10)}`;
+
+  async function connected() {
+    if (!pc || !pc.remoteDescription) return; // sessão nova: ainda não negociou nada
+    const end = Date.now() + 10000;
+    while (pc && pc.connectionState !== 'connected') {
+      if (Date.now() > end || ['failed', 'closed'].includes(pc.connectionState)) throw lostErr(new Error('conexão com o servidor não ficou pronta'));
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  // erro no meio de uma negociação: a sessão fica num estado que o servidor não aceita mais
+  function fail(e, midNegotiation) {
+    if (e && e.sfuLost) return e;
+    if ((e && e.sfuDead) || midNegotiation || (pc && pc.signalingState !== 'stable')) return lostErr(e);
+    return e;
+  }
 
   function h264First(transceiver) {
     try {
@@ -98,9 +144,15 @@ window.Sfu = (() => {
 
   // publica (ou troca) a minha transmissão; devolve { s, v, a, n } para os amigos puxarem
   // native = null (encoder do Chromium, 3 qualidades) ou { codec, attach(sender) } (placa de vídeo)
-  function publish({ video, audio, kbps, fps, native = null }) {
+  function publish(opts) {
     return serial(async () => {
+      try { return await publishInner(opts); } catch (e) { throw fail(e, false); }
+    });
+  }
+  async function publishInner({ video, audio, kbps, fps, native = null }) {
+    {
       await ensure();
+      await connected();
       const mode = native ? `native:${native.codec}` : 'simulcast';
       // mesma forma (com/sem áudio, mesmo modo): só troca as trilhas
       if (pub && !!pub.aT === !!audio && pub.mode === mode) {
@@ -136,7 +188,7 @@ window.Sfu = (() => {
       } catch {}
       pub = { vT, aT, mode, info: { s: sid, v: names.v, a: names.a, n: native ? 1 : 3 } };
       return pub.info;
-    });
+    }
   }
 
   async function setQualityInner(kbps, fps) {
@@ -170,7 +222,10 @@ window.Sfu = (() => {
   // puxa a transmissão de um amigo; rid = 'f' (cheia), 'h' ou 'q' (o servidor desce sozinho se precisar)
   function pull(key, info, rid = 'f') {
     return serial(async () => {
+      let mid = false;
+      try {
       await ensure();
+      await connected();
       const one = info.n === 1; // transmissão da placa de vídeo: uma qualidade só
       const simulcast = simulcastOpts(rid);
       const tracks = [{ location: 'remote', sessionId: info.s, trackName: info.v, ...(one ? {} : { simulcast }) }];
@@ -178,9 +233,11 @@ window.Sfu = (() => {
       const r = await call('tracks', { sid, body: { tracks } });
       for (const t of r.tracks || []) if (t.errorCode) throw new Error(t.errorDescription || t.errorCode);
       if (r.requiresImmediateRenegotiation) {
+        mid = true;
         await pc.setRemoteDescription(r.sessionDescription);
         await pc.setLocalDescription(await pc.createAnswer());
         await call('renegotiate', { sid, body: { sessionDescription: { type: 'answer', sdp: pc.localDescription.sdp } } });
+        mid = false;
       }
       const res = { mids: [], video: null, audio: null, videoRecv: null, audioRecv: null, videoMid: null, info, rid: one ? null : rid };
       for (const t of r.tracks || []) {
@@ -193,6 +250,7 @@ window.Sfu = (() => {
       if (!res.video) throw new Error('o servidor não mandou o vídeo');
       pulls.set(key, res);
       return res;
+      } catch (e) { throw fail(e, mid); }
     });
   }
 
@@ -201,7 +259,7 @@ window.Sfu = (() => {
       const p = pulls.get(key);
       if (!p || p.rid === rid || !p.rid || !sid) return; // (sem rid: uma qualidade só)
       await call('update', { sid, body: { tracks: [{ location: 'remote', mid: p.videoMid, sessionId: p.info.s, trackName: p.info.v,
-        simulcast: simulcastOpts(rid) }] } });
+        simulcast: simulcastOpts(rid) }] } }).catch((e) => { throw e.sfuDead ? lostErr(e) : e; });
       p.rid = rid;
     });
   }
@@ -256,5 +314,6 @@ window.Sfu = (() => {
     pc: () => pc,
     state: () => (pc ? pc.connectionState : 'sem conexão'),
     onState: null,
+    onLost: null, // (motivo) a sessão foi jogada fora: o app refaz transmissão e recepção
   };
 })();

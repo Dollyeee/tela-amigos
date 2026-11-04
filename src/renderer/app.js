@@ -491,6 +491,8 @@ function onSignal(msg) {
           // a sala reiniciou (ou o lugar expirou): recomeça as conexões com todo mundo
           for (const id of [...state.peers.keys()]) removePeer(id);
           state.myId = msg.id;
+          window.Sfu.reset();
+          sfuRecover('a sala reiniciou', false);
         } else {
           // retomou o mesmo lugar: tira quem saiu enquanto estávamos fora
           const ids = new Set(msg.peers.map((p) => p.id));
@@ -776,6 +778,14 @@ function createPeer(id, name) {
   };
   pc.onconnectionstatechange = () => {
     peer.conn = pc.connectionState;
+    clearTimeout(peer.downTimer);
+    if (pc.connectionState === 'disconnected' && !peer.polite) {
+      peer.downTimer = setTimeout(() => {
+        if (state.peers.get(id) !== peer || pc.connectionState !== 'disconnected') return;
+        console.warn(`conexão com ${peer.name} caiu: reiniciando`);
+        try { pc.restartIce(); } catch (e) { console.warn('reiniciar ICE', e); }
+      }, 6000);
+    }
     if (pc.connectionState === 'failed') {
       // pela internet não deu: volta a aceitar o Radmin (setRouteUse já reinicia o ICE)
       if (peer.routeUse === 'net' && peer.hadVpn) { peer.netFailedAt = performance.now(); setRouteUse(peer, 'any', 'conexão pela internet caiu'); }
@@ -1023,6 +1033,7 @@ setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000)
 // (sfu.js) e cada amigo puxa de lá a qualidade que aguenta. Quem puxou avisa ("sfu-pull") e eu paro
 // de mandar direto para ele. Qualquer falha: volta para a conexão direta.
 function sfuWanted() { return isOnlineCode(state.hostIp) && !!state.sfuServer && localStorage.getItem('sfu') === '1'; }
+function sfuPaused() { return Date.now() < (state.sfuPauseUntil || 0); }
 function sfuKbps(s) { return Math.min(Number(s.bitrate) || 8, Number(localStorage.getItem('sfuMaxMbps')) || 8) * 1000; } // limite: GB do mês
 
 let sfuSyncing = Promise.resolve();
@@ -1032,7 +1043,7 @@ function sfuSync() {
 }
 async function sfuSyncInner() {
   const share = state.share;
-  const want = !!(share && sfuWanted());
+  const want = !!(share && sfuWanted() && !sfuPaused());
   if (want) {
     try {
       const s = share.settings;
@@ -1053,6 +1064,7 @@ async function sfuSyncInner() {
       window.NativeVideo.setMode('sfu', false, false);
       console.warn(`servidor de vídeo: não deu para transmitir por ele: ${e.message}`);
       state.sfuLastErr = `transmitir: ${e.message}`;
+      if (e.sfuLost) return; // a sessão foi refeita: sfuRecover tenta de novo sozinho
       toast(`Servidor de vídeo indisponível (${e.message}). Transmitindo direto para os amigos.`, 'error');
       for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
     }
@@ -1076,7 +1088,7 @@ async function sfuPullInner(peer) {
   // falhou há pouco com esta transmissão: espera (10 s, 20 s, 30 s) e desiste depois de 3 tentativas
   const f = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail : null;
   const blocked = !!f && (f.n >= 3 || Date.now() - f.at < 10000 * f.n);
-  const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !blocked;
+  const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !blocked && !sfuPaused();
   let rid = level === 'thumb' ? 'q' : peer.iWantH && peer.iWantH <= 540 ? 'h' : 'f';
   // a rede até mim não está dando conta da qualidade cheia: média por um tempo (sfuRxFeedback)
   if (rid === 'f' && Date.now() < (peer.sfuCapUntil || 0)) rid = 'h';
@@ -1098,6 +1110,7 @@ async function sfuPullInner(peer) {
     sendRelay(peer.id, { kind: 'sfu-pull', on: true });
     console.log(`servidor de vídeo: recebendo ${peer.name} pelo servidor`);
   } catch (e) {
+    if (e.sfuLost) return; // a sessão foi refeita: sfuRecover puxa de novo
     // continua pela conexão direta; tenta de novo daqui a pouco (no máx. 3 vezes por transmissão)
     const n = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail.n + 1 : 1;
     peer.sfuFail = { key, n, at: Date.now() };
@@ -1126,6 +1139,70 @@ function sfuRxFeedback(peer, bad) {
   sfuPullSync(peer);
   setTimeout(() => sfuPullSync(peer), peer.sfuCapMs + 200);
 }
+
+// A conexão com o servidor de vídeo caiu/travou (sfu.js já jogou a sessão fora). Antes: tela preta
+// para todo mundo até sair e entrar na sala. Agora: na hora volta para a conexão direta (quem assiste
+// avisa quem transmite, que volta a mandar direto) e em 1,5 s refaz tudo numa sessão nova. Caiu 3
+// vezes em 3 min: servidor instável, fica 5 min só na conexão direta.
+window.Sfu.onLost = (why) => sfuRecover(why, true);
+function sfuRecover(why, count) {
+  const now = Date.now();
+  state.sfuLastErr = `conexão perdida: ${why}`;
+  let pause = false;
+  if (count) {
+    state.sfuLosses = (state.sfuLosses || []).filter((t) => now - t < 180000);
+    state.sfuLosses.push(now);
+    if (state.sfuLosses.length >= 3) {
+      pause = true;
+      state.sfuLosses = [];
+      state.sfuPauseUntil = now + 300000;
+      toast('O servidor de vídeo está instável: usando a conexão direta pelos próximos 5 minutos.', 'error');
+    } else if (state.share && state.share.sfu) toast('Conexão com o servidor de vídeo caiu: reconectando...');
+  }
+  for (const peer of state.peers.values()) {
+    peer.sfuFail = null;
+    peer.sfuStall = null;
+    if (peer.sfuIn) { peer.sfuIn = null; resolveTracks(peer); sendRelay(peer.id, { kind: 'sfu-pull', on: false }); }
+  }
+  if (state.share && state.share.sfu) {
+    state.share.sfu = null;
+    window.NativeVideo.setMode('sfu', false, false);
+    for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
+  }
+  const again = () => {
+    if (state.leaving || $('#room').classList.contains('hidden')) return;
+    sfuSync();
+    for (const peer of state.peers.values()) sfuPullSync(peer);
+  };
+  setTimeout(again, pause ? 300500 : 1500);
+}
+
+// Recebendo pelo servidor e nada chega há 6 s (com quem transmite capturando normalmente): recebe
+// direto na hora e tenta o servidor de novo em 10 s (3 vezes por transmissão, depois fica direto).
+async function sfuStallWatch() {
+  const now = Date.now();
+  for (const peer of state.peers.values()) {
+    const sin = peer.sfuIn;
+    if (!sin || !sin.videoRecv || !peer.sharing) { peer.sfuStall = null; continue; }
+    let bytes = 0;
+    try { (await sin.videoRecv.getStats()).forEach((r) => { if (r.type === 'inbound-rtp' && r.kind === 'video') bytes = r.bytesReceived || 0; }); } catch { continue; }
+    if (peer.sfuIn !== sin) continue;
+    const s = peer.sfuStall;
+    if (!s || s.key !== sin.key || s.bytes !== bytes) { peer.sfuStall = { key: sin.key, bytes, at: now }; continue; }
+    const h = peer.health || {};
+    if (now - s.at < 6000 || (h.cap != null && h.cap < 5)) continue; // tela parada de verdade: não é queda
+    console.warn(`servidor de vídeo: nada chega de ${peer.name} há ${Math.round((now - s.at) / 1000)} s; recebendo direto`);
+    const prevN = peer.sfuFail && peer.sfuFail.key === sin.key ? peer.sfuFail.n : 0;
+    peer.sfuFail = { key: sin.key, n: prevN + 1, at: now };
+    peer.sfuStall = null;
+    peer.sfuIn = null;
+    resolveTracks(peer);
+    sendRelay(peer.id, { kind: 'sfu-pull', on: false });
+    window.Sfu.unpull(sin.key).catch(() => {});
+    if (prevN + 1 < 3) setTimeout(() => sfuPullSync(peer), 10000 * (prevN + 1) + 500);
+  }
+}
+setInterval(() => { sfuStallWatch().catch(() => {}); }, 2000);
 
 function removePeer(id) {
   const peer = state.peers.get(id);

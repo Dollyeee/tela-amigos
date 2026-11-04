@@ -85,6 +85,7 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
   e cada amigo recebe a que a rede dele aguenta (o app baixa para a média por um tempo quando há perda).
 - **Quadros-chave raros** (a cada 30 s, ou na hora quando alguém entra/perde a imagem): antes a imagem "respirava"
   a cada 4 s.
+- **Reconexão automática com o servidor de vídeo**: se a conexão com o servidor cair ou travar, quem transmite volta a mandar direto na hora (sem tela preta) e em ~1,5 s tudo é refeito numa conexão nova. Se nada chegar do servidor por 6 s, quem assiste passa a receber direto sozinho. Caiu 3 vezes em 3 minutos: fica 5 minutos só na conexão direta.
 
 ## Desenvolver
 ```

@@ -109,7 +109,8 @@ export class Room {
       const body = msg.body && typeof msg.body === 'object' ? msg.body : {};
       switch (msg.op) {
         case 'new': {
-          if (m.sfu.size >= 4) throw new Error('sessões demais');
+          // o app refaz a sessão quando a conexão cai: esquece a mais antiga (o servidor encerra ela sozinho)
+          while (m.sfu.size >= 4) m.sfu.delete(m.sfu.values().next().value);
           const used = await this.usedGb();
           if (used >= this.monthlyLimitGb()) throw new Error(`limite do mês do servidor de vídeo atingido (${Math.round(used)} GB)`);
           const d = await this.sfuCall('/sessions/new', 'POST');
