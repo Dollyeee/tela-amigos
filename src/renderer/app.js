@@ -292,6 +292,13 @@ function rememberRoom(ip, hostName) {
   localStorage.setItem('recentRooms', JSON.stringify(list.slice(0, 5)));
 }
 
+// tira uma sala da lista (sala online aberta sem querer: ela fecha sozinha quando fica vazia)
+function forgetRoom(ip) {
+  localStorage.setItem('recentRooms', JSON.stringify(recentRooms().filter((r) => r.ip !== ip)));
+  if (localStorage.getItem('hostIp') === ip) { localStorage.removeItem('hostIp'); if ($('#host-ip').value === ip) $('#host-ip').value = ''; }
+  renderRooms();
+}
+
 function joinRoom(ip) {
   $('#host-ip').value = ip;
   $('#btn-join').click();
@@ -301,7 +308,7 @@ function renderRooms() {
   const ul = $('#rooms');
   ul.innerHTML = '';
   const seen = new Set();
-  const row = (title, sub, ip, offline) => {
+  const row = (title, sub, ip, offline, closeLabel) => {
     const li = document.createElement('li');
     if (offline) li.classList.add('offline');
     const info = document.createElement('div');
@@ -314,6 +321,14 @@ function renderRooms() {
     b.textContent = 'Entrar';
     b.onclick = () => { if (checkName()) joinRoom(ip); };
     li.append(info, b);
+    if (closeLabel) {
+      const x = document.createElement('button');
+      x.className = 'link-btn danger-text room-close';
+      x.textContent = closeLabel;
+      x.title = isOnlineCode(ip) ? 'Tira a sala da lista. A sala online fecha sozinha quando não tem ninguém nela.' : 'Tira a sala da lista';
+      x.onclick = () => forgetRoom(ip);
+      li.appendChild(x);
+    }
     ul.appendChild(li);
   };
   for (const r of discovered) {
@@ -323,8 +338,8 @@ function renderRooms() {
   }
   for (const r of recentRooms()) {
     if (seen.has(r.ip)) continue;
-    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, `recente · código ${r.ip}`, r.ip, false);
-    else row(`Sala de ${r.hostName}`, `recente · não encontrada agora · ${r.ip}`, r.ip, true);
+    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, `recente · código ${r.ip}`, r.ip, false, 'Fechar');
+    else row(`Sala de ${r.hostName}`, `recente · não encontrada agora · ${r.ip}`, r.ip, true, 'Remover');
   }
   if (!ul.children.length) {
     const li = document.createElement('li');

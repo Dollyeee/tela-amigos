@@ -280,6 +280,8 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .rooms .room-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rooms .room-sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rooms button { padding: 5px 12px; }
+.rooms .room-close { padding: 0 2px; font-size: 12px; }
+.rooms li.offline .room-close { opacity: 1; }
 .rooms .empty-rooms { justify-content: center; color: var(--muted); font-size: 12px; background: none; border-style: dashed; }
 .my-room { display: flex; align-items: center; gap: 8px; font-size: 12px; background: rgba(60, 207, 142, .08);
   border: 1px solid rgba(60, 207, 142, .3); border-radius: 8px; padding: 8px 10px; }
