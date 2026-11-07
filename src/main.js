@@ -957,22 +957,53 @@ if (!gotLock) {
 
 // Uma atualização às vezes deixava o atalho do Menu Iniciar apontando para a pasta temporária
 // do instalador (que some): clicar nele não fazia nada. Ao abrir, confere e conserta os atalhos.
+// Também põe o ícone dos atalhos num .ico próprio (pasta de dados do app): com o ícone dentro do
+// .exe, o Windows às vezes guardava um ícone vazio do momento em que a atualização trocava o .exe,
+// e a barra de tarefas ficava com uma folha em branco. Esse .ico nunca é trocado numa atualização.
+function appIconFile() {
+  const file = path.join(app.getPath('userData'), 'icone.ico');
+  try {
+    if (fs.existsSync(file) && fs.statSync(file).size > 1000) return file;
+    const base = nativeImage.createFromPath(path.join(__dirname, 'renderer', 'icon.png'));
+    const imgs = [256, 64, 48, 32, 16].map((n) => ({ n, png: base.resize({ width: n, height: n, quality: 'best' }).toPNG() }));
+    const head = Buffer.alloc(6 + 16 * imgs.length);
+    head.writeUInt16LE(0, 0); head.writeUInt16LE(1, 2); head.writeUInt16LE(imgs.length, 4);
+    let offset = head.length;
+    imgs.forEach((im, i) => {
+      const o = 6 + 16 * i;
+      head.writeUInt8(im.n >= 256 ? 0 : im.n, o); head.writeUInt8(im.n >= 256 ? 0 : im.n, o + 1);
+      head.writeUInt16LE(1, o + 4); head.writeUInt16LE(32, o + 6);
+      head.writeUInt32LE(im.png.length, o + 8); head.writeUInt32LE(offset, o + 12);
+      offset += im.png.length;
+    });
+    fs.writeFileSync(file, Buffer.concat([head, ...imgs.map((im) => im.png)]));
+    return file;
+  } catch (e) { console.warn('ícone .ico:', e.message); return null; }
+}
+
 function repairShortcuts() {
   if (!app.isPackaged || process.platform !== 'win32') return;
   const exe = process.execPath;
+  const ico = appIconFile();
+  const same = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
   const places = [
     path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Tela Amigos.lnk'),
     path.join(app.getPath('desktop'), 'Tela Amigos.lnk'),
+    path.join(app.getPath('appData'), 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar', 'Tela Amigos.lnk'),
   ];
+  let changed = false;
   for (const lnk of places) {
     try {
       if (!fs.existsSync(lnk)) continue;
       const cur = shell.readShortcutLink(lnk);
-      if (cur.target && path.resolve(cur.target).toLowerCase() === path.resolve(exe).toLowerCase()) continue;
-      shell.writeShortcutLink(lnk, 'update', { target: exe, cwd: path.dirname(exe), icon: exe, iconIndex: 0 });
-      console.warn(`atalho consertado: ${lnk} (apontava para ${cur.target})`);
+      const okTarget = same(cur.target, exe);
+      if (okTarget && (!ico || same(cur.icon, ico))) continue;
+      shell.writeShortcutLink(lnk, 'update', { target: exe, cwd: path.dirname(exe), icon: ico || exe, iconIndex: 0 });
+      changed = true;
+      if (!okTarget) console.warn(`atalho consertado: ${lnk} (apontava para ${cur.target})`);
     } catch (e) { console.warn('atalho:', e.message); }
   }
+  if (changed) refreshIcons();
 }
 
 // Depois de uma atualização o Windows às vezes mostra o atalho/a barra de tarefas sem ícone (o
@@ -984,6 +1015,9 @@ function refreshIconsAfterUpdate() {
   try { last = fs.readFileSync(mark, 'utf8').trim(); } catch {}
   if (last === app.getVersion()) return;
   try { fs.writeFileSync(mark, app.getVersion()); } catch {}
+  refreshIcons();
+}
+function refreshIcons() {
   try {
     const p = spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'ie4uinit.exe'), ['-show'], { windowsHide: true, stdio: 'ignore' });
     p.on('error', () => {});
