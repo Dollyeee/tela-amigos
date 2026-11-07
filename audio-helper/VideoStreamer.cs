@@ -1,6 +1,9 @@
-// Captura de tela (Windows Graphics Capture) + conversão na GPU + H.264 por hardware (Media Foundation).
+// Captura de tela + conversão na GPU + H.264 por hardware (Media Foundation).
 // Tudo fica na placa de vídeo: textura capturada -> VideoProcessor (escala + BGRA->NV12) -> encoder.
 // Saída: quadros H.264 Annex B num ritmo fixo (ex.: 60 fps), enviados ao app pelo stdout.
+// Captura: Windows Graphics Capture (WGC) no Windows 11; DXGI Desktop Duplication no Windows 10,
+// porque lá o WGC desenha uma borda amarela ao redor da tela transmitida que não dá para tirar
+// (IsBorderRequired só existe a partir do Windows 11).
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
@@ -10,6 +13,7 @@ using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
 using Vortice.MediaFoundation;
+using Windows.Foundation.Metadata;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
@@ -82,6 +86,29 @@ sealed unsafe class VideoStreamer : IDisposable
     int contentW, contentH;             // área útil (janela pode ser menor que a textura)
     VideoTarget? tgt;                   // alvo atual (com o recorte de área, se houver)
     long capturedFrames;
+
+    // captura por DXGI Desktop Duplication (Windows 10, ou TELA_CAPTURE=dxgi)
+    bool useDd;
+    IDXGIOutputDuplication? dup;
+    Thread? ddThread;
+    volatile bool ddRunning;
+    RawRect ddDesktop;                  // posição do monitor na área de trabalho (pixels)
+    IntPtr ddMonitor;
+    IntPtr ddHwnd;                      // janela transmitida: captura o monitor dela e recorta
+    RECT ddWinRect;                     // último retângulo válido da janela
+    bool windowGone;
+    CursorOverlay? cursor;              // a duplicação não inclui o mouse: desenhamos nós
+    const int DXGI_ERROR_WAIT_TIMEOUT = unchecked((int)0x887A0027);
+    const int DXGI_ERROR_ACCESS_LOST = unchecked((int)0x887A0026);
+
+    /// Windows 11+: dá para pedir ao WGC que não desenhe a borda. No Windows 10 a propriedade não existe.
+    public static readonly bool BorderRemovable = CheckBorderRemovable();
+    static bool CheckBorderRemovable()
+    {
+        try { return ApiInformation.IsPropertyPresent("Windows.Graphics.Capture.GraphicsCaptureSession", "IsBorderRequired"); }
+        catch { return false; }
+    }
+    public string CaptureMode => useDd ? "dxgi" : "wgc";
 
     // conversão
     ID3D11VideoProcessorEnumerator? vpEnum;
@@ -350,38 +377,16 @@ sealed unsafe class VideoStreamer : IDisposable
         Marshal.Release(inspectable);
     }
 
-    // ================================================================ captura (WGC)
+    // ================================================================ captura
     void StartCapture(VideoTarget target)
     {
-        Log("request access");
-        try { GraphicsCaptureAccess.RequestAccessAsync(GraphicsCaptureAccessKind.Borderless).AsTask().Wait(1500); } catch { }
-
-        if (target.Type == "window")
-        {
-            try
-            {
-                item = CreateItem(window: new IntPtr(target.Hwnd), monitor: IntPtr.Zero);
-            }
-            catch (Exception ex)
-            {
-                // algumas janelas (jogos em tela cheia exclusiva, anticheat) não deixam capturar:
-                // captura o monitor onde a janela está
-                item = CreateItem(window: IntPtr.Zero, monitor: MonitorFromWindow(new IntPtr(target.Hwnd), 2));
-                Program.SendJson(new { type = "warn", message = $"Não deu para capturar só a janela ({ex.Message}); capturando o monitor dela." });
-            }
-        }
-        else
-        {
-            item = CreateItem(window: IntPtr.Zero, monitor: MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2));
-        }
-        Log("item ok");
-        poolSize = item.Size;
+        IntPtr hwnd = target.Type == "window" ? new IntPtr(target.Hwnd) : IntPtr.Zero;
+        IntPtr hmon = hwnd != IntPtr.Zero
+            ? MonitorFromWindow(hwnd, 2)
+            : MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2);
 
         // Monitor em HDR: captura em ponto flutuante (scRGB) e converte para SDR na placa.
         // Capturar HDR direto em 8 bits deixava as cores lavadas/estouradas para quem assiste.
-        IntPtr hmon = target.Type == "window"
-            ? MonitorFromWindow(new IntPtr(target.Hwnd), 2)
-            : MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2);
         hdr = false;
         try
         {
@@ -398,6 +403,58 @@ sealed unsafe class VideoStreamer : IDisposable
             toneMapper?.Dispose(); toneMapper = null; hdr = false;
             Program.SendJson(new { type = "warn", message = $"HDR detectado mas a conversão falhou ({ex.Message}); capturando em 8 bits." });
         }
+
+        // Windows 10: o WGC desenha uma borda amarela ao redor do que é transmitido e não há como
+        // tirar (IsBorderRequired só existe no Windows 11). A duplicação de área de trabalho (DXGI)
+        // não desenha nada. TELA_CAPTURE=wgc ou =dxgi força um dos dois.
+        string forced = Environment.GetEnvironmentVariable("TELA_CAPTURE") ?? "";
+        useDd = forced == "dxgi" || (forced != "wgc" && !BorderRemovable);
+        if (useDd)
+        {
+            try
+            {
+                StartDuplication(hmon, hwnd);
+                Log("captura: DXGI Desktop Duplication (sem borda)");
+                return;
+            }
+            catch (Exception ex)
+            {
+                ReleaseDd();
+                useDd = false;
+                Program.SendJson(new { type = "warn", message = $"Captura sem borda (DXGI) falhou ({ex.Message}); usando a captura do Windows." });
+            }
+        }
+        StartWgc(hwnd, hmon);
+        Log("captura: Windows Graphics Capture");
+    }
+
+    // ---------------------------------------------------------------- WGC
+    void StartWgc(IntPtr hwnd, IntPtr hmon)
+    {
+        Log("request access");
+        try { GraphicsCaptureAccess.RequestAccessAsync(GraphicsCaptureAccessKind.Borderless).AsTask().Wait(1500); } catch { }
+
+        if (hwnd != IntPtr.Zero)
+        {
+            try
+            {
+                item = CreateItem(window: hwnd, monitor: IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                // algumas janelas (jogos em tela cheia exclusiva, anticheat) não deixam capturar:
+                // captura o monitor onde a janela está
+                item = CreateItem(window: IntPtr.Zero, monitor: hmon);
+                Program.SendJson(new { type = "warn", message = $"Não deu para capturar só a janela ({ex.Message}); capturando o monitor dela." });
+            }
+        }
+        else
+        {
+            item = CreateItem(window: IntPtr.Zero, monitor: hmon);
+        }
+        Log("item ok");
+        poolSize = item.Size;
+
         poolFormat = hdr ? DirectXPixelFormat.R16G16B16A16Float : DirectXPixelFormat.B8G8R8A8UIntNormalized;
         framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(winrtDevice, poolFormat, 3, poolSize);
         framePool.FrameArrived += OnFrameArrived;
@@ -407,6 +464,143 @@ sealed unsafe class VideoStreamer : IDisposable
         closedItem = item;
         item.Closed += OnItemClosed;
         session.StartCapture();
+    }
+
+    // ---------------------------------------------------------------- DXGI Desktop Duplication
+    void StartDuplication(IntPtr hmon, IntPtr hwnd)
+    {
+        ddMonitor = hmon;
+        ddHwnd = hwnd;
+        windowGone = false;
+        CreateDuplication();
+        if (hwnd != IntPtr.Zero)
+        {
+            // a saída fica do tamanho da janela (como no WGC); o recorte segue a janela a cada quadro
+            ddWinRect = WindowRect(hwnd);
+            poolSize = new Windows.Graphics.SizeInt32
+            {
+                Width = Math.Max(64, ddWinRect.Right - ddWinRect.Left),
+                Height = Math.Max(64, ddWinRect.Bottom - ddWinRect.Top),
+            };
+        }
+        else
+        {
+            poolSize = new Windows.Graphics.SizeInt32 { Width = ddDesktop.Right - ddDesktop.Left, Height = ddDesktop.Bottom - ddDesktop.Top };
+        }
+        cursor = new CursorOverlay(device, context);
+        ddRunning = true;
+        ddThread = new Thread(DdLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "dd-capture" };
+        ddThread.Start();
+    }
+
+    /// Abre (ou reabre) a duplicação do monitor na placa de vídeo do encoder.
+    void CreateDuplication()
+    {
+        dup?.Dispose(); dup = null;
+        using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
+        using var adapter = dxgiDevice.GetAdapter();
+        for (uint i = 0; adapter.EnumOutputs(i, out IDXGIOutput? output).Success; i++)
+        {
+            using (output)
+            {
+                var d = output!.Description;
+                if (d.Monitor != ddMonitor) continue;
+                ddDesktop = d.DesktopCoordinates;
+                // DuplicateOutput1 (Windows 10 1703+) deixa pedir ponto flutuante quando o monitor está em HDR
+                using var o5 = output.QueryInterfaceOrNull<IDXGIOutput5>();
+                if (o5 != null)
+                {
+                    var formats = hdr
+                        ? new[] { Format.R16G16B16A16_Float, Format.B8G8R8A8_UNorm }
+                        : new[] { Format.B8G8R8A8_UNorm };
+                    try { dup = o5.DuplicateOutput1(device, 0, formats); } catch { dup = null; }
+                }
+                if (dup == null)
+                {
+                    using var o1 = output.QueryInterface<IDXGIOutput1>();
+                    dup = o1.DuplicateOutput(device);
+                }
+                return;
+            }
+        }
+        throw new Exception("o monitor não está ligado na placa de vídeo do encoder");
+    }
+
+    void DdLoop()
+    {
+        int lost = 0;
+        timeBeginPeriod(1); // Thread.Sleep(1) de verdade (senão são ~15 ms)
+        try { DdLoopInner(ref lost); }
+        finally { timeEndPeriod(1); }
+    }
+
+    void DdLoopInner(ref int lost)
+    {
+        while (ddRunning)
+        {
+            var d = dup;
+            if (d == null) { Thread.Sleep(50); continue; }
+            // timeout 0: esperar dentro do AcquireNextFrame segura a trava do device D3D11 e deixa o
+            // encoder e o VideoProcessor parados (a transmissão caía para ~12 fps). Perguntar a cada
+            // ~1 ms custa quase nada e o quadro chega com até 1-2 ms de atraso.
+            var res = d.AcquireNextFrame(0, out OutduplFrameInfo info, out IDXGIResource? resource);
+            if (res.Code == DXGI_ERROR_WAIT_TIMEOUT) { Thread.Sleep(1); continue; }
+            if (res.Failure)
+            {
+                // modo de vídeo mudou, jogo em tela cheia exclusiva, tela de bloqueio...: refaz a duplicação
+                if (res.Code == DXGI_ERROR_ACCESS_LOST && lost++ < 100)
+                {
+                    Thread.Sleep(100);
+                    try { lock (gpuLock) { if (ddRunning && device != null) CreateDuplication(); } }
+                    catch (Exception ex) { Log("refazer a duplicação: " + ex.Message); }
+                    continue;
+                }
+                if (ddRunning) Fail($"captura DXGI parou (0x{res.Code:X8})");
+                return;
+            }
+            lost = 0;
+            try
+            {
+                using var tex = resource!.QueryInterface<ID3D11Texture2D>();
+                lock (gpuLock)
+                {
+                    if (device == null) return;
+                    if (info.LastMouseUpdateTime != 0 && cursor != null) cursor.Update(d, info);
+                    var desc = tex.Description;
+                    OnCapturedTexture(tex, (int)desc.Width, (int)desc.Height);
+                }
+            }
+            catch (Exception ex) { Log("quadro DXGI: " + ex.Message); }
+            finally
+            {
+                resource?.Dispose();
+                try { d.ReleaseFrame(); } catch { }
+            }
+        }
+    }
+
+    void ReleaseDd()
+    {
+        ddRunning = false;
+        var t = ddThread;
+        if (t != null && t != Thread.CurrentThread) t.Join(2000);
+        ddThread = null;
+        try { dup?.Dispose(); } catch { }
+        dup = null;
+        lock (gpuLock) { try { cursor?.Dispose(); } catch { } cursor = null; }
+        ddHwnd = IntPtr.Zero;
+    }
+
+    /// Retângulo da janela em pixels da tela (bordas visíveis, sem a sombra). Minimizada: o último válido.
+    RECT WindowRect(IntPtr hwnd)
+    {
+        if (IsIconic(hwnd)) return ddWinRect;
+        RECT r;
+        if (DwmGetWindowAttribute(hwnd, 9 /*DWMWA_EXTENDED_FRAME_BOUNDS*/, out r, Marshal.SizeOf<RECT>()) != 0 || r.Right - r.Left < 2 || r.Bottom - r.Top < 2)
+            if (!GetWindowRect(hwnd, out r)) return ddWinRect;
+        if (r.Right - r.Left < 2 || r.Bottom - r.Top < 2) return ddWinRect;
+        ddWinRect = r;
+        return r;
     }
 
     GraphicsCaptureItem? closedItem;
@@ -425,35 +619,7 @@ sealed unsafe class VideoStreamer : IDisposable
         {
             IntPtr texPtr = GetDxgiInterface(surface, typeof(ID3D11Texture2D).GUID);
             using var tex = new ID3D11Texture2D(texPtr);
-            var desc = tex.Description;
-            lock (gpuLock)
-            {
-                if (device == null || nv12[0] == null) return; // já foi encerrado (ou ainda iniciando)
-                if (latest == null || latestW != (int)desc.Width || latestH != (int)desc.Height)
-                {
-                    vpIn?.Dispose(); vpIn = null;
-                    latest?.Dispose();
-                    latest = device.CreateTexture2D(new Texture2DDescription
-                    {
-                        Width = desc.Width, Height = desc.Height, MipLevels = 1, ArraySize = 1,
-                        Format = desc.Format, SampleDescription = new SampleDescription(1, 0), // BGRA 8 bits ou FP16 (HDR)
-                        Usage = ResourceUsage.Default, BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
-                    });
-                    latestW = (int)desc.Width;
-                    latestH = (int)desc.Height;
-                    if (toneMapper != null)
-                    {
-                        toneMapper.ResetSource();
-                        toneMapper.Process(latest, latestW, latestH); // cria a textura SDR do novo tamanho
-                    }
-                    CreateProcessor();
-                }
-                context.CopyResource(latest, tex);
-                contentW = Math.Min(cs.Width, latestW);
-                contentH = Math.Min(cs.Height, latestH);
-                capturedFrames++;
-                statCaptured++;
-            }
+            lock (gpuLock) OnCapturedTexture(tex, cs.Width, cs.Height);
         }
         finally { Marshal.Release(surface); }
 
@@ -463,6 +629,47 @@ sealed unsafe class VideoStreamer : IDisposable
             poolSize = cs;
             pool.Recreate(winrtDevice, poolFormat, 3, cs);
         }
+    }
+
+    /// Guarda a textura capturada (WGC ou DXGI) como "última tela". Chamar com gpuLock.
+    void OnCapturedTexture(ID3D11Texture2D tex, int cw, int ch)
+    {
+        if (device == null || nv12[0] == null) return; // já foi encerrado (ou ainda iniciando)
+        var desc = tex.Description;
+        if (toneMapper != null && desc.Format != Format.R16G16B16A16_Float)
+        {
+            // a captura veio em 8 bits (duplicação sem ponto flutuante): não há o que converter
+            toneMapper.Dispose(); toneMapper = null; hdr = false;
+            latest?.Dispose(); latest = null;
+        }
+        if (latest == null || latestW != (int)desc.Width || latestH != (int)desc.Height)
+        {
+            vpIn?.Dispose(); vpIn = null;
+            latest?.Dispose();
+            latest = device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = desc.Width, Height = desc.Height, MipLevels = 1, ArraySize = 1,
+                Format = desc.Format, SampleDescription = new SampleDescription(1, 0), // BGRA 8 bits ou FP16 (HDR)
+                Usage = ResourceUsage.Default, BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+            });
+            latestW = (int)desc.Width;
+            latestH = (int)desc.Height;
+            cursor?.ResetTarget();
+            if (toneMapper != null)
+            {
+                toneMapper.ResetSource();
+                toneMapper.Process(latest, latestW, latestH); // cria a textura SDR do novo tamanho
+            }
+            CreateProcessor();
+        }
+        context.CopyResource(latest, tex);
+        contentW = Math.Min(cw, latestW);
+        contentH = Math.Min(ch, latestH);
+        // DXGI em 8 bits: o mouse entra aqui (a cada quadro novo ou movimento do mouse a duplicação
+        // entrega a tela inteira, então nunca sobra rastro). No HDR ele entra depois da conversão.
+        if (useDd && toneMapper == null) cursor?.Draw(latest, latestW, latestH);
+        capturedFrames++;
+        statCaptured++;
     }
 
     // ================================================================ conversão (VideoProcessor)
@@ -519,15 +726,26 @@ sealed unsafe class VideoStreamer : IDisposable
     void SetRects()
     {
         int fullW = Math.Max(1, contentW), fullH = Math.Max(1, contentH);
-        // área escolhida (frações) -> pixels da captura
-        var t = tgt;
         int sx = 0, sy = 0, cw = fullW, ch = fullH;
-        if (t != null && (t.CropW < 1 || t.CropH < 1) && fullW >= 4 && fullH >= 4)
+        if (ddHwnd != IntPtr.Zero && fullW >= 4 && fullH >= 4)
         {
-            sx = Math.Clamp((int)Math.Round(t.CropX * fullW), 0, fullW - 2);
-            sy = Math.Clamp((int)Math.Round(t.CropY * fullH), 0, fullH - 2);
-            cw = Math.Clamp((int)Math.Round(t.CropW * fullW), 2, fullW - sx);
-            ch = Math.Clamp((int)Math.Round(t.CropH * fullH), 2, fullH - sy);
+            // duplicação do monitor inteiro: recorta a janela onde ela está agora
+            var r = WindowRect(ddHwnd);
+            int l = Math.Clamp(r.Left - ddDesktop.Left, 0, fullW - 2);
+            int tp = Math.Clamp(r.Top - ddDesktop.Top, 0, fullH - 2);
+            int rr = Math.Clamp(r.Right - ddDesktop.Left, l + 2, fullW);
+            int bt = Math.Clamp(r.Bottom - ddDesktop.Top, tp + 2, fullH);
+            sx = l; sy = tp; cw = rr - l; ch = bt - tp;
+        }
+        // área escolhida (frações) -> pixels da captura (dentro da janela, se for o caso)
+        var t = tgt;
+        if (t != null && (t.CropW < 1 || t.CropH < 1) && cw >= 4 && ch >= 4)
+        {
+            int ox = sx, oy = sy, ow = cw, oh = ch;
+            sx = ox + Math.Clamp((int)Math.Round(t.CropX * ow), 0, ow - 2);
+            sy = oy + Math.Clamp((int)Math.Round(t.CropY * oh), 0, oh - 2);
+            cw = Math.Clamp((int)Math.Round(t.CropW * ow), 2, ox + ow - sx);
+            ch = Math.Clamp((int)Math.Round(t.CropH * oh), 2, oy + oh - sy);
         }
         double s = Math.Min((double)Width / cw, (double)Height / ch);
         int dw = Math.Max(2, Math.Min(Width, (int)Math.Round(cw * s)) & ~1), dh = Math.Max(2, Math.Min(Height, (int)Math.Round(ch * s)) & ~1);
@@ -874,6 +1092,12 @@ sealed unsafe class VideoStreamer : IDisposable
                         warnedNoFrames = true;
                         Program.SendJson(new { type = "video-warn", message = "Nenhuma imagem capturada ainda. A janela está minimizada?" });
                     }
+                    // janela transmitida pela duplicação fechou (no WGC o próprio item avisa)
+                    if (ddHwnd != IntPtr.Zero && !windowGone && !IsWindow(ddHwnd))
+                    {
+                        windowGone = true;
+                        Program.SendJson(new { type = "video-ended" });
+                    }
                 }
 
                 if (Interlocked.Read(ref capturedFrames) == 0) continue;                 // nada capturado ainda
@@ -915,7 +1139,11 @@ sealed unsafe class VideoStreamer : IDisposable
         {
             if (vp == null || vpIn == null || vpOut[idx] == null) return false;
             ringIndex = (ringIndex + 1) % Ring;
-            if (toneMapper != null && latest != null) toneMapper.Process(latest, latestW, latestH); // HDR -> SDR
+            if (toneMapper != null && latest != null)
+            {
+                toneMapper.Process(latest, latestW, latestH); // HDR -> SDR
+                if (useDd && toneMapper.Output != null) cursor?.Draw(toneMapper.Output, latestW, latestH);
+            }
             SetRects();
             var stream = new VideoProcessorStream { Enable = true, InputSurface = vpIn };
             videoContext.VideoProcessorBlt(vp, vpOut[idx], 0, 1, new[] { stream }).CheckError();
@@ -985,6 +1213,7 @@ sealed unsafe class VideoStreamer : IDisposable
             Log("threads do vídeo não pararam a tempo: objetos da placa não foram liberados");
             try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch { }
             try { session?.Dispose(); } catch { }
+            ddRunning = false;
             return;
         }
         CurrentStep = "liberar a placa de vídeo";
@@ -995,6 +1224,7 @@ sealed unsafe class VideoStreamer : IDisposable
     /// Libera tudo o que uma tentativa de início criou (também usado entre tentativas que falham).
     void ReleaseAll()
     {
+        ReleaseDd();
         try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch { }
         try { if (closedItem != null) closedItem.Closed -= OnItemClosed; } catch { }
         closedItem = null;
@@ -1033,8 +1263,13 @@ sealed unsafe class VideoStreamer : IDisposable
 
     // ================================================================ interop
     [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT rect, int size);
     [DllImport("d3d11.dll")] static extern int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
     [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
     [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);

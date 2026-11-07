@@ -22,8 +22,11 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 direto entre os PCs pela internet; só as mensagens de conexão passam pelo servidor.
 
 ## Recursos
-- **Captura nativa 60 fps** (Windows Graphics Capture + H.264 na placa de vídeo) que se adapta à rede;
+- **Captura nativa 60 fps** (H.264 na placa de vídeo) que se adapta à rede;
   "Nativa direta" para rede perfeita; "Chromium" para compatibilidade.
+  No Windows 11 captura com Windows Graphics Capture; no Windows 10 com DXGI Desktop Duplication,
+  porque lá o WGC desenha uma **borda amarela** ao redor da tela transmitida que não dá para tirar
+  (`TELA_CAPTURE=wgc` ou `=dxgi` força um dos dois).
 - **Codec automático**: usa **H.265 (HEVC)** quando quem envia e quem recebe têm placa com suporte (mesma imagem com ~30-40% menos Mb/s); senão H.264. Dá para fixar em "Compartilhar".
 - **Bitrate automático**: ao conectar com cada amigo, o app mede sozinho o seu envio até ele (~3 s) e ajusta o orçamento de upload e o teto daquele amigo (o controle "Qualidade" vira o máximo). O resultado aparece em Ajustes. O "Testar conexão" continua lá para uma medição completa (ida e volta).
 - **H.265 também na "Nativa direta"** quando todos decodificam; se entrar alguém sem suporte, a transmissão volta sozinha para H.264.
