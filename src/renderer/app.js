@@ -169,16 +169,73 @@ function requestDiag(peer) {
   diagIn.set(peer.id, { parts: [], n: 0, timer });
   toast(`Pedindo o diagnóstico de ${peer.name}...`);
 }
-async function sendMyDiag(peer) {
+// viaRelay: o pedido veio pela sala (a conexão direta com quem pediu pode ser justamente o problema)
+async function sendMyDiag(peer, viaRelay) {
   toast(`${peer.name} pediu o seu diagnóstico (para achar problemas). Enviando...`);
   const text = await window.native.buildDiagnostics(await buildRendererDiag());
-  const CH = 60000, n = Math.max(1, Math.ceil(text.length / CH));
+  // pela sala cada mensagem tem limite (64 KB): pedaços menores e sem pressa
+  const CH = viaRelay ? 15000 : 60000, n = Math.max(1, Math.ceil(text.length / CH));
   for (let i = 0; i < n; i++) {
-    dcSend(peer, { t: 'diag-part', i, n, data: text.slice(i * CH, (i + 1) * CH) });
+    const part = { i, n, data: text.slice(i * CH, (i + 1) * CH) };
+    if (viaRelay) { sendRelay(peer.id, { kind: 'diag-part', ...part }); await new Promise((r) => setTimeout(r, 60)); continue; }
+    dcSend(peer, { t: 'diag-part', ...part });
     while (peer.dc.bufferedAmount > (1 << 20)) await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+// ---- Diagnóstico da sala: o meu e o de todos os amigos num arquivo só, com um resumo dos erros
+// de cada um no começo. Pede pela conexão direta e, se ela estiver fechada, pela sala.
+let roomDiag = null; // { pending: Set(id), parts: Map(id -> []), got: Map(id -> texto), done() }
+async function requestRoomDiag() {
+  if (roomDiag) { toast('Já estou juntando o diagnóstico da sala...'); return; }
+  const peers = [...state.peers.values()];
+  toast(peers.length ? `Juntando o diagnóstico de todos (${peers.length + 1} pessoas, até 1 min)...` : 'Juntando o diagnóstico...');
+  const rd = roomDiag = { pending: new Set(peers.map((p) => p.id)), parts: new Map(), got: new Map(), names: new Map(peers.map((p) => [p.id, p.name])) };
+  try {
+    const finished = new Promise((resolve) => { rd.done = resolve; });
+    for (const p of peers) {
+      let direct = false;
+      try { if (p.dc && p.dc.readyState === 'open') { dcSend(p, { t: 'diag-req' }); direct = true; } } catch {}
+      if (!direct) sendRelay(p.id, { kind: 'diag-req' });
+    }
+    const mine = await window.native.buildDiagnostics(await buildRendererDiag());
+    if (rd.pending.size) await Promise.race([finished, new Promise((r) => setTimeout(r, 60000))]);
+    const people = [{ name: `${state.myName} (eu)`, text: mine }];
+    for (const [id, name] of rd.names) people.push({ name, text: rd.got.get(id) || null });
+    const head = (t) => (t ? t.split('\n', 1)[0] : '');
+    const problems = (t) => t.split('\n').filter((l) => /\[(interface )?(warning|error)\]|FALHOU|falhou|caiu|travou|parada|perdida/.test(l)).slice(-40);
+    const out = [
+      `Diagnóstico da sala ${state.hostIp || ''} — ${new Date().toLocaleString('pt-BR')}`,
+      `Pessoas: ${people.map((p) => `${p.name}: ${p.text ? head(p.text).replace(/ — diagnóstico.*/, '') : 'NÃO RESPONDEU'}`).join(' · ')}`,
+      '', '===== RESUMO: avisos e erros recentes de cada um =====',
+    ];
+    for (const p of people) {
+      out.push('', `--- ${p.name} ---`);
+      if (!p.text) { out.push('  não respondeu (versão antiga, sem conexão ou app fechado)'); continue; }
+      const pr = problems(p.text);
+      out.push(...(pr.length ? pr.map((l) => '  ' + l) : ['  nenhum aviso']));
+    }
+    for (const p of people) if (p.text) out.push('', '', `##################### ${p.name} #####################`, p.text);
+    const file = await window.native.saveDiagnostics(out.join('\n'), { raw: true, name: 'sala' });
+    const missing = people.filter((p) => !p.text).map((p) => p.name);
+    toast(`Diagnóstico da sala salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}` + (missing.length ? ` (sem resposta de ${missing.join(', ')})` : ''));
+  } finally { roomDiag = null; }
+}
+
 async function onDiagPart(peer, m) {
+  // parte do diagnóstico da sala
+  const rd = roomDiag;
+  if (rd && rd.pending.has(peer.id)) {
+    if (!Number.isInteger(m.i) || !Number.isInteger(m.n) || m.n > 400 || m.i < 0 || m.i >= m.n) return;
+    const parts = rd.parts.get(peer.id) || [];
+    rd.parts.set(peer.id, parts);
+    parts[m.i] = String(m.data || '');
+    if (parts.filter((x) => x != null).length < m.n) return;
+    rd.got.set(peer.id, parts.join(''));
+    rd.pending.delete(peer.id);
+    if (!rd.pending.size && rd.done) rd.done();
+    return;
+  }
   const d = diagIn.get(peer.id);
   if (!d || !Number.isInteger(m.i) || !Number.isInteger(m.n) || m.n > 200 || m.i < 0 || m.i >= m.n) return;
   d.parts[m.i] = String(m.data || '');
@@ -645,6 +702,12 @@ function onRelay(from, data) {
       if (peer.sfuPulling && state.share && state.share.direct && state.share.sfu) {
         for (const ms of [0, 700, 1800]) setTimeout(() => { if (state.share && state.share.direct) window.NativeVideo.key(); }, ms);
       }
+      break;
+    case 'diag-req': // diagnóstico pedido pela sala (sem conexão direta com quem pediu)
+      sendMyDiag(peer, true).catch((e) => console.warn('enviar diagnóstico', e));
+      break;
+    case 'diag-part':
+      onDiagPart(peer, data).catch((e) => console.warn('receber diagnóstico', e));
       break;
     case 'need-key': // a minha tela parou no amigo: manda um quadro completo
       sendKeyFrame(peer);
@@ -4732,6 +4795,7 @@ function initRoomUi() {
   $('#nettest-again').onclick = () => runNetTest().catch((e) => toast(`Falha no teste: ${e.message}`, 'error'));
   $('#nettest-close').onclick = () => $('#nettest-modal').classList.add('hidden');
   $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));
+  $('#btn-diag-room').onclick = () => requestRoomDiag().catch((e) => toast(`Falha no diagnóstico da sala: ${e.message}`, 'error'));
   // mostra os atalhos que de fato ficaram valendo (outro programa pode ter "pegado" algum)
   window.native.getHotkeys().then((k) => {
     const names = { share: 'transmitir/parar', mute: 'mutar todos', 'overlay-lock': 'destravar sobreposição', clip: 'salvar clipe' };
