@@ -539,7 +539,15 @@ sealed unsafe class VideoStreamer : IDisposable
         while (ddRunning)
         {
             var d = dup;
-            if (d == null) { Thread.Sleep(50); continue; }
+            if (d == null)
+            {
+                // refazer a duplicação falhou (tela de bloqueio, UAC, troca de modo de vídeo...):
+                // tenta de novo a cada ~1 s até voltar. Antes ficava parado aqui para sempre.
+                Thread.Sleep(1000);
+                try { lock (gpuLock) { if (ddRunning && device != null && dup == null) CreateDuplication(); } }
+                catch (Exception ex) { Log("refazer a duplicação: " + ex.Message); }
+                continue;
+            }
             // timeout 0: esperar dentro do AcquireNextFrame segura a trava do device D3D11 e deixa o
             // encoder e o VideoProcessor parados (a transmissão caía para ~12 fps). Perguntar a cada
             // ~1 ms custa quase nada e o quadro chega com até 1-2 ms de atraso.
