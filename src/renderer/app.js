@@ -569,6 +569,8 @@ function onSignal(msg) {
           // retomou o mesmo lugar: tira quem saiu enquanto estávamos fora
           const ids = new Set(msg.peers.map((p) => p.id));
           for (const id of [...state.peers.keys()]) if (!ids.has(id)) removePeer(id);
+          // mesmo número, outra pessoa: conexão velha de quem já saiu
+          for (const p of msg.peers) { const ex = state.peers.get(p.id); if (ex && ex.name !== p.name) removePeer(p.id); }
         }
         for (const p of msg.peers) createPeer(p.id, p.name);
         for (const peer of state.peers.values()) {
@@ -592,6 +594,9 @@ function onSignal(msg) {
       break;
     }
     case 'peer-joined':
+      // um número que eu já conheço entrando "de novo" é outra conexão (ex.: a sala reiniciou e
+      // recomeçou a numeração): a conexão antiga com esse número não serve mais
+      if (state.peers.has(msg.id)) removePeer(msg.id);
       createPeer(msg.id, msg.name);
       toast(`${msg.name} entrou na sala`);
       Sfx.play('join');
@@ -915,6 +920,7 @@ async function negotiate(peer) {
     sendRelay(peer.id, { kind: 'sdp', description: outDesc(peer, pc.localDescription) });
   } catch (e) {
     console.error('negotiate', e);
+    if (peerDesynced(peer, e)) return;
     peer.pendingNegotiation = true;
   } finally {
     peer.makingOffer = false;
@@ -961,7 +967,29 @@ async function handleDescription(peer, description) {
     }
   } catch (e) {
     console.error('sdp', e);
+    peerDesynced(peer, e);
   }
+}
+
+// "The order of m-lines ... doesn't match": um dos lados refez a conexão e o outro não ficou sabendo
+// (o aviso "rebuild" foi mandado com a sala fora do ar, ex.: PC voltando da suspensão). Essas duas
+// conexões nunca mais se entendem: antes a tela ficava preta até alguém sair e entrar. Refaz dos dois
+// lados (o "rebuild" avisa o amigo). Se acabou de refazer com ele, tenta de novo quando o limite liberar.
+function peerDesynced(peer, e) {
+  if (!/m-lines/i.test(String((e && e.message) || e))) return false;
+  if (state.peers.get(peer.id) !== peer || peer.desyncTimer) return true;
+  console.warn(`conexão com ${peer.name} dessincronizada: refazendo dos dois lados`);
+  const tryNow = () => {
+    peer.desyncTimer = null;
+    if (state.peers.get(peer.id) !== peer) return; // já foi refeita (pedido dele)
+    if (rebuildPeer(peer.id, true)) return;
+    const wait = 45000 - (Date.now() - (rebuiltAt.get(peer.name) || 0));
+    peer.desyncTimer = setTimeout(tryNow, Math.max(1000, wait + 200));
+  };
+  // os dois lados costumam ver o erro: quem age é o "impolite"; o outro só se nada acontecer em 8 s
+  // (refazer dos dois lados ao mesmo tempo embaralharia de novo)
+  peer.desyncTimer = setTimeout(tryNow, peer.polite ? 8000 : 300);
+  return true;
 }
 
 // Só IPv4: pelo IPv6 do Radmin (fdfd::) os pacotes grandes de vídeo são descartados
@@ -1133,6 +1161,12 @@ async function sfuSyncInner() {
   if (want) {
     try {
       const s = share.settings;
+      if (share.direct && share.codec && share.codec !== 'h264') {
+        // começou em H.265/AV1 antes do servidor entrar: passa para H.264 e publica depois
+        console.warn(`servidor de vídeo: transmissão em ${share.codec}; trocando para H.264`);
+        restartDirectCodec('O servidor de vídeo', 'hevc');
+        return;
+      }
       const native = share.direct ? { codec: share.codec || 'h264', attach: (sender) => window.NativeVideo.attach(sender, 'sfu') } : null;
       const info = await window.Sfu.publish({ video: share.video, audio: share.audio || null, kbps: sfuKbps(s), fps: Number(s.fps) || 60, native });
       // a placa de vídeo manda os quadros para o servidor também (pelo transform da trilha vazia)
@@ -1900,9 +1934,12 @@ async function startShareInner(overrides) {
       // direta: AV1 se eu e TODOS os amigos temos placa que decodifica AV1 (e a minha codifica);
       // senão H.265 se todos decodificam; senão H.264
       const peersNow = [...state.peers.values()];
-      const wantAv1 = direct && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 && !window.Sdp.sendBad('AV1') &&
+      // pelo servidor de vídeo só H.264: quem puxa de lá não recebe H.265/AV1 ("subscriber's SDP is
+      // missing the published track's codec") e a imagem da placa é a mesma para o servidor e para os amigos
+      const viaSfu = direct && sfuWanted() && !sfuPaused();
+      const wantAv1 = direct && !viaSfu && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 && !window.Sdp.sendBad('AV1') &&
         !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && window.Sdp.hasAV1Hw() && peersNow.every((p) => p.av1);
-      const wantHevc = direct && settings.codec !== 'H264' && !settings.forceH264 && !window.Sdp.sendBad('H265') && window.Sdp.hasH265() &&
+      const wantHevc = direct && !viaSfu && settings.codec !== 'H264' && !settings.forceH264 && !window.Sdp.sendBad('H265') && window.Sdp.hasH265() &&
         peersNow.every((p) => p.h265);
       const codecs = [wantAv1 && 'av1', wantHevc && 'hevc', 'h264'].filter(Boolean);
       const opts = {
