@@ -203,7 +203,7 @@ async function requestRoomDiag() {
     const people = [{ name: `${state.myName} (eu)`, text: mine }];
     for (const [id, name] of rd.names) people.push({ name, text: rd.got.get(id) || null });
     const head = (t) => (t ? t.split('\n', 1)[0] : '');
-    const problems = (t) => t.split('\n').filter((l) => /\[(interface )?(warning|error)\]|FALHOU|falhou|caiu|travou|parada|perdida/.test(l)).slice(-40);
+    const problems = (t) => t.split('\n').filter((l) => !/prioridade|\[page\] SMOKE/.test(l) && /\[(interface)?(warning|error)\]|FALHOU|falhou|caiu|travou|parada|perdida/.test(l)).slice(-40);
     const out = [
       `Diagnóstico da sala ${state.hostIp || ''} — ${new Date().toLocaleString('pt-BR')}`,
       `Pessoas: ${people.map((p) => `${p.name}: ${p.text ? head(p.text).replace(/ — diagnóstico.*/, '') : 'NÃO RESPONDEU'}`).join(' · ')}`,
