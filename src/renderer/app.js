@@ -589,6 +589,7 @@ function onRelay(from, data) {
       {
         const was = peer.sharing;
         peer.sharing = data.sharing;
+        peer.canRebuild = !!data.rb;
         peer.hasAudio = data.audio;
         peer.audioWhy = String(data.audioWhy || '').slice(0, 200);
         peer.h265 = !!data.h265;
@@ -645,6 +646,12 @@ function onRelay(from, data) {
         for (const ms of [0, 700, 1800]) setTimeout(() => { if (state.share && state.share.direct) window.NativeVideo.key(); }, ms);
       }
       break;
+    case 'need-key': // a minha tela parou no amigo: manda um quadro completo
+      sendKeyFrame(peer);
+      break;
+    case 'rebuild': // o amigo vai refazer a conexão entre nós (tela travada): refaço a minha também
+      rebuildPeer(from, false);
+      return;
     case 'sfu-rx': // quem recebe pelo servidor está perdendo pacotes/travando (a imagem é uma só para todos)
       if (data.bad) peer.sfuRxBadAt = Date.now();
       break;
@@ -657,6 +664,7 @@ function onRelay(from, data) {
         direct: !!data.direct,
         cpu: !!data.cpu, gaming: !!data.gaming,
         cap: Number.isFinite(data.cap) ? data.cap : null, target: Number.isFinite(data.target) ? data.target : null,
+        out: Number.isFinite(data.out) ? data.out : null, // quadros/s que ele está mandando
       };
       break;
     case 'media': onMediaRequest(peer); break;
@@ -1207,15 +1215,84 @@ async function sfuStallWatch() {
     const h = peer.health || {};
     if (now - s.at < 6000 || (h.cap != null && h.cap < 5)) continue; // tela parada de verdade: não é queda
     console.warn(`servidor de vídeo: nada chega de ${peer.name} há ${Math.round((now - s.at) / 1000)} s; recebendo direto`);
-    const prevN = peer.sfuFail && peer.sfuFail.key === sin.key ? peer.sfuFail.n : 0;
-    peer.sfuFail = { key: sin.key, n: prevN + 1, at: now };
-    peer.sfuStall = null;
-    peer.sfuIn = null;
-    resolveTracks(peer);
-    sendRelay(peer.id, { kind: 'sfu-pull', on: false });
-    window.Sfu.unpull(sin.key).catch(() => {});
-    if (prevN + 1 < 3) setTimeout(() => sfuPullSync(peer), 10000 * (prevN + 1) + 500);
+    sfuFallback(peer);
   }
+}
+function sfuFallback(peer) {
+  const sin = peer.sfuIn;
+  if (!sin) return;
+  const prevN = peer.sfuFail && peer.sfuFail.key === sin.key ? peer.sfuFail.n : 0;
+  peer.sfuFail = { key: sin.key, n: prevN + 1, at: Date.now() };
+  peer.sfuStall = null;
+  peer.sfuIn = null;
+  resolveTracks(peer);
+  sendRelay(peer.id, { kind: 'sfu-pull', on: false });
+  window.Sfu.unpull(sin.key).catch(() => {});
+  if (prevN + 1 < 3) setTimeout(() => sfuPullSync(peer), 10000 * (prevN + 1) + 500);
+}
+
+// ---- tela do amigo parada em 0 fps (nenhum quadro novo) com ele transmitindo normalmente.
+// Antes só voltava saindo e entrando na sala. Agora, em degraus, até a imagem voltar:
+//  3 s: pede um quadro completo para quem transmite (quadros-chave agora são raros: 30 s);
+//  9 s: refaz o caminho do vídeo (servidor -> direto; direto -> reinicia a conexão de rede);
+//  20 s: refaz a conexão inteira com esse amigo (o mesmo que sair e entrar, só com ele).
+function freezeWatch(peer, decodedD) {
+  if (window.__fakeFreeze === peer.name) decodedD = 0; // teste automático
+  const h = peer.health || {};
+  // a tela dele está parada de verdade (nada para mandar): não é travamento
+  const idle = (h.out != null && h.out < 2) || (h.cap != null && h.cap < 5);
+  if (decodedD !== 0 || idle || peer.iWant === 'off' || peer.conn === 'new') {
+    if (peer.frozen && peer.frozen.step && decodedD > 0) console.log(`tela de ${peer.name} voltou`);
+    if (decodedD !== 0 || idle) peer.frozen = null;
+    return;
+  }
+  // trocando de rota agora (Radmin <-> internet): a imagem parar um pouco é normal; espera
+  if (performance.now() - (peer.routeSince || 0) < 15000) return;
+  const now = Date.now();
+  const f = peer.frozen || (peer.frozen = { since: now, step: 0 });
+  const t = now - f.since;
+  if (f.step < 1 && t >= 3000) {
+    f.step = 1;
+    console.warn(`tela de ${peer.name} parada: pedindo um quadro completo`);
+    sendRelay(peer.id, { kind: 'need-key' });
+  } else if (f.step < 2 && t >= 9000) {
+    f.step = 2;
+    console.warn(`tela de ${peer.name} parada há 9 s: refazendo o caminho do vídeo`);
+    sendRelay(peer.id, { kind: 'need-key' });
+    if (peer.sfuIn) sfuFallback(peer);
+    else { try { peer.pc.restartIce(); } catch (e) { console.warn('reiniciar ICE', e); } }
+  } else if (f.step < 3 && t >= 20000) {
+    f.step = 3;
+    if (peer.canRebuild && rebuildPeer(peer.id, true)) toast(`A tela de ${peer.name} travou: refazendo a conexão com ${peer.name}...`);
+  } else if (f.step >= 3 && t >= 60000) peer.frozen = null; // começa os degraus de novo
+}
+
+// Quem transmite: um quadro completo agora (a imagem parou em alguém)
+function sendKeyFrame(peer) {
+  const sh = state.share;
+  if (!sh) return;
+  if (sh.direct) { window.NativeVideo.key(); return; }
+  const senders = [peer.vT.sender];
+  if (sh.sfu && window.Sfu.pubSender()) senders.push(window.Sfu.pubSender());
+  for (const s of senders) { try { if (s.track && s.generateKeyFrame) s.generateKeyFrame().catch(() => {}); } catch {} }
+}
+
+// Refaz a conexão com um amigo do zero (os dois lados). tell = fui eu que pedi.
+const rebuiltAt = new Map(); // nome -> quando pedi por último
+function rebuildPeer(id, tell) {
+  const peer = state.peers.get(id);
+  if (!peer) return false;
+  if (tell) {
+    const last = rebuiltAt.get(peer.name) || 0;
+    if (Date.now() - last < 45000) return false;
+    rebuiltAt.set(peer.name, Date.now());
+    sendRelay(id, { kind: 'rebuild' }); // chega antes da oferta da conexão nova (mesma fila)
+  }
+  console.warn(`refazendo a conexão com ${peer.name}${tell ? '' : ' (pedido dele)'}`);
+  const name = peer.name;
+  removePeer(id);
+  createPeer(id, name);
+  return true;
 }
 setInterval(() => { sfuStallWatch().catch(() => {}); }, 2000);
 
@@ -1261,6 +1338,7 @@ function sendState(to) {
     share2Name: state.share2 ? state.share2.sourceName : '',
     s2Id: peer ? peer.s2MS.id : null,
     sfu: state.share && state.share.sfu ? state.share.sfu : null, // transmitindo pelo servidor de vídeo
+    rb: 1, // sei refazer a conexão a pedido ("rebuild")
   });
 }
 
@@ -2976,11 +3054,15 @@ async function healthLoop() {
   if (state.share && state.peers.size) {
     let cpu = false;
     let sendMime = '';
+    let outFps = 0; // quadros por segundo que estou mandando (quem recebe distingue tela parada de travada)
+    const sfuS = state.share.sfu && window.Sfu.pubSender();
+    if (sfuS) { try { (await sfuS.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') outFps = Math.max(outFps, r.framesPerSecond || 0); }); } catch {} }
     for (const peer of state.peers.values()) {
       if (!peer.vT.sender.track) continue;
       try {
         const rep = await peer.vT.sender.getStats();
         rep.forEach((r) => {
+          if (r.type === 'outbound-rtp' && r.kind === 'video') outFps = Math.max(outFps, r.framesPerSecond || 0);
           if (r.type === 'outbound-rtp' && r.qualityLimitationReason === 'cpu') cpu = true;
           if (r.type === 'outbound-rtp' && r.codecId && rep.get(r.codecId)) {
             const m = rep.get(r.codecId).mimeType || '';
@@ -3012,7 +3094,7 @@ async function healthLoop() {
     }
     // a causa certa para o indicador dos amigos: PC no limite, captura abaixo do alvo, jogando
     const capFps = ns && state.share.native ? ns.captureFps : null;
-    sendRelay(null, { kind: 'health', direct: !!state.share.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (state.share.settings && state.share.settings.fps) || 60), gaming: !!state.gaming });
+    sendRelay(null, { kind: 'health', direct: !!state.share.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (state.share.settings && state.share.settings.fps) || 60), gaming: !!state.gaming, out: Math.round(outFps) });
   }
 
   for (const peer of state.peers.values()) {
@@ -3095,6 +3177,7 @@ async function healthLoop() {
     if (hist.length > 300) hist.splice(0, hist.length - 300);
     if (histOpen === peer.id) drawHistory();
     autoResolution(peer, mineBad && !thumb, level === 'good', v.frameHeight || 0);
+    freezeWatch(peer, q.fDec < prev.fDec ? -1 : q.fDec - prev.fDec);
     const t = peer.tile;
     if (t.qdot) {
       t.qdot.className = `qdot ${level}`;

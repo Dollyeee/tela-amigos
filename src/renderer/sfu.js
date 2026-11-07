@@ -231,13 +231,21 @@ window.Sfu = (() => {
       const tracks = [{ location: 'remote', sessionId: info.s, trackName: info.v, ...(one ? {} : { simulcast }) }];
       if (info.a) tracks.push({ location: 'remote', sessionId: info.s, trackName: info.a });
       const r = await call('tracks', { sid, body: { tracks } });
-      for (const t of r.tracks || []) if (t.errorCode) throw new Error(t.errorDescription || t.errorCode);
-      if (r.requiresImmediateRenegotiation) {
+      // uma trilha falhou (ex.: quem transmite ainda conectando): o servidor pode ter mandado a
+      // negociação das outras mesmo assim. Sem responder, a sessão ficava travada esperando a
+      // resposta e tudo depois falhava ("expecting a remote answer"). Responde, fecha e só então desiste.
+      const bad = (r.tracks || []).find((t) => t.errorCode);
+      if (r.requiresImmediateRenegotiation && r.sessionDescription) {
         mid = true;
         await pc.setRemoteDescription(r.sessionDescription);
         await pc.setLocalDescription(await pc.createAnswer());
         await call('renegotiate', { sid, body: { sessionDescription: { type: 'answer', sdp: pc.localDescription.sdp } } });
         mid = false;
+      }
+      if (bad) {
+        const okMids = (r.tracks || []).filter((t) => !t.errorCode && t.mid != null).map((t) => ({ mid: String(t.mid) }));
+        if (okMids.length) await call('close', { sid, body: { tracks: okMids, force: true } }).catch(() => {});
+        throw new Error(bad.errorDescription || bad.errorCode);
       }
       const res = { mids: [], video: null, audio: null, videoRecv: null, audioRecv: null, videoMid: null, info, rid: one ? null : rid };
       for (const t of r.tracks || []) {
