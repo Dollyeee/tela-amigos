@@ -637,6 +637,13 @@ function onRelay(from, data) {
     case 'route': // o amigo trocou a rota entre nós (ele reinicia o ICE)
       if (data.use === 'net' || data.use === 'any') {
         if (data.use === 'net') peer.netTriedAt = performance.now();
+        if (data.failed && peer.routeUse === 'net') {
+          // o amigo viu antes de mim que a internet direta não fechou: vale como falha minha também
+          // (senão a minha preferência salva "internet direta" puxava de volta na hora e ficava sem imagem)
+          peer.netFailedAt = performance.now();
+          if (peer.routePref === 'net') { peer.routePref = 'auto'; localStorage.removeItem(`route:${peer.name}`); }
+          toast(`Não deu para conectar com ${peer.name} direto pela internet. Voltando para o Radmin.`, 'error');
+        }
         setRouteUse(peer, data.use, `pedido de ${peer.name}`, false);
       }
       break;
@@ -1053,7 +1060,7 @@ function setRouteUse(peer, use, why, tell = true) {
   peer.netOkShown = false;
   console.log(`rota com ${peer.name}: ${use === 'net' ? 'internet direta' : 'Radmin/VPN liberado'} (${why})`);
   if (!tell) return; // quem pediu reinicia o ICE; a oferta dele chega em seguida
-  sendRelay(peer.id, { kind: 'route', use });
+  sendRelay(peer.id, { kind: 'route', use, failed: use === 'any' && /não conectou/.test(why) });
   try { peer.pc.restartIce(); } catch (e) { console.warn('reiniciar ICE', e); }
 }
 
