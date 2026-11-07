@@ -975,9 +975,25 @@ function repairShortcuts() {
   }
 }
 
+// Depois de uma atualização o Windows às vezes mostra o atalho/a barra de tarefas sem ícone (o
+// cache de ícones ficou com o .exe antigo). Na 1ª abertura de cada versão, pede para recarregar.
+function refreshIconsAfterUpdate() {
+  if (!app.isPackaged || process.platform !== 'win32') return;
+  const mark = path.join(app.getPath('userData'), 'icone-versao.txt');
+  let last = '';
+  try { last = fs.readFileSync(mark, 'utf8').trim(); } catch {}
+  if (last === app.getVersion()) return;
+  try { fs.writeFileSync(mark, app.getVersion()); } catch {}
+  try {
+    const p = spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'ie4uinit.exe'), ['-show'], { windowsHide: true, stdio: 'ignore' });
+    p.on('error', () => {});
+  } catch {}
+}
+
 if (gotLock) app.whenReady().then(() => {
   installDisplayMediaHandler();
   setTimeout(repairShortcuts, 5000);
+  setTimeout(refreshIconsAfterUpdate, 8000);
   if (!process.env.TELA_PROFILE) restoreRoomAfterUpdate();
   console.log(`Tela Amigos v${app.getVersion()} iniciando (Windows ${os.release()})`);
   // relatórios de travamento ficam só neste PC (nada é enviado)

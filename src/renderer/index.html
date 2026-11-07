@@ -144,31 +144,23 @@
         </div>
         <details id="side-opts" class="side-opts">
           <summary>Opções</summary>
-        <label class="sound-toggle"><input type="checkbox" id="opt-sounds"> Sons de aviso</label>
-        <label class="sound-toggle" title="O app abre junto com o Windows, só no ícone da bandeja (perto do relógio)">
-          <input type="checkbox" id="opt-autostart"> Abrir com o Windows</label>
-        <label class="sound-toggle" title="Ao abrir, entra sozinho na última sala (quem hospeda reabre a própria sala)">
-          <input type="checkbox" id="opt-autojoin"> Entrar sozinho na última sala</label>
-        <label class="sound-toggle" title="Mede o volume de cada tela e aumenta sozinho quem está baixo (até 4x), sem abaixar ninguém. Um limitador evita estourar.">
-          <input type="checkbox" id="opt-leveler"> Nivelar volume das telas</label>
-        <label class="sound-toggle" title="Deixa os amigos darem play/pausa no vídeo que você está transmitindo (YouTube, Spotify, VLC...). Usa a tecla de mídia do Windows.">
-          <input type="checkbox" id="opt-mediactl"> Amigos controlam play/pausa</label>
-        <label class="sound-toggle" title="Quando um jogo estiver em tela cheia, esconde a sua prévia para economizar placa de vídeo">
-          <input type="checkbox" id="opt-gamehide"> Esconder minha prévia ao jogar</label>
-        <label class="sound-toggle" title="Com um jogo em tela cheia aberto, as telas dos amigos ganham ~0,15 s de buffer para não engasgarem (o app também fica com prioridade maior na placa de vídeo)">
-          <input type="checkbox" id="opt-gamebuffer"> Telas lisas enquanto jogo</label>
-        <label class="sound-toggle" title="Só na sala online: sua tela vai uma vez para o servidor de vídeo e ele repassa para cada amigo a qualidade que a conexão dele aguenta (como no Discord). Seu upload não é dividido entre os amigos.">
-          <input type="checkbox" id="opt-sfu"> Transmitir pelo servidor (beta)</label>
-        <label class="sound-toggle" title="Mostra fps e ping no canto de cada tela e, quando piora, de quem é o problema: rede, PC do amigo ou o seu PC">
-          <input type="checkbox" id="opt-status"> Status nas telas</label>
-        <label class="sound-toggle" title="Quando alguém usa a mãozinha (segurando o botão direito) na sua tela, ela aparece também no seu monitor, por cima do jogo. Não aparece na transmissão.">
-          <input type="checkbox" id="opt-laserdesk"> Mostrar mãozinhas no meu monitor</label>
-        <label class="sound-toggle" title="Desenhos da caneta e rastros (Shift) que os amigos fazem na sua tela aparecem também no seu monitor. Não aparecem na transmissão.">
-          <input type="checkbox" id="opt-inkdesk"> Mostrar desenhos no meu monitor</label>
-        <label class="sound-toggle" title="Emotes que os amigos mandam na sua tela sobem também no seu monitor, por cima do jogo. Não aparecem na transmissão.">
-          <input type="checkbox" id="opt-reactdesk"> Mostrar emotes no meu monitor</label>
-        <label class="sound-toggle" title="Os clipes levam o som da transmissão e também tudo o que toca no seu PC (Discord, jogo, música)">
-          <input type="checkbox" id="opt-clipsys"> Clipes com o áudio do PC</label>
+          <div class="opt-group">Geral</div>
+          <label class="sound-toggle switch"><span>Sons de aviso</span><input type="checkbox" id="opt-sounds"></label>
+          <label class="sound-toggle switch" title="O app abre junto com o Windows, só no ícone da bandeja (perto do relógio)"><span>Abrir com o Windows</span><input type="checkbox" id="opt-autostart"></label>
+          <label class="sound-toggle switch" title="Ao abrir, entra sozinho na última sala (quem hospeda reabre a própria sala)"><span>Entrar sozinho na última sala</span><input type="checkbox" id="opt-autojoin"></label>
+          <div class="opt-group">Telas dos amigos</div>
+          <label class="sound-toggle switch" title="Mede o volume de cada tela e aumenta sozinho quem está baixo (até 4x), sem abaixar ninguém. Um limitador evita estourar."><span>Nivelar volume das telas</span><input type="checkbox" id="opt-leveler"></label>
+          <label class="sound-toggle switch" title="Com um jogo em tela cheia aberto, as telas dos amigos ganham ~0,15 s de buffer para não engasgarem (o app também fica com prioridade maior na placa de vídeo)"><span>Telas lisas enquanto jogo</span><input type="checkbox" id="opt-gamebuffer"></label>
+          <label class="sound-toggle switch" title="Mostra fps e ping no canto de cada tela e, quando piora, de quem é o problema: rede, PC do amigo ou o seu PC"><span>Status nas telas</span><input type="checkbox" id="opt-status"></label>
+          <div class="opt-group">Minha transmissão</div>
+          <label class="sound-toggle switch" title="Só na sala online: sua tela vai uma vez para o servidor de vídeo e ele repassa para cada amigo a qualidade que a conexão dele aguenta (como no Discord). Seu upload não é dividido entre os amigos."><span>Transmitir pelo servidor (beta)</span><input type="checkbox" id="opt-sfu"></label>
+          <label class="sound-toggle switch" title="Deixa os amigos darem play/pausa no vídeo que você está transmitindo (YouTube, Spotify, VLC...). Usa a tecla de mídia do Windows."><span>Amigos controlam play/pausa</span><input type="checkbox" id="opt-mediactl"></label>
+          <label class="sound-toggle switch" title="Quando um jogo estiver em tela cheia, esconde a sua prévia para economizar placa de vídeo"><span>Esconder minha prévia ao jogar</span><input type="checkbox" id="opt-gamehide"></label>
+          <label class="sound-toggle switch" title="Os clipes levam o som da transmissão e também tudo o que toca no seu PC (Discord, jogo, música)"><span>Clipes com o áudio do PC</span><input type="checkbox" id="opt-clipsys"></label>
+          <div class="opt-group">No meu monitor, por cima do jogo</div>
+          <label class="sound-toggle switch" title="Quando alguém usa a mãozinha (segurando o botão direito) na sua tela, ela aparece também no seu monitor, por cima do jogo. Não aparece na transmissão."><span>Mãozinhas</span><input type="checkbox" id="opt-laserdesk"></label>
+          <label class="sound-toggle switch" title="Desenhos da caneta e rastros (Shift) que os amigos fazem na sua tela aparecem também no seu monitor. Não aparecem na transmissão."><span>Desenhos da caneta</span><input type="checkbox" id="opt-inkdesk"></label>
+          <label class="sound-toggle switch" title="Emotes que os amigos mandam na sua tela sobem também no seu monitor, por cima do jogo. Não aparecem na transmissão."><span>Emotes</span><input type="checkbox" id="opt-reactdesk"></label>
         </details>
         <div class="side-links">
           <button id="btn-ready" class="link-btn" title="Cada um confirma; com todos prontos vem a contagem 3, 2, 1 (e o vídeo de quem está em foco começa no &quot;já&quot;)">Todo mundo pronto?</button>
