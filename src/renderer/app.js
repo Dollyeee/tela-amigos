@@ -3213,6 +3213,10 @@ async function healthLoop() {
       if (senderSlow) {
         reason = `PC de ${peer.name} no limite${h.cap != null ? ` (capturando ${Math.round(h.cap)} fps)` : ''}${h.gaming ? ' — jogo pesado' : ''}`;
         short = `PC de ${peer.name}`;
+        if (h.cap === 0 && h.gaming) { // não é rede nem o meu PC: a captura dele travou com o jogo
+          reason = `a captura de ${peer.name} parou (0 fps com o jogo aberto); o app dele tenta reiniciar sozinho`;
+          short = 'captura dele parou';
+        }
       } else if (netBad) {
         reason = loss > 0.01 ? `rede entre vocês perdendo pacotes (${(loss * 100).toFixed(1)}%)`
           : rtt && rtt > 0.12 ? `rede com atraso alto (${Math.round(rtt * 1000)} ms)` : 'rede instável';
@@ -3254,7 +3258,7 @@ setInterval(() => { healthLoop().catch(() => {}); }, 2000);
 
 // eventos do AudioHelper (estatísticas e fim da captura nativa)
 function onHelperEvent(msg) {
-  if (msg.type === 'video-stats') state.nativeStats = msg;
+  if (msg.type === 'video-stats') { state.nativeStats = msg; captureStallWatch(msg); }
   else if (msg.type === 'video-ended' && state.share && state.share.native) {
     toast('A janela compartilhada foi fechada.');
     stopShare();
@@ -3365,15 +3369,17 @@ async function switchToDirect() {
 // sozinho. Se cair 3 vezes em 1 minuto, passa para a captura do Chromium.
 const recoverTimes = [];
 let recovering = false;
-async function recoverShare(reason) {
+async function recoverShare(reason, forceChromium = false) {
   if (recovering || !state.share) return;
   recovering = true;
   const now = Date.now();
   while (recoverTimes.length && now - recoverTimes[0] > 60000) recoverTimes.shift();
   recoverTimes.push(now);
-  const tooMany = recoverTimes.length > 3;
-  toast(tooMany
-    ? `A captura nativa caiu de novo (${reason}). Usando a captura do Chromium.`
+  const tooMany = forceChromium || recoverTimes.length > 3;
+  toast(forceChromium
+    ? `A captura travou de novo com o jogo aberto (${reason}). Mudei para a captura do Chromium. Se a tela continuar parada, ` +
+      'coloque o jogo em "Tela cheia sem bordas" (ou "Janela sem bordas") nas opções de vídeo dele.'
+    : tooMany ? `A captura nativa caiu de novo (${reason}). Usando a captura do Chromium.`
     : `A captura parou (${reason}). Reiniciando...`, 'error');
   const src = state.share.source;
   try {
@@ -3385,6 +3391,46 @@ async function recoverShare(reason) {
     recovering = false;
   }
 }
+
+// Captura nativa em 0 fps com um jogo aberto: o jogo desenha o tempo todo, então 0 quadros é
+// captura travada (placa de vídeo reiniciou, jogo em tela cheia exclusiva...). Antes a tela ficava
+// parada para todo mundo até parar e transmitir de novo. 6 s assim: reinicia a captura; travou de
+// novo em até 3 min: passa para a captura do Chromium (outro método do Windows) e sugere sem bordas.
+// (Sem jogo aberto, 0 fps pode ser só a tela parada: aí não faz nada.)
+let capZero = null; // { share, since }
+const capStalls = [];
+function captureStallWatch(st) {
+  const sh = state.share;
+  if (!sh || !sh.native || !state.gaming || recovering || (st.captureFps || 0) > 0) { capZero = null; return; }
+  const now = Date.now();
+  if (!capZero || capZero.share !== sh) { capZero = { share: sh, since: now }; return; }
+  if (now - capZero.since < 6000) return;
+  capZero = null;
+  captureFail(`0 fps com o jogo aberto (${state.gamingExe || '?'})`);
+}
+// 1ª falha: reinicia a captura nativa; 2ª em até 3 min: captura do Chromium
+function captureFail(reason) {
+  const now = Date.now();
+  while (capStalls.length && now - capStalls[0] > 180000) capStalls.shift();
+  capStalls.push(now);
+  const again = capStalls.length > 1;
+  console.warn(`captura travada: ${reason}; ${again ? 'trocando para a captura do Chromium' : 'reiniciando a captura'}`);
+  if (again) capStalls.length = 0;
+  recoverShare(reason.replace(/ \(.*\)$/, ''), again);
+}
+// A captura nativa começou mas nunca entregou nenhuma imagem (o som vai, o vídeo não: tela preta
+// para todo mundo). 10 s sem nenhum quadro: trata como captura travada.
+function shareStartWatch() {
+  const sh = state.share;
+  if (!sh || !sh.native || recovering || sh.firstFrameOk) return;
+  if (!sh.watchT0) { sh.watchT0 = Date.now(); return; }
+  const ns = state.nativeStats;
+  if (ns && ((ns.captureFps || 0) > 0 || (ns.fps || 0) > 0)) { sh.firstFrameOk = true; return; }
+  if (Date.now() - sh.watchT0 < 10000) return;
+  sh.firstFrameOk = true; // uma vez por transmissão
+  captureFail('a captura não mandou nenhuma imagem');
+}
+setInterval(shareStartWatch, 1000);
 
 async function stopShare() {
   const share = state.share;
