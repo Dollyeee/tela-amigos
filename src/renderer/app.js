@@ -3469,7 +3469,8 @@ async function stopShare() {
 function enterRoom() {
   $('#lobby').classList.add('hidden');
   $('#room').classList.remove('hidden');
-  $('#btn-copy-ip').textContent = isOnlineCode(state.hostIp) ? `Sala online: ${state.hostIp}  (copiar código)` : `Sala: ${state.hostIp}  (copiar)`;
+  $('#btn-copy-ip').textContent = isOnlineCode(state.hostIp) ? `Sala online · ${state.hostIp}` : `Sala · ${state.hostIp}`;
+  $('#btn-copy-ip').title = isOnlineCode(state.hostIp) ? 'Copiar o código da sala para mandar aos amigos' : 'Copiar o IP da sala';
   $('#btn-close-room').classList.toggle('hidden', !state.isHost);
   render();
   // detecta jogo em tela cheia: com jogo pesado, as telas dos amigos ganham um respiro (buffer)
@@ -4140,7 +4141,32 @@ function bestColumns(n, W, H) {
   return best;
 }
 
+// Grade: cada tela no formato 16:9 (sem faixas pretas enormes dos lados), do maior tamanho que
+// cabe, centralizadas. Refeita quando o palco muda de tamanho.
+let gridN = 0;
+function fitGrid(n) {
+  gridN = n;
+  const main = $('#stage-main');
+  if (!main || !$('#stage').classList.contains('grid')) return;
+  const r = main.getBoundingClientRect();
+  const W = r.width || 1, H = r.height || 1;
+  const cnt = Math.max(1, n);
+  const cols = bestColumns(cnt, W, H), rows = Math.ceil(cnt / cols);
+  const gap = parseFloat(getComputedStyle(main).columnGap) || 0;
+  const w = Math.floor(Math.max(120, Math.min((W - gap * (cols - 1)) / cols, ((H - gap * (rows - 1)) / rows) * 16 / 9)));
+  main.style.gridTemplateColumns = `repeat(${cols}, ${w}px)`;
+  main.style.gridAutoRows = `${Math.floor(w * 9 / 16)}px`;
+  main.style.justifyContent = 'center';
+}
+let gridRO = null;
+function watchGridSize() {
+  if (gridRO || !window.ResizeObserver) return;
+  gridRO = new ResizeObserver(() => { if (gridN) fitGrid(gridN); });
+  gridRO.observe($('#stage-main'));
+}
+
 function render() {
+  watchGridSize();
   for (const id of state.peers.keys()) {
     if (!state.order.includes(id) && isSharing(id)) state.order.push(id);
   }
@@ -4196,14 +4222,15 @@ function render() {
       i++;
     }
     main.style.gridTemplateColumns = '';
+    main.style.gridAutoRows = '';
+    main.style.justifyContent = '';
   } else {
     visible.forEach((id, i) => {
       const t = getTile(id);
       t.el.classList.remove('thumb');
       if (main.children[i] !== t.el) main.insertBefore(t.el, main.children[i] || null);
     });
-    const r = main.getBoundingClientRect();
-    main.style.gridTemplateColumns = `repeat(${bestColumns(Math.max(1, visible.length), r.width || 1, r.height || 1)}, 1fr)`;
+    fitGrid(visible.length);
   }
   for (const id of visible) {
     const t = getTile(id);
