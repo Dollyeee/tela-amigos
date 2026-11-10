@@ -196,7 +196,7 @@ static class Program
                             // demorou e o app já desistiu (pediu outra coisa): não deixa capturando sozinho
                             if (Volatile.Read(ref videoGen) != gen) { v.Dispose(); throw new Exception("início cancelado"); }
                             video = v;
-                            SendJson(new { id = vid, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec });
+                            SendJson(new { id = vid, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec, minQp = v.MinQp });
                         });
                         break;
                     }

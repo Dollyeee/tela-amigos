@@ -57,6 +57,7 @@ sealed unsafe class VideoStreamer : IDisposable
     static readonly Guid CODECAPI_LowLatencyMode = new("9c27891a-ed7a-40e1-88e8-b22727a024ee");
     static readonly Guid CODECAPI_ForceKeyFrame = new("398c1b98-8353-475a-9ef2-8f265d260345");
     static readonly Guid CODECAPI_QualityVsSpeed = new("98332df8-03cd-476b-89fa-3f9e442dec9f");
+    static readonly Guid CODECAPI_VideoMinQP = new("0ee22c6a-a37c-4568-b5f1-9d4c2b3ab886");
     static readonly Guid IID_ICodecAPI = new("901db4c7-31ce-41a2-85dc-8fa0bf41b8da");
 
     const int MF_E_TRANSFORM_STREAM_CHANGE = unchecked((int)0xC00D6D61);
@@ -68,6 +69,8 @@ sealed unsafe class VideoStreamer : IDisposable
     public int Width { get; private set; }
     public int Height { get; private set; }
     public string EncoderName { get; private set; } = "";
+    /// <summary>Piso de QP aceito pelo encoder (0 = sem piso).</summary>
+    public int MinQp { get; private set; }
 
     ID3D11Device device = null!;
     ID3D11DeviceContext context = null!;
@@ -372,6 +375,18 @@ sealed unsafe class VideoStreamer : IDisposable
         videoContext = context.QueryInterface<ID3D11VideoContext>();
 
         using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
+        // Com um jogo pesado aberto a placa atende o jogo e a conversão/cópia da captura fica na fila
+        // (o encoder chegava a esperar 30 ms por quadro). Pede prioridade máxima para os comandos
+        // deste dispositivo (o trabalho dele é mínimo: uma cópia e uma conversão por quadro) e não
+        // deixa a placa enfileirar quadros dele. Sem permissão o Windows só recusa: segue normal.
+        try
+        {
+            var hr = dxgiDevice.SetGPUThreadPriority(7);
+            if (hr.Failure) hr = dxgiDevice.SetGPUThreadPriority(5);
+            Log($"prioridade de GPU da captura: {(hr.Success ? "alta" : $"normal (0x{hr.Code:X8})")}");
+        }
+        catch (Exception ex) { Log("prioridade de GPU da captura: " + ex.Message); }
+        try { using var d1 = device.QueryInterfaceOrNull<IDXGIDevice1>(); d1?.SetMaximumFrameLatency(1); } catch { }
         CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.NativePointer, out IntPtr inspectable).CheckHr("CreateDirect3D11DeviceFromDXGIDevice");
         winrtDevice = MarshalInterface<IDirect3DDevice>.FromAbi(inspectable);
         Marshal.Release(inspectable);
@@ -384,6 +399,10 @@ sealed unsafe class VideoStreamer : IDisposable
         IntPtr hmon = hwnd != IntPtr.Zero
             ? MonitorFromWindow(hwnd, 2)
             : MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2);
+
+        // teste: em vez de capturar, gera uma imagem com movimento (o que está na tela de quem roda o
+        // teste não muda o resultado). TELA_TEST_PATTERN = blocos novos por quadro (mais = mais pesado)
+        if (testPatternBlocks > 0) { StartPattern(); Log("captura: padrão de teste"); return; }
 
         // Monitor em HDR: captura em ponto flutuante (scRGB) e converte para SDR na placa.
         // Capturar HDR direto em 8 bits deixava as cores lavadas/estouradas para quem assiste.
@@ -428,6 +447,68 @@ sealed unsafe class VideoStreamer : IDisposable
         Log("captura: Windows Graphics Capture");
     }
 
+    // ---------------------------------------------------------------- padrão de teste
+    static readonly int testPatternBlocks = int.TryParse(Environment.GetEnvironmentVariable("TELA_TEST_PATTERN"), out var tp) ? tp : 0;
+    Thread? patThread;
+    volatile bool patRunning;
+    ID3D11Texture2D? patTex;
+
+    /// 1920x1080 de blocos coloridos descendo 6 pixels por quadro (movimento que o encoder prevê em
+    /// parte) com alguns blocos trocados a cada quadro (detalhe novo): parecido com um jogo em movimento.
+    void StartPattern()
+    {
+        const int W = 1920, H = 1080, B = 24;
+        poolSize = new Windows.Graphics.SizeInt32 { Width = W, Height = H };
+        patTex = device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = W, Height = H, MipLevels = 1, ArraySize = 1, Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0), Usage = ResourceUsage.Default, BindFlags = BindFlags.ShaderResource,
+        });
+        int pitch = W * 4, rows = H * 2;
+        var buf = new byte[pitch * rows];
+        var rnd = new Random(7);
+        void Block(int bx, int by)
+        {
+            byte b = (byte)rnd.Next(256), g = (byte)rnd.Next(256), r = (byte)rnd.Next(256);
+            for (int y = by * B; y < Math.Min(rows, (by + 1) * B); y++)
+                for (int x = bx * B; x < Math.Min(W, (bx + 1) * B); x++)
+                {
+                    int o = y * pitch + x * 4;
+                    buf[o] = b; buf[o + 1] = g; buf[o + 2] = r; buf[o + 3] = 255;
+                }
+        }
+        int bw = W / B, bh = rows / B;
+        for (int by = 0; by < bh; by++) for (int bx = 0; bx < bw; bx++) Block(bx, by);
+        patRunning = true;
+        patThread = new Thread(() =>
+        {
+            var handle = GCHandle.Alloc(buf, GCHandleType.Pinned);
+            try
+            {
+                // TELA_TEST_PATFPS: imagens novas por segundo (menos que o fps da transmissão = quadros repetidos)
+                int patFps = int.TryParse(Environment.GetEnvironmentVariable("TELA_TEST_PATFPS"), out var pf) && pf > 0 ? pf : fps;
+                long period = Stopwatch.Frequency / patFps, next = clock.ElapsedTicks;
+                int off = 0;
+                while (patRunning)
+                {
+                    next += period;
+                    while (patRunning && clock.ElapsedTicks < next) Thread.Sleep(1);
+                    off = (off + 6) % H;
+                    for (int k = 0; k < testPatternBlocks; k++) Block(rnd.Next(bw), rnd.Next(bh));
+                    lock (gpuLock)
+                    {
+                        if (device == null || patTex == null) break;
+                        context.UpdateSubresource(patTex, 0, null, handle.AddrOfPinnedObject() + off * pitch, (uint)pitch, 0);
+                        OnCapturedTexture(patTex, W, H);
+                    }
+                }
+            }
+            catch (Exception ex) { Log("padrão de teste: " + ex.Message); }
+            finally { handle.Free(); }
+        }) { IsBackground = true, Name = "pattern" };
+        patThread.Start();
+    }
+
     // ---------------------------------------------------------------- WGC
     void StartWgc(IntPtr hwnd, IntPtr hmon)
     {
@@ -461,6 +542,16 @@ sealed unsafe class VideoStreamer : IDisposable
         session = framePool.CreateCaptureSession(item);
         try { session.IsBorderRequired = false; } catch { }
         try { session.IsCursorCaptureEnabled = true; } catch { }
+        // Monitor de 144/240 Hz com um jogo acima de 100 fps: o Windows entregava (e a placa copiava)
+        // cada um desses quadros, e só 60 por segundo são usados. No Windows 11 24H2+ dá para pedir um
+        // intervalo mínimo entre capturas: um pouco mais que metade do intervalo da transmissão (nunca
+        // chega a faltar quadro novo na hora de codificar).
+        try
+        {
+            long ticks = (long)(10_000_000.0 / fps * 0.55);
+            if (TrySetMinUpdateInterval(session, ticks)) Log($"captura: no máximo um quadro a cada {ticks / 10000.0:0.0} ms");
+        }
+        catch { }
         closedItem = item;
         item.Closed += OnItemClosed;
         session.StartCapture();
@@ -536,8 +627,14 @@ sealed unsafe class VideoStreamer : IDisposable
 
     void DdLoopInner(ref int lost)
     {
+        // no máximo uma cópia da tela a cada ~metade do intervalo da transmissão (como no WGC): num
+        // monitor de 144 Hz, ou só mexendo o mouse, a duplicação entregava 100+ telas por segundo e
+        // cada uma era copiada inteira. Sem buscar, o Windows só acumula as mudanças: nada se perde.
+        long minTicks = (long)(Stopwatch.Frequency / (double)fps * 0.55);
+        long lastAcquire = 0;
         while (ddRunning)
         {
+            if (lastAcquire != 0 && clock.ElapsedTicks - lastAcquire < minTicks) { Thread.Sleep(1); continue; }
             var d = dup;
             if (d == null)
             {
@@ -567,6 +664,7 @@ sealed unsafe class VideoStreamer : IDisposable
                 return;
             }
             lost = 0;
+            lastAcquire = clock.ElapsedTicks;
             try
             {
                 using var tex = resource!.QueryInterface<ID3D11Texture2D>();
@@ -589,6 +687,11 @@ sealed unsafe class VideoStreamer : IDisposable
 
     void ReleaseDd()
     {
+        patRunning = false;
+        var pt = patThread;
+        if (pt != null && pt != Thread.CurrentThread) pt.Join(1500);
+        patThread = null;
+        lock (gpuLock) { try { patTex?.Dispose(); } catch { } patTex = null; }
         ddRunning = false;
         var t = ddThread;
         if (t != null && t != Thread.CurrentThread) t.Join(2000);
@@ -797,6 +900,17 @@ sealed unsafe class VideoStreamer : IDisposable
         // automáticos (o Discord usa ~1 por minuto)
         SetCodec(CODECAPI_GOPSize, (uint)fps * 30);
         SetCodec(CODECAPI_QualityVsSpeed, 75u); // preset de mais qualidade (NVENC aguenta folgado a 1080p60)
+        // Piso de qualidade (QP mínimo). Sem ele, com a imagem quase parada, a taxa constante ia
+        // baixando o QP até quase "sem perdas" e gastava 1,5 a 3 Mb/s codificando ruído que ninguém
+        // vê. Medido na tela de verdade (NVIDIA, 1080p60 a 12 Mb/s): o quadro típico caiu de ~2,7 KB
+        // para ~0,3 KB em H.264, de ~2 KB para ~0,6 KB em H.265 e de ~0,7 KB para ~0,09 KB em AV1.
+        // QP 16-18 já é visualmente sem perdas; em movimento o QP fica bem acima e nada muda. Sobra
+        // upload para o jogo de quem transmite e economiza o limite mensal do servidor de vídeo.
+        // (escala 0-51 nos três encoders da NVIDIA; encoder que recusar continua como antes)
+        // TELA_TEST_MINQP: outro valor para medir (0 = sem piso)
+        int minQp = hevc ? 18 : 16;
+        if (int.TryParse(Environment.GetEnvironmentVariable("TELA_TEST_MINQP"), out var tq)) minQp = Math.Clamp(tq, 0, 51);
+        MinQp = minQp > 0 && CallSetValue(CODECAPI_VideoMinQP, new VARIANT { vt = 19, ui4 = (uint)minQp }, true) >= 0 ? minQp : 0;
 
         // Formato de saída: tenta o completo (High + cores BT.709); se o encoder recusar,
         // tenta versões mais simples antes de desistir.
@@ -902,6 +1016,7 @@ sealed unsafe class VideoStreamer : IDisposable
         if (kbps == bitrateKbps) return;
         bitrateKbps = kbps;
         // só o bitrate médio: mudar o buffer (VBV) faz o encoder reiniciar e gerar um keyframe
+        // (medido na NVIDIA: com o bitrate menor os quadros-chave já saem menores sem mexer no buffer)
         SetCodec(CODECAPI_MeanBitRate, (uint)kbps * 1000);
     }
 
@@ -920,13 +1035,16 @@ sealed unsafe class VideoStreamer : IDisposable
         var v = new VARIANT { vt = 11, boolVal = (short)(value ? -1 : 0) }; // VT_BOOL
         CallSetValue(api, v);
     }
-    void CallSetValue(Guid api, VARIANT v)
+    int CallSetValue(Guid api, VARIANT v, bool quiet = false)
     {
-        if (codecApi == IntPtr.Zero) return;
+        if (codecApi == IntPtr.Zero) return unchecked((int)0x80004002);
         var vtbl = *(IntPtr**)codecApi;
         var setValue = (delegate* unmanaged[Stdcall]<IntPtr, Guid*, VARIANT*, int>)vtbl[9];
         int hr = setValue(codecApi, &api, &v);
-        if (hr < 0) Program.SendJson(new { type = "warn", message = $"Encoder não aceitou {api}: 0x{hr:X8}" });
+        // (o encoder da NVIDIA recusa "0 quadros B" porque já não usa nenhum no modo de baixa latência:
+        //  não é problema e o aviso só enchia o registro a cada início de transmissão)
+        if (hr < 0 && !quiet && api != CODECAPI_BPictureCount) Program.SendJson(new { type = "warn", message = $"Encoder não aceitou {api}: 0x{hr:X8}" });
+        return hr;
     }
 
     void EventLoop()
@@ -937,7 +1055,12 @@ sealed unsafe class VideoStreamer : IDisposable
             {
                 using var ev = events.GetEvent(0);
                 var type = ev.EventType;
-                if (type == MediaEventTypes.TransformNeedInput) Interlocked.Increment(ref needInput);
+                if (type == MediaEventTypes.TransformNeedInput)
+                {
+                    // teste: encoder lento (placa disputada por um jogo), o tempo todo ou só nos primeiros segundos
+                    if (testSlowEncMs > 0 && (testSlowForMs == 0 || clock.ElapsedMilliseconds < testSlowForMs)) Thread.Sleep(testSlowEncMs);
+                    Interlocked.Increment(ref needInput);
+                }
                 else if (type == MediaEventTypes.TransformHaveOutput) DrainOutput();
                 else if (type == MediaEventTypes.Error || ev.Status.Failure)
                 {
@@ -1069,6 +1192,17 @@ sealed unsafe class VideoStreamer : IDisposable
     }
 
     // ================================================================ ritmo fixo
+    long lastSubmitCaptured = -1;   // capturedFrames quando o último quadro foi entregue ao encoder
+    long lastSubmitTicks;           // quando foi
+    long lastTime100ns = -1;        // horário do último quadro entregue
+    double lateScore;               // > 2: o encoder não está acompanhando o ritmo (placa disputada)
+    long statLate, statSkipped;
+    // testes: TELA_TEST_SLOWENC=ms simula o encoder demorando; TELA_TEST_NOLATE=1 volta ao ritmo antigo
+    // (quadro descartado quando o encoder está ocupado), para comparar
+    static readonly int testSlowEncMs = int.TryParse(Environment.GetEnvironmentVariable("TELA_TEST_SLOWENC"), out var ms) ? ms : 0;
+    static readonly bool testNoLate = Environment.GetEnvironmentVariable("TELA_TEST_NOLATE") == "1";
+    static readonly int testSlowForMs = int.TryParse(Environment.GetEnvironmentVariable("TELA_TEST_SLOWFOR"), out var sf) ? sf * 1000 : 0;
+
     void TickLoop()
     {
         timeBeginPeriod(1);
@@ -1108,12 +1242,68 @@ sealed unsafe class VideoStreamer : IDisposable
                     }
                 }
 
-                if (Interlocked.Read(ref capturedFrames) == 0) continue;                 // nada capturado ainda
-                if (Volatile.Read(ref needInput) <= 0) { statDropped++; continue; }        // encoder ocupado
-                // nunca reescrever uma textura que o encoder ainda está lendo
-                if (Volatile.Read(ref inFlight) >= Ring - 1) { statDropped++; continue; }
+                if (Interlocked.Read(ref capturedFrames) == 0) continue;                  // nada capturado ainda
+
+                // Até 1 ms antes do próximo intervalo este quadro ainda pode sair (com o horário real).
+                long deadline = testNoLate ? 0 : due + periodTicks - Stopwatch.Frequency / 1000;
+                bool offGrid = false, encSlow = false;
+
+                // Placa disputada por um jogo pesado (o encoder leva mais que um intervalo por quadro):
+                // não gasta a vez dele repetindo uma imagem que já foi. Espera a próxima captura e manda
+                // assim que ela chega; sem captura nova, só ~2 quadros/s para a transmissão não parecer morta.
+                if (lateScore > 2 && !testNoLate && !forceKey && clock.ElapsedTicks - lastSubmitTicks < Stopwatch.Frequency / 2)
+                {
+                    while (running && Interlocked.Read(ref capturedFrames) == lastSubmitCaptured && clock.ElapsedTicks < deadline)
+                    {
+                        offGrid = true;
+                        Thread.Sleep(1);
+                    }
+                    if (!running) break;
+                    if (Interlocked.Read(ref capturedFrames) == lastSubmitCaptured) { statSkipped++; lateScore *= 0.97; continue; }
+                }
+                // o quadro anterior saiu fora do ritmo há pouco: não manda outro colado nele
+                while (running && !testNoLate && clock.ElapsedTicks - lastSubmitTicks < periodTicks * 6 / 10 && clock.ElapsedTicks < deadline)
+                {
+                    offGrid = true;
+                    Thread.Sleep(1);
+                }
+
+                // Encoder ainda ocupado com o quadro anterior (ou todas as texturas em uso: nunca
+                // reescrever uma que ele ainda está lendo). Antes este quadro era descartado e só o
+                // próximo intervalo tentava de novo: com o encoder levando 30 ms num jogo pesado, de
+                // 30 quadros/s saíam 19. Agora espera ele liberar e manda na hora: saem tantos quadros
+                // quanto a placa consegue.
+                while (running && (Volatile.Read(ref needInput) <= 0 || Volatile.Read(ref inFlight) >= Ring - 1))
+                {
+                    if (clock.ElapsedTicks >= deadline) break;
+                    offGrid = true;
+                    // "não está dando conta" = o quadro anterior já teve um intervalo inteiro e não ficou
+                    // pronto (esperar porque o anterior saiu atrasado não conta: senão um soluço passageiro
+                    // prendia a captura no modo de placa disputada para sempre)
+                    if (clock.ElapsedTicks - lastSubmitTicks > periodTicks) encSlow = true;
+                    Thread.Sleep(1);
+                }
+                if (!running) break;
+                if (Volatile.Read(ref needInput) <= 0 || Volatile.Read(ref inFlight) >= Ring - 1)
+                {
+                    statDropped++;
+                    if (clock.ElapsedTicks - lastSubmitTicks > periodTicks) lateScore = Math.Min(20, lateScore + 1);
+                    continue;
+                }
+                long t100 = n * 10_000_000L / fps;
+                if (offGrid) t100 = (clock.ElapsedTicks - start) * 10_000_000L / Stopwatch.Frequency;
+                if (encSlow) { statLate++; lateScore = Math.Min(20, lateScore + 1); }
+                else lateScore *= 0.9;
+                if (t100 <= lastTime100ns) t100 = lastTime100ns + 1000; // sempre crescente
                 Interlocked.Decrement(ref needInput);
-                if (!SubmitFrame(n * 10_000_000L / fps)) Interlocked.Increment(ref needInput); // devolve o crédito
+                long capturedNow = Interlocked.Read(ref capturedFrames);
+                if (SubmitFrame(t100))
+                {
+                    lastTime100ns = t100;
+                    lastSubmitCaptured = capturedNow;
+                    lastSubmitTicks = clock.ElapsedTicks;
+                }
+                else Interlocked.Increment(ref needInput); // devolve o crédito
             }
         }
         catch (Exception ex)
@@ -1155,6 +1345,9 @@ sealed unsafe class VideoStreamer : IDisposable
             SetRects();
             var stream = new VideoProcessorStream { Enable = true, InputSurface = vpIn };
             videoContext.VideoProcessorBlt(vp, vpOut[idx], 0, 1, new[] { stream }).CheckError();
+            // manda os comandos para a placa já (senão ficam na fila do D3D até alguém precisar deles
+            // e o encoder espera à toa: com a placa disputada cada milissegundo de fila conta)
+            context.Flush();
         }
 
         using var buffer = MediaFactory.MFCreateDXGISurfaceBuffer(typeof(ID3D11Texture2D).GUID, nv12[idx], 0, false);
@@ -1181,6 +1374,8 @@ sealed unsafe class VideoStreamer : IDisposable
         long captured = Interlocked.Exchange(ref statCaptured, 0);
         long keys = Interlocked.Exchange(ref statKeys, 0);
         long dropped = statDropped; statDropped = 0;
+        long late = statLate; statLate = 0;
+        long skipped = statSkipped; statSkipped = 0;
         double lat;
         lock (submitTicks) { lat = statLatency; statLatency = 0; if (submitTicks.Count > 100) submitTicks.Clear(); }
         Program.SendJson(new
@@ -1190,6 +1385,8 @@ sealed unsafe class VideoStreamer : IDisposable
             captureFps = Math.Round(captured / seconds, 1),
             kbps = (int)(bytes * 8 / 1000 / seconds),
             dropped,
+            late,      // quadros que esperaram o encoder liberar (saíram fora do ritmo, mas saíram)
+            skipped,   // imagens repetidas que não foram codificadas (encoder sem folga)
             keys,
             encodeMs = frames > 0 ? Math.Round(lat / frames, 2) : 0,
             width = Width,
@@ -1311,6 +1508,33 @@ sealed unsafe class VideoStreamer : IDisposable
             return item;
         }
         finally { Marshal.Release(interop); }
+    }
+
+    // GraphicsCaptureSession.MinUpdateInterval (Windows 11 24H2+). O projeto compila com a descrição
+    // do Windows 11 22H2, que ainda não tem essa propriedade: chama pela interface direto. Lê antes e
+    // confere depois: só vale se a propriedade guardou exatamente o intervalo pedido.
+    static readonly Guid IID_IGraphicsCaptureSession5 = new("67C0EA62-1F85-5061-925A-239BE0AC09CB");
+    static bool TrySetMinUpdateInterval(GraphicsCaptureSession s, long ticks100ns)
+    {
+        if (!ApiInformation.IsPropertyPresent("Windows.Graphics.Capture.GraphicsCaptureSession", "MinUpdateInterval")) return false;
+        IntPtr unk = MarshalInspectable<GraphicsCaptureSession>.FromManaged(s);
+        try
+        {
+            Guid iid = IID_IGraphicsCaptureSession5;
+            if (Marshal.QueryInterface(unk, ref iid, out IntPtr p5) != 0) return false;
+            try
+            {
+                var vtbl = *(IntPtr**)p5;
+                var get = (delegate* unmanaged[Stdcall]<IntPtr, long*, int>)vtbl[6];
+                var put = (delegate* unmanaged[Stdcall]<IntPtr, long, int>)vtbl[7];
+                long before = -1, after = -1;
+                if (get(p5, &before) < 0 || before < 0 || before > 10_000_000) return false;
+                if (put(p5, ticks100ns) < 0) return false;
+                return get(p5, &after) >= 0 && after == ticks100ns;
+            }
+            finally { Marshal.Release(p5); }
+        }
+        finally { Marshal.Release(unk); }
     }
 
     static IntPtr GetDxgiInterface(IntPtr surface, Guid iid)
