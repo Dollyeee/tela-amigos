@@ -2,7 +2,17 @@
 //  - Opus estéreo com bitrate de música (o padrão é mono ~32 kbps, feito para voz)
 //  - Bitrate inicial alto no vídeo (o WebRTC começa baixo e demora a subir)
 window.Sdp = (() => {
-  function munge(sdp, { videoKbps, native }) {
+  // Só no nativo:
+  //  minKbps = piso da estimativa de banda do WebRTC nesta conexão. Importa muito: o WebRTC só solta
+  //    os pacotes no ritmo da estimativa dele, então o bitrate da placa fica sempre abaixo dela
+  //    (netctl.js); o piso é o bitrate disponível na hora em que a tela volta a se mexer (ver
+  //    rateOpts no app.js).
+  //  maxKbps = teto combinado (fica acima de qualquer bitrate que a placa possa usar).
+  // O começo (x-google-start-bitrate) só é aplicado pelo WebRTC quando o número MUDA em relação à
+  // negociação anterior: aí ele reinicia a estimativa nesse valor e sonda a rede. Não dá para usar
+  // isso como "medir de novo" no meio da transmissão: medido, uma das sondagens seguintes costuma
+  // sair baixa e ele aceita (a estimativa cai para 85% do que está sendo enviado).
+  function munge(sdp, { videoKbps, native, maxKbps, minKbps }) {
     const lines = sdp.split('\r\n');
     const opus = new Set();
     const video = new Set();
@@ -14,14 +24,14 @@ window.Sdp = (() => {
     }
     const hasFmtp = new Set(lines.map((l) => (l.match(/^a=fmtp:(\d+) /) || [])[1]).filter(Boolean));
 
-    // Modo nativo: o nosso encoder SEGUE a estimativa de banda do WebRTC (ver adaptNativeBitrate);
-    // aqui só damos um começo razoável e o teto escolhido pelo usuário.
+    // Modo nativo: o encoder da placa fica abaixo da estimativa de banda do WebRTC (ver
+    // adaptNativeBitrate); aqui vão o começo, o piso e o teto dela.
     const cap = window.__testCapKbps; // teste: simula uma rede limitada
     const videoParams = native
       ? [
           `x-google-start-bitrate=${Math.round(videoKbps)}`,
-          `x-google-min-bitrate=${Math.round(Math.min(videoKbps * 0.3, 4000))}`,
-          `x-google-max-bitrate=${Math.round(cap || videoKbps * 1.3)}`,
+          `x-google-min-bitrate=${Math.round(minKbps || Math.min(videoKbps * 0.3, 4000))}`,
+          `x-google-max-bitrate=${Math.round(cap || Math.max(videoKbps * 1.3, maxKbps || 0))}`,
         ]
       : [
           // a estimativa de banda pelo Radmin é conservadora demais (caía para ~4 Mbps com

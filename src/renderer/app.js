@@ -97,8 +97,13 @@ async function buildRendererDiag() {
     `minhaTransmissão=${state.share && state.share.sfu ? 'pelo servidor' : '-'} conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
   try { for (const l of await window.Sfu.stats()) lines.push(`  ${l}`); } catch {}
   lines.push(`config=${safeJson(state.settings)}`);
-  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} modoLeve=${!!state.lightMode}` : ''}`);
+  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} pisoQP=${s.minQp || 'sem'} modoLeve=${!!state.lightMode}` : ''}`);
   if (state.nativeStats) lines.push(`helper=${safeJson(state.nativeStats)}`);
+  if (s && s.direct) {
+    lines.push(`bitrate da direta: alvo=${state.nativeKbps} kb/s rede=${state.netInfo.level}${state.netInfo.why ? ` (${state.netInfo.why})` : ''} ` +
+      `bandaEstimadaMín=${state.netInfo.avail ? Math.round(state.netInfo.avail) : '?'} kb/s`);
+    lines.push(`envio por amigo (último segundo)=${safeJson(window.NativeVideo.lastStats || {})}`);
+  }
   lines.push(`jogando=${!!state.gaming} (${state.gamingExe || ''})`);
   if (state.share2) lines.push(`segundaTela="${state.share2.sourceName}"`);
   for (const p of state.peers.values()) {
@@ -107,7 +112,9 @@ async function buildRendererDiag() {
       `compartilhando=${p.sharing} servidor=${p.sfuIn ? 'recebendo' : p.sfuPub ? 'disponível' : '-'}${p.sfuPulling ? ' (ele recebe minha tela pelo servidor)' : ''} rota=${p.route || '?'} caminho=${p.routePath || '?'} rotaUso=${p.routeUse || '-'} rotaPref=${p.routePref || '-'} qualidade=${p.quality ? p.quality.level + ' ' + p.quality.reason : '?'} ` +
       `saude=${safeJson(p.health || {})} quer=${p.theyWant} pedi=${p.iWant} uploadMedido=${p.upMbps || '?'}Mb/s ` +
       `teto=${state.share ? perPeerMbps(state.share.settings.bitrate, p) : '-'}Mb/s h265=${p.h265} av1=${p.av1} codecDireta=${state.share ? state.share.codec : '-'} ` +
-      `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'} resInteligente=${p.smartH || 'cheia'}`);
+      `resolucaoPedida=${wantedMaxH(p) || 'original'} eleQuer=${p.theyWantH || 'original'} tela2=${p.share2 ? p.share2Name : '-'} quer2=${p.theyWant2 || 'off'} resInteligente=${p.smartH || 'cheia'}` +
+      (p.net ? ` rede=${p.net.st.level}${p.net.st.why ? ` (${p.net.st.why})` : ''} pingNormal=${Math.round((p.net.st.base || 0) * 1000)}ms` +
+        ` eleRecebe=${p.rxRep && performance.now() - p.rxRep.at < 5000 ? `${p.rxRep.kb}kb/s` : '?'}` : ''));
     const h = state.hist.get(p.name);
     if (h && h.length) {
       lines.push(`  histórico (${h.length} pontos, 2 s cada; t fps Mb/s ping perda% travadas causa):`);
@@ -614,6 +621,19 @@ function onSignal(msg) {
       toast('Quem hospeda fechou a sala.');
       leaveRoom();
       break;
+    case 'sfu-limit': {
+      // o limite grátis do mês do servidor de vídeo acabou com transmissões em andamento: todo mundo
+      // sai dele e segue pela conexão direta (antes só as sessões NOVAS eram recusadas)
+      const first = !state.sfuLimitAt || Date.now() - state.sfuLimitAt > 3600000;
+      state.sfuLimitAt = Date.now();
+      state.sfuPauseUntil = Date.now() + 6 * 3600000;
+      window.Sfu.usage = { used: Number(msg.usedGb) || 0, limit: Number(msg.limitGb) || 0 };
+      showSfuUsage(window.Sfu.usage);
+      if (first) toast(`O limite do mês do servidor de vídeo acabou (${Math.round(msg.usedGb)} GB): as telas seguem pela conexão direta entre vocês.`, 'error');
+      window.Sfu.reset();
+      sfuRecover('limite do mês atingido', false);
+      break;
+    }
     case 'error':
       showLobbyError(msg.message || 'Erro na sala');
       break;
@@ -659,6 +679,7 @@ function onRelay(from, data) {
         const was = peer.sharing;
         peer.sharing = data.sharing;
         peer.canRebuild = !!data.rb;
+        peer.sfu2 = !!data.sfu2; // puxa H.265/AV1 pelo servidor de vídeo (conexão separada para receber)
         peer.hasAudio = data.audio;
         peer.audioWhy = String(data.audioWhy || '').slice(0, 200);
         peer.h265 = !!data.h265;
@@ -666,6 +687,8 @@ function onRelay(from, data) {
         // "Nativa direta" em AV1/H.265 e entrou alguém que não decodifica: troca de codec
         const dc = state.share && state.share.direct ? state.share.codec : null;
         if ((dc === 'hevc' && !peer.h265) || (dc === 'av1' && !peer.av1)) restartDirectCodec(peer.name, dc);
+        // pelo servidor de vídeo em H.265/AV1 e entrou alguém numa versão antiga (não puxa esses codecs de lá)
+        else if (dc && dc !== 'h264' && sfuWanted() && !peer.sfu2) restartDirectCodec(peer.name, 'hevc', 'sfu');
         // 2ª tela
         const had2 = peer.share2;
         peer.share2 = !!data.share2 && !!data.sharing;
@@ -728,7 +751,7 @@ function onRelay(from, data) {
       rebuildPeer(from, false);
       return;
     case 'sfu-rx': // quem recebe pelo servidor está perdendo pacotes/travando (a imagem é uma só para todos)
-      if (data.bad) peer.sfuRxBadAt = Date.now();
+      if (data.bad) peer.sfuRxBad = [...(peer.sfuRxBad || []).filter((t) => Date.now() - t < 10000), Date.now()];
       break;
     case 'want2':
       peer.theyWant2 = ['off', 'thumb', 'full'].includes(data.level) ? data.level : 'off';
@@ -911,6 +934,31 @@ function setCodec(peer, codec) {
   try { if (prefs) peer.vT.setCodecPreferences(prefs); } catch (e) { console.warn('codec', e); }
 }
 
+// Limites de banda combinados com cada amigo (linhas x-google-* do SDP). Início e piso seguem o que a
+// rede até ele aguenta; na "Nativa direta" o teto fica acima de qualquer bitrate que a placa possa
+// usar (1,5x a qualidade escolhida), senão a estimativa de banda do WebRTC ficava presa num teto baixo
+// e o controle de bitrate lia isso como rede apertada.
+function rateOpts(peer) {
+  const sh = state.share;
+  const native = !!(sh && sh.direct);
+  const videoKbps = perPeerMbps(state.settings.bitrate, peer) * 1000;
+  const setK = ((sh && sh.settings && Number(sh.settings.bitrate)) || Number(state.settings.bitrate) || 20) * 1000;
+  // Piso da estimativa de banda. O bitrate da placa fica sempre abaixo da estimativa (netctl.js), e
+  // ela tem um vício: com a tela parada (pouco tráfego) qualquer recuo a deixa lá embaixo, e ela só
+  // sobe ~8% por segundo quando o movimento volta (nos registros dos amigos ela vivia encostada no
+  // piso antigo, 4 Mb/s). O piso é, na prática, o bitrate disponível NA HORA em que a ação começa:
+  // 60% do nominal (até 8 Mb/s). Num caminho que não aguenta isso a estimativa deixa de avisar, mas
+  // o controle de bitrate tem as outras testemunhas (perda, atraso, o amigo avisando quanto recebe).
+  const minKbps = native ? Math.min(videoKbps * 0.6, 8000) : 0;
+  return { videoKbps, native, minKbps, maxKbps: native ? setK * 1.5 : 0 };
+}
+// o que ficou valendo para o MEU envio (os limites vêm da descrição remota)
+function noteRates(peer, ro) {
+  peer.sdpNative = ro.native;
+  peer.sdpFloor = ro.native ? ro.minKbps : Math.min(ro.videoKbps * 0.4, 4000);
+  peer.sdpMax = ro.native ? Math.max(ro.videoKbps * 1.3, ro.maxKbps) : ro.videoKbps * 1.25;
+}
+
 async function negotiate(peer) {
   const pc = peer.pc;
   if (pc.signalingState === 'closed') return;
@@ -922,7 +970,7 @@ async function negotiate(peer) {
     peer.makingOffer = true;
     const offer = await pc.createOffer();
     if (pc.signalingState !== 'stable') { peer.pendingNegotiation = true; return; }
-    offer.sdp = window.Sdp.munge(offer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000, native: !!(state.share && state.share.direct) });
+    offer.sdp = window.Sdp.munge(offer.sdp, rateOpts(peer));
     await pc.setLocalDescription(offer);
     sendRelay(peer.id, { kind: 'sdp', description: outDesc(peer, pc.localDescription) });
   } catch (e) {
@@ -950,14 +998,10 @@ async function handleDescription(peer, description) {
     if (peer.ignoreOffer) return;
     // os limites de bitrate/estéreo que EU uso para enviar vêm da descrição remota
     peer.settingAnswer = description.type === 'answer';
+    const ro = rateOpts(peer);
     try {
-      await pc.setRemoteDescription({
-        type: description.type,
-        sdp: window.Sdp.munge(routeIn(peer, description.sdp), {
-          videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000,
-          native: !!(state.share && state.share.direct),
-        }),
-      });
+      await pc.setRemoteDescription({ type: description.type, sdp: window.Sdp.munge(routeIn(peer, description.sdp), ro) });
+      noteRates(peer, ro);
     } finally {
       peer.settingAnswer = false;
     }
@@ -968,7 +1012,7 @@ async function handleDescription(peer, description) {
     }
     if (description.type === 'offer') {
       const answer = await pc.createAnswer();
-      answer.sdp = window.Sdp.munge(answer.sdp, { videoKbps: perPeerMbps(state.settings.bitrate, peer) * 1000, native: !!(state.share && state.share.direct) });
+      answer.sdp = window.Sdp.munge(answer.sdp, rateOpts(peer));
       await pc.setLocalDescription(answer);
       sendRelay(peer.id, { kind: 'sdp', description: outDesc(peer, pc.localDescription) });
     }
@@ -1154,6 +1198,12 @@ setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000)
 // (sfu.js) e cada amigo puxa de lá a qualidade que aguenta. Quem puxou avisa ("sfu-pull") e eu paro
 // de mandar direto para ele. Qualquer falha: volta para a conexão direta.
 function sfuWanted() { return isOnlineCode(state.hostIp) && !!state.sfuServer && localStorage.getItem('sfu') === '1'; }
+// uso do mês ao lado da opção (o limite grátis é por mês e vale para a sala toda)
+function showSfuUsage(u) {
+  const sp = $('#opt-sfu') && $('#opt-sfu').parentElement.querySelector('span');
+  if (sp) sp.textContent = 'Transmitir pelo servidor (beta)' + (u && u.limit ? ` · ${Math.round(u.used)} de ${u.limit} GB do mês` : u ? ` · ${Math.round(u.used)} GB no mês` : '');
+}
+window.Sfu.onUsage = showSfuUsage;
 function sfuPaused() { return Date.now() < (state.sfuPauseUntil || 0); }
 function sfuKbps(s) { return Math.min(Number(s.bitrate) || 8, Number(localStorage.getItem('sfuMaxMbps')) || 8) * 1000; } // limite: GB do mês
 
@@ -1168,10 +1218,12 @@ async function sfuSyncInner() {
   if (want) {
     try {
       const s = share.settings;
-      if (share.direct && share.codec && share.codec !== 'h264') {
-        // começou em H.265/AV1 antes do servidor entrar: passa para H.264 e publica depois
-        console.warn(`servidor de vídeo: transmissão em ${share.codec}; trocando para H.264`);
-        restartDirectCodec('O servidor de vídeo', 'hevc');
+      const old = [...state.peers.values()].find((p) => !p.sfu2);
+      if (share.direct && share.codec && share.codec !== 'h264' && old) {
+        // H.265/AV1 pelo servidor só quando todos na sala puxam esses codecs de lá (versão nova, com
+        // a conexão de receber separada); senão passa para H.264 e publica depois
+        console.warn(`servidor de vídeo: transmissão em ${share.codec} e ${old.name} está numa versão antiga; trocando para H.264`);
+        restartDirectCodec(old.name, 'hevc', 'sfu');
         return;
       }
       const native = share.direct ? { codec: share.codec || 'h264', attach: (sender) => window.NativeVideo.attach(sender, 'sfu') } : null;
@@ -1443,6 +1495,7 @@ function sendState(to) {
     s2Id: peer ? peer.s2MS.id : null,
     sfu: state.share && state.share.sfu ? state.share.sfu : null, // transmitindo pelo servidor de vídeo
     rb: 1, // sei refazer a conexão a pedido ("rebuild")
+    sfu2: 1, // puxo H.265/AV1 pelo servidor de vídeo (conexão de receber separada da de publicar)
   });
 }
 
@@ -1511,6 +1564,11 @@ async function doApplySendParams(peer) {
     // o 1º keyframe pode sair ainda no codec antigo (renegociação em andamento) e quem assiste
     // ficaria esperando outro: pede mais alguns logo depois da troca
     if (native) for (const ms of [800, 1800, 3500]) setTimeout(() => { if (state.share && state.share.direct) window.Helper.videoKey(); }, ms);
+  } else if (native && wantVideo && peer.pc.connectionState === 'connected' && performance.now() - (peer.rateNegAt || 0) > 8000) {
+    // os limites de banda combinados com este amigo são de antes desta transmissão (ou de uma
+    // qualidade menor): renegocia para o teto da estimativa de banda ficar acima do que a placa manda
+    const ro = rateOpts(peer);
+    if (!peer.sdpNative || (peer.sdpMax || 0) < ro.maxKbps * 0.95) { peer.rateNegAt = performance.now(); negotiate(peer); }
   }
   // antes de trocar a trilha: assim o primeiro quadro já é tratado no modo certo
   window.NativeVideo.setMode(peer.id, native, !!wantVideo && peer.pc.connectionState === 'connected');
@@ -1601,9 +1659,54 @@ function perPeerMbps(settingMbps, peer) {
   let v = Math.min(want, Math.floor(uploadBudgetMbps() / share));
   // a medição pelo canal de dados costuma sair ABAIXO do real (é um piso): só limita quando ela
   // mostra uma ligação claramente fraca com esse amigo
-  if (peer && peer.upMbps && peer.upMbps < 30) v = Math.min(v, Math.floor(peer.upMbps * 0.75));
+  if (peer && peer.upMbps && peer.upMbps < 30) v = Math.min(v, Math.floor(peer.upMbps * 0.75 * (peer.measBoost || 1)));
   return Math.max(3, v);
 }
+
+// A medição do upload até um amigo deu pouco e virou o teto dele, mas ela costuma sair ABAIXO do
+// real (nos registros: 3,2 Mb/s medidos num caminho que levava bem mais, e a tela ficava presa em
+// 3 Mb/s). Quando o envio está encostado nesse teto, sem perda, e o próprio WebRTC estima folga acima
+// dele por ~10 s, o teto sobe 30% (e renegocia os limites de banda). Se a rede reclamar, desce.
+// Só na captura adaptativa/Chromium: na "Nativa direta" a medição define só o começo.
+async function liftMeasuredCaps() {
+  const share = state.share;
+  if (!share || share.direct) return;
+  const cap = perPeerMbps(share.settings.bitrate); // sem a medição
+  for (const peer of state.peers.values()) {
+    if (!peer.upMbps || peer.upMbps >= 30 || !peer.vT.sender.track || peer.pc.connectionState !== 'connected' || peer.theyWant !== 'full' || peer.theyWantH) continue;
+    const limit = perPeerMbps(share.settings.bitrate, peer);
+    if (limit >= cap && (peer.measBoost || 1) === 1) continue;
+    let report;
+    try { report = await peer.pc.getStats(); } catch { continue; }
+    let avail = 0, out = null, loss = 0;
+    report.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) avail = r.availableOutgoingBitrate / 1000;
+      if (r.type === 'outbound-rtp' && r.kind === 'video' && String(r.mid) === String(peer.vT.mid)) out = r;
+    });
+    if (!out) continue;
+    report.forEach((r) => { if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && r.localId === out.id) loss = r.fractionLost || 0; });
+    const now = performance.now(), prev = peer.liftTx;
+    peer.liftTx = { t: now, b: out.bytesSent || 0 };
+    if (!prev || now - prev.t > 6000) continue;
+    const sent = ((peer.liftTx.b - prev.b) * 8) / (now - prev.t); // kb/s
+    const full = limit < cap && sent >= limit * 800 && avail >= limit * 1150 && loss < 0.02 && out.qualityLimitationReason !== 'bandwidth';
+    peer.liftOk = full ? (peer.liftOk || 0) + 1 : 0;
+    peer.liftBad = loss > 0.05 ? (peer.liftBad || 0) + 1 : 0;
+    if (peer.liftOk >= 5) {
+      peer.liftOk = 0;
+      peer.measBoost = (peer.measBoost || 1) * 1.3;
+      console.log(`teto de ${peer.name}: ${limit} -> ${perPeerMbps(share.settings.bitrate, peer)} Mb/s (a rede até ele aguenta mais do que a medição de ${peer.upMbps} Mb/s indicou)`);
+      applySendParams(peer);
+      negotiate(peer); // o teto da estimativa de banda (x-google-max-bitrate) acompanha
+      renderBudgetInfo();
+    } else if (peer.liftBad >= 2 && (peer.measBoost || 1) > 1) {
+      peer.liftBad = 0;
+      peer.measBoost = Math.max(1, peer.measBoost / 1.3);
+      applySendParams(peer);
+    }
+  }
+}
+setInterval(() => { liftMeasuredCaps().catch(() => {}); }, 2000);
 // resolução menor pedida por quem assiste: não precisa de tantos bits (sobra upload para os outros)
 function capBitrateForHeight(mbps, h) {
   if (!h) return mbps;
@@ -1936,14 +2039,16 @@ async function startShareInner(overrides) {
       if (direct && sfuWanted()) state.nativeKbps = sfuKbps(settings); // pelo servidor: uma cópia só, teto do mês
       // troca de resolução pela rede: continua de onde estava (começar no máximo entupiria de novo)
       if (settings.startKbps) state.nativeKbps = Math.min(state.nativeKbps, settings.startKbps);
-      baseRtt = Infinity;
-      lastCut = 0;
+      // transmissão nova: o controle de bitrate começa do zero; reinício da mesma (troca de resolução
+      // ou de codec): mantém o que já aprendeu de cada caminho, só não sobe nos primeiros segundos
+      if (!old || !old.direct) netReset(); else netCtl.lastCut = performance.now();
       // direta: AV1 se eu e TODOS os amigos temos placa que decodifica AV1 (e a minha codifica);
       // senão H.265 se todos decodificam; senão H.264
       const peersNow = [...state.peers.values()];
-      // pelo servidor de vídeo só H.264: quem puxa de lá não recebe H.265/AV1 ("subscriber's SDP is
-      // missing the published track's codec") e a imagem da placa é a mesma para o servidor e para os amigos
-      const viaSfu = direct && sfuWanted() && !sfuPaused();
+      // pelo servidor de vídeo a imagem da placa é a mesma para o servidor e para os amigos: H.265/AV1
+      // só quando todos na sala puxam esses codecs de lá (versão com a conexão de receber separada;
+      // as antigas davam "subscriber's SDP is missing the published track's codec")
+      const viaSfu = direct && sfuWanted() && !sfuPaused() && !peersNow.every((p) => p.sfu2);
       const wantAv1 = direct && !viaSfu && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 && !window.Sdp.sendBad('AV1') &&
         !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && window.Sdp.hasAV1Hw() && peersNow.every((p) => p.av1);
       const wantHevc = direct && !viaSfu && settings.codec !== 'H264' && !settings.forceH264 && !window.Sdp.sendBad('H265') && window.Sdp.hasH265() &&
@@ -2026,6 +2131,7 @@ async function startShareInner(overrides) {
     width: nativeInfo ? nativeInfo.width : 0,
     height: nativeInfo ? nativeInfo.height : 0,
     encoder: nativeInfo ? nativeInfo.encoder : '',
+    minQp: nativeInfo ? nativeInfo.minQp || 0 : 0, // piso de qualidade aceito pelo encoder (0 = sem)
     codec: nativeInfo && direct ? nativeInfo.codec : null, // 'hevc' / 'h264' na "Nativa direta"
     autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
     smartH: settings.smartH || 0,        // resolução reduzida pela rede (0 = cheia)
@@ -2130,6 +2236,9 @@ function onDataMessage(peer, data) {
     }
     case 'st-res': dcResolve(peer, 'st-res', m.ms ? (m.bytes * 8) / (m.ms / 1000) : 0); break;
     case 'st-rev': stBlast(peer).catch(() => {}); break; // ele pediu para medir o sentido contrário
+    // quanto o amigo recebeu da minha tela nos últimos 2 s (o controle de bitrate da "Nativa direta"
+    // compara com o que mandei: recebendo bem menos = a ida até ele está cheia)
+    case 'rx': if (Number.isFinite(m.kb)) peer.rxRep = { kb: Math.max(0, m.kb), at: performance.now() }; break;
     case 'diag-req': sendMyDiag(peer).catch((e) => console.warn('enviar diagnóstico', e)); break;
     case 'diag-part': onDiagPart(peer, m).catch((e) => console.warn('receber diagnóstico', e)); break;
     default: break;
@@ -2244,94 +2353,189 @@ async function runNetTest() {
 }
 
 // ------------------------------------------------------------------ bitrate adaptativo (modo nativo)
-// O encoder nativo é um só para todos os amigos: segue o pior caminho.
-// Começa no máximo escolhido; só reduz quando a rede reclama:
-//  - perda de pacotes > 2% ou atraso (RTT) 80 ms acima do normal: corta 25% (no máx. a cada 2 s)
-//  - rede limpa: volta a subir ~6% por segundo até o máximo
-// (A estimativa de banda do WebRTC é conservadora demais pelo Radmin: só serve de informação.)
-state.netInfo = { avail: null, loss: 0, rtt: null, nack: 0, pli: 0 };
-let lastCut = 0, baseRtt = Infinity, netCeiling = 0, netCeilingAt = 0;
+// O encoder nativo é um só para todos os amigos. Quem decide o bitrate é o NetCtl (netctl.js):
+// cada caminho (cada amigo que recebe direto, e o servidor de vídeo) é avaliado sozinho, com o ping
+// normal DELE, e só corta com evidência de que a IDA daquele caminho está cheia. Antes era um número
+// só para a sala (maior ping, maior perda): um pico de ping de um amigo derrubava a transmissão de
+// todos para 500 kb/s.
+state.netInfo = { avail: null, loss: 0, rtt: null, nack: 0, pli: 0, level: 'ok', why: '' };
+const newNet = () => ({ st: window.NetCtl.newPath(), tx: [], rrTs: 0, rrAt: 0, route: 0 });
+let netCtl = window.NetCtl.newCtl();
+let sfuNet = newNet(); // caminho até o servidor de vídeo
+function netReset() {
+  netCtl = window.NetCtl.newCtl();
+  sfuNet = newNet();
+  for (const p of state.peers.values()) p.net = null;
+}
+
+// kb/s enviados entre dois instantes (pelos totais guardados a cada segundo)
+function txKbps(n, t1, t2) {
+  const h = n.tx;
+  if (h.length < 2 || t2 <= t1) return 0;
+  const at = (t) => {
+    if (t <= h[0].t) return h[0].b;
+    for (let i = 1; i < h.length; i++) {
+      if (t <= h[i].t) { const a = h[i - 1], b = h[i]; return a.b + ((b.b - a.b) * (t - a.t)) / Math.max(1, b.t - a.t); }
+    }
+    return h[h.length - 1].b;
+  };
+  const a = Math.max(t1, h[0].t), b = Math.min(t2, h[h.length - 1].t);
+  return b - a < 500 ? 0 : ((at(b) - at(a)) * 8) / (b - a); // bytes*8/ms = kb/s
+}
+
+// Como vai o envio da tela principal por uma conexão, segundo o WebRTC.
+//   n = estado do caminho (newNet); out = a estatística "outbound-rtp" da tela principal
+function netSample(n, report, out, now) {
+  let loss = 0, rtt = 0, bwe = 0, rrTs = 0, pairRtt = 0, oth = 0;
+  report.forEach((r) => {
+    if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') {
+      if (r.availableOutgoingBitrate) bwe = r.availableOutgoingBitrate / 1000;
+      pairRtt = r.currentRoundTripTime || 0;
+    } else if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && (!out || r.localId === out.id)) {
+      loss = Math.max(loss, r.fractionLost || 0);
+      rtt = Math.max(rtt, r.roundTripTime || 0);
+      rrTs = Math.max(rrTs, r.timestamp || 0);
+    } else if (r.type === 'outbound-rtp' && out && r.id !== out.id) oth += r.bytesSent || 0; // câmera, 2ª tela, som
+  });
+  if (out) { n.tx.push({ t: now, b: out.bytesSent || 0 }); if (n.tx.length > 8) n.tx.shift(); }
+  // o que mais sai por esta conexão (kb/s): divide com a tela o que o WebRTC solta nela
+  if (n.oth && now - n.oth.t > 400) n.othKbps = Math.max(0, ((oth - n.oth.b) * 8) / (now - n.oth.t));
+  if (!n.oth || now - n.oth.t > 400) n.oth = { t: now, b: oth };
+  // o relatório de quem recebe chega ~1 vez por segundo: o mesmo relatório não conta duas vezes
+  const fresh = rrTs !== n.rrTs || now - n.rrAt > 2500;
+  if (fresh) { n.rrTs = rrTs; n.rrAt = now; }
+  return { loss, rtt: rtt || pairRtt, bwe, fresh, pace: window.NetCtl.paceOf(bwe, n.othKbps || 0) };
+}
+
 async function adaptNativeBitrate() {
   const share = state.share;
   if (!share || !share.direct || !state.nativeKbps) return;
-  const viaSfu = !!share.sfu && [...state.peers.values()].some((p) => p.sfuPulling);
-  const anyDirect = [...state.peers.values()].some((p) => p.vT.sender.track);
+  const peers = [...state.peers.values()];
+  const viaSfu = !!share.sfu && peers.some((p) => p.sfuPulling);
+  const direct = peers.filter((p) => p.vT.sender.track && p.pc.connectionState === 'connected');
+  // teto: a qualidade escolhida dentro do orçamento de upload (a medição do upload até cada amigo só
+  // define o COMEÇO; daqui para cima quem manda é a rede de verdade)
+  const capK = perPeerMbps(share.settings.bitrate) * 1000;
   // pelo servidor sai uma cópia só (teto do mês); quem ainda recebe direto divide o upload
-  const max = viaSfu ? Math.min(sfuKbps(share.settings), anyDirect ? directMbps(share.settings.bitrate) * 1000 : Infinity)
-    : directMbps(share.settings.bitrate) * 1000;
-  let avail = Infinity, loss = 0, rtt = 0, nack = 0, pli = 0, any = false;
+  const max = viaSfu ? Math.min(sfuKbps(share.settings), direct.length ? capK : Infinity) : capK;
+  const now = performance.now();
+  const R = state.nativeKbps;
+  const ns = window.NativeVideo.lastStats || {};
+  const paths = [];
+  let nack = 0, pli = 0;
   if (viaSfu && window.Sfu.pc() && window.Sfu.pubSender()) {
     try {
       const report = await window.Sfu.pc().getStats();
-      let mainOut = null;
-      (await window.Sfu.pubSender().getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') mainOut = r; });
-      report.forEach((r) => {
-        if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) avail = Math.min(avail, r.availableOutgoingBitrate / 1000);
-        if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && (!mainOut || r.localId === mainOut.id)) {
-          loss = Math.max(loss, r.fractionLost || 0);
-          rtt = Math.max(rtt, r.roundTripTime || 0);
-        }
-      });
-      if (mainOut) { nack += mainOut.nackCount || 0; pli += mainOut.pliCount || 0; any = true; }
+      let out = null;
+      report.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') out = r; });
+      if (out) {
+        const m = netSample(sfuNet, report, out, now);
+        nack += out.nackCount || 0; pli += out.pliCount || 0;
+        const w = ns.sfu;
+        paths.push({ name: 'servidor de vídeo', n: sfuNet, stale: !m.fresh,
+          s: { loss: m.loss, rtt: m.rtt, bwe: m.bwe, pace: m.pace, bweFloor: Math.min(sfuKbps(share.settings) * 0.6, 8000), flush: (w && w.active && w.flush) || 0, vpn: false, rx: null } });
+      }
     } catch {}
   }
-  for (const peer of state.peers.values()) {
-    if (!peer.vT.sender.track || peer.pc.connectionState !== 'connected') continue;
+  for (const peer of direct) {
     let report;
     try { report = await peer.pc.getStats(); } catch { continue; }
-    any = true;
     // só a trilha da tela principal (câmera/2ª tela têm pouco tráfego e distorciam perda/ping)
-    let mainOut = null;
-    report.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video' && (peer.vT.mid == null || String(r.mid) === String(peer.vT.mid))) mainOut = r; });
-    report.forEach((r) => {
-      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) {
-        avail = Math.min(avail, r.availableOutgoingBitrate / 1000);
-      }
-      if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && (!mainOut || r.localId === mainOut.id)) {
-        loss = Math.max(loss, r.fractionLost || 0);
-        rtt = Math.max(rtt, r.roundTripTime || 0);
-      }
-    });
-    if (mainOut) { nack += mainOut.nackCount || 0; pli += mainOut.pliCount || 0; }
-  }
-  if (!any) return;
-  state.netInfo = { avail: isFinite(avail) ? avail : null, loss, rtt, nack, pli };
-
-  if (rtt > 0) baseRtt = Math.min(baseRtt, rtt);
-  const extra = rtt > 0 && isFinite(baseRtt) ? rtt - baseRtt : 0; // fila se formando no caminho
-  // amigo cujo envio ficou para trás (quadros descartados à espera de keyframe)
-  const ns = window.NativeVideo.lastStats || {};
-  const flushes = Object.values(ns).reduce((a, p) => a + (p && p.active ? p.flush || 0 : 0), 0);
-  const severe = loss > 0.08 || extra > 0.3;
-  // alguém recebendo pelo servidor reclamou (a imagem é uma só: segue o mais fraco, como o Discord),
-  // mas sem afundar todo mundo por causa de um só: no máx. até 40% do teto
-  const rxBad = viaSfu && state.nativeKbps > max * 0.4 && [...state.peers.values()].some((p) => p.sfuPulling && Date.now() - (p.sfuRxBadAt || 0) < 2500);
-  const congested = severe || loss > 0.02 || extra > 0.08 || flushes > 0 || rxBad;
-  let target = state.nativeKbps;
-  const now = performance.now();
-  // depois de um corte o ping demora a baixar (a fila precisa esvaziar): espera antes de cortar de novo
-  const gap = Math.min(3000, Math.max(severe ? 1000 : 2000, rtt * 1000));
-  if (congested) {
-    if (now - lastCut > gap) {
-      target = state.nativeKbps * (severe ? 0.5 : 0.75);
-      lastCut = now;
-      netCeiling = state.nativeKbps; netCeilingAt = now;
-      if (severe) console.log(`bitrate da direta: freio forte (ping +${Math.round(extra * 1000)} ms, perda ${Math.round(loss * 100)}%) -> ${Math.round(target)} kb/s`);
+    let out = null;
+    report.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video' && (peer.vT.mid == null || String(r.mid) === String(peer.vT.mid))) out = r; });
+    const n = peer.net || (peer.net = newNet());
+    // a rota mudou (Radmin <-> internet): o ping normal desse caminho é outro
+    if (n.route !== peer.routeSince) { n.route = peer.routeSince; window.NetCtl.resetPath(n.st); n.tx.length = 0; }
+    const m = netSample(n, report, out, now);
+    if (out) { nack += out.nackCount || 0; pli += out.pliCount || 0; }
+    // o amigo avisa quanto recebeu nos últimos 2 s: comparo com o que mandei nesse mesmo trecho
+    const rep = peer.rxRep;
+    let rx = null;
+    if (rep && now - rep.at < 5000) {
+      const sent = txKbps(n, rep.at - 2100, rep.at);
+      if (sent > 400) rx = Math.min(2, rep.kb / sent);
     }
-  } else if (extra > 0.04) {
-    // ping subindo um pouco: segura onde está
-  } else if (loss < 0.005 && now - lastCut > 6000) {
-    // sobe devagar; perto de onde a rede reclamou há pouco, mais devagar ainda
-    const near = netCeiling && state.nativeKbps > netCeiling * 0.85 && now - netCeilingAt < 120000;
-    target = state.nativeKbps * (near ? 1.01 : 1.04) + 100;
+    const w = ns[peer.id]; // amigo cujo envio ficou para trás (quadros descartados à espera de keyframe)
+    paths.push({ name: peer.name, n, stale: !m.fresh,
+      s: { loss: m.loss, rtt: m.rtt, bwe: m.bwe, pace: m.pace, bweFloor: peer.sdpFloor || 0, flush: (w && w.active && w.flush) || 0, vpn: peer.routePath === 'vpn', rx } });
   }
-  target = Math.round(Math.max(1000, Math.min(max, target)));
-  if (target !== state.nativeKbps && (Math.abs(target - state.nativeKbps) / state.nativeKbps > 0.05 || target === max)) {
+  if (!paths.length) return;
+  if (state.share !== share || state.nativeKbps !== R) return; // mudou no meio (o teto de envio agiu): decide no próximo segundo
+  let lossMax = 0, rttMax = 0, bweMin = Infinity;
+  for (const p of paths) {
+    const t = window.__testNet && window.__testNet(p.name); // teste automático: rede simulada por caminho
+    if (t) { Object.assign(p.s, t); if (t.bwe != null && t.pace == null) p.s.pace = window.NetCtl.paceOf(t.bwe, 0); p.stale = false; }
+    p.st = p.n.st;
+    if (!p.stale) window.NetCtl.classify(p.st, p.s, R, now);
+    else p.st.pace = p.s.pace > 0 ? p.s.pace : Infinity; // o teto de envio vale mesmo sem relatório novo
+    lossMax = Math.max(lossMax, p.s.loss || 0);
+    rttMax = Math.max(rttMax, p.s.rtt || 0);
+    if (p.s.bwe > 0) bweMin = Math.min(bweMin, p.s.bwe);
+  }
+  const d = window.NetCtl.decide(netCtl, paths, R, max, 1000, now);
+  let target = d.target, did = d.did, why = d.why;
+  for (const note of d.notes) console.log(`bitrate da direta: ${note}`);
+  // Alguém recebendo pelo servidor reclamou (a imagem é uma só: segue o mais fraco, como o Discord),
+  // mas sem afundar todo mundo por causa de um só: no máx. até 40% do teto. Uma reclamação isolada
+  // só segura a subida; duas seguidas do mesmo amigo cortam.
+  if (viaSfu && !did) {
+    const t = Date.now();
+    const bad = peers.filter((p) => p.sfuPulling && (p.sfuRxBad || []).some((x) => t - x < 2600));
+    const twice = bad.find((p) => p.sfuRxBad.filter((x) => t - x < 6600).length >= 2);
+    if (twice && R > max * 0.4 && now - netCtl.lastCut >= 2000) {
+      target = Math.round(Math.max(max * 0.4, window.NetCtl.externalCut(netCtl, R, 0.8, now)));
+      did = 'cong'; why = `${twice.name}: recebendo mal pelo servidor`;
+    } else if (bad.length) target = Math.min(target, R);
+  }
+  state.netInfo = { avail: isFinite(bweMin) ? bweMin : null, loss: lossMax, rtt: rttMax, nack, pli, level: d.level, why: d.level === 'ok' ? (did === 'pace' ? why : '') : d.why, pace: isFinite(d.pace) ? d.pace : null };
+  if (did) logCut(did, why, target);
+  // (antes só aplicava mudanças acima de 5%: os passos de subida perto do teto, e qualquer subida
+  //  acima de ~10 Mb/s, eram menores que isso e nunca eram aplicados: o bitrate ficava parado)
+  if (target !== R && (Math.abs(target - R) / R >= 0.01 || target === max || target === 1000)) {
     state.nativeKbps = target;
     window.Helper.videoBitrate(target);
   }
 }
-setInterval(adaptNativeBitrate, 1000);
+setInterval(() => { adaptNativeBitrate().catch((e) => console.warn('bitrate da direta', e)); }, 1000);
+
+// registro dos cortes (o do teto de envio no máximo a cada 5 s: ele acompanha a estimativa o tempo todo)
+let paceLogAt = 0;
+function logCut(did, why, target) {
+  if (did === 'pace') { if (performance.now() - paceLogAt < 5000) return; paceLogAt = performance.now(); }
+  const what = { severe: 'freio forte', soft: 'corte de teste', pace: 'teto de envio' }[did] || 'freio';
+  console.log(`bitrate da direta: ${what} (${why}) -> ${target} kb/s`);
+}
+
+// O TETO DE ENVIO, conferido 2x por segundo. O WebRTC só solta os pacotes de cada conexão no ritmo da
+// estimativa de banda dele; o que a placa manda a mais fica numa fila no envio e a tela daquele amigo
+// atrasa (medido: até ~1,3 s). Ela pode cair bastante em um segundo, então não espera a avaliação
+// completa.
+async function paceGuard() {
+  const share = state.share;
+  if (!share || !share.direct || !state.nativeKbps) return;
+  const peers = [...state.peers.values()];
+  const jobs = peers.filter((p) => p.vT.sender.track && p.pc.connectionState === 'connected').map((p) => [p.pc, p.net, p.name]);
+  if (share.sfu && peers.some((p) => p.sfuPulling) && window.Sfu.pc() && window.Sfu.pubSender()) jobs.push([window.Sfu.pc(), sfuNet, 'servidor de vídeo']);
+  let pace = Infinity, who = '';
+  await Promise.all(jobs.map(async ([pc, n, name]) => {
+    let bwe = 0;
+    try { (await pc.getStats()).forEach((r) => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.availableOutgoingBitrate) bwe = r.availableOutgoingBitrate / 1000; }); } catch { return; }
+    const t = window.__testNet && window.__testNet(name);
+    if (t && t.bwe != null) bwe = t.bwe;
+    const p = t && t.pace != null ? t.pace : window.NetCtl.paceOf(bwe, (n && n.othKbps) || 0);
+    if (p < pace) { pace = p; who = name; }
+  }));
+  if (state.share !== share || !isFinite(pace)) return;
+  const R = state.nativeKbps, target = Math.max(1000, Math.round(pace));
+  if (R <= pace * 1.03 || target >= R) return;
+  // desce junto com a estimativa (e o controle volta rápido quando ela subir)
+  netCtl.recoverTo = Math.max(netCtl.recoverTo || 0, R * 0.85); netCtl.recoverAt = performance.now();
+  netCtl.paceFrom = Math.max(netCtl.paceFrom || 0, R); netCtl.paceAt = performance.now();
+  logCut('pace', `${who}: o WebRTC só solta ${target} kb/s nessa conexão`, target);
+  state.nativeKbps = target;
+  window.Helper.videoBitrate(target);
+}
+setInterval(() => { paceGuard().catch(() => {}); }, 500);
 
 // ------------------------------------------------------------------ resolução inteligente
 // Pouca banda + resolução alta = imagem toda quadriculada (ex.: 1080p60 de jogo em 5 Mb/s pelo
@@ -3180,7 +3384,10 @@ async function healthLoop() {
     }
     if (sendMime) markSendingCodec(sendMime);
     const ns = state.nativeStats;
-    if (ns && state.share.native && ns.dropped > 6) cpu = true; // encoder do helper não dá conta
+    // encoder do helper não dá conta: quadros descartados, ou boa parte deles saindo atrasada (o
+    // helper agora espera o encoder liberar em vez de descartar)
+    const nsFps = (state.share.settings && Number(state.share.settings.fps)) || 60;
+    if (ns && state.share.native && (ns.dropped > 6 || (ns.late || 0) > nsFps * 0.4)) cpu = true;
     const now = Date.now();
     if (cpu) { cpuStrikes++; cpuSeenAt = now; } else cpuStrikes = 0;
     const sh = state.share;
@@ -3192,11 +3399,14 @@ async function healthLoop() {
       switchToDirect();
     } else if (!state.lightMode && cpuStrikes >= 2) {
       state.lightMode = true;
-      toast('Seu PC está no limite: modo leve ligado (30 fps, até 720p) para não travar.');
+      // (na "Nativa direta" não há o que reduzir por amigo: a placa manda os quadros que consegue)
+      toast(sh.direct
+        ? 'Seu PC está no limite (jogo pesado): a transmissão sai com os quadros que a placa consegue. Limitar o FPS do jogo um pouco abaixo da taxa do monitor costuma resolver.'
+        : 'Seu PC está no limite: modo leve ligado (30 fps, até 720p) para não travar.');
       for (const peer of state.peers.values()) applySendParams(peer);
     } else if (state.lightMode && now - cpuSeenAt > 20000) {
       state.lightMode = false;
-      toast('Modo leve desligado: qualidade normal de volta.');
+      toast(sh.direct ? 'Seu PC voltou a dar conta da transmissão.' : 'Modo leve desligado: qualidade normal de volta.');
       for (const peer of state.peers.values()) applySendParams(peer);
     }
     // a causa certa para o indicador dos amigos: PC no limite, captura abaixo do alvo, jogando
@@ -3248,6 +3458,10 @@ async function healthLoop() {
     const senderSlow = h.cpu || (h.cap != null && h.target && h.cap < h.target * 0.75);
     const netBad = loss > 0.01 || (rtt && rtt > 0.12) || (freezes >= 1 && lostD > 0);
     const kbpsIn = ((q.bytes - prev.bytes) * 8) / dt / 1000;
+    // "Nativa direta" dele vindo direto para mim: aviso quanto recebi nestes 2 s. O app dele compara
+    // com o que mandou e sabe se a ida até mim está cheia (em vez de adivinhar pelo ping, que também
+    // sobe quando o problema é na volta ou no meu próprio upload)
+    if (h.direct && !peer.sfuIn && dt > 1 && dt < 4) { try { dcSend(peer, { t: 'rx', kb: Math.round(kbpsIn) }); } catch {} }
     // dados chegando e nada aparecendo: quadros sem o quadro-chave de antes (não é o seu PC)
     const noPicture = fps < badFps && kbpsIn > 300 && renderDrop <= 0.1 && decMs <= 25;
     const mineBad = !noPicture && (renderDrop > 0.1 || decMs > 25 || (recvFps > fps + 10));
@@ -3379,13 +3593,15 @@ function cycleLatency(id) {
 // Entrou alguém sem H.265 durante a "Nativa direta" em H.265: reinicia em H.264 (o vídeo direto
 // é o mesmo para todos, então precisa ser um codec que todos decodificam)
 let restartingCodec = false;
-async function restartDirectCodec(who, from = 'hevc') {
+async function restartDirectCodec(who, from = 'hevc', why = '') {
   if (restartingCodec || !state.share) return;
   restartingCodec = true;
   try {
-    toast(from === 'av1'
-      ? `${who} não tem placa que decodifica AV1: a sua transmissão trocou de codec.`
-      : `${who} não decodifica H.265: a sua transmissão passou para H.264.`);
+    toast(why === 'sfu'
+      ? `${who} está numa versão antiga do app: pelo servidor de vídeo a sua transmissão passou para H.264 (com todos atualizados, a próxima já sai em H.265).`
+      : from === 'av1'
+        ? `${who} não tem placa que decodifica AV1: a sua transmissão trocou de codec.`
+        : `${who} não decodifica H.265: a sua transmissão passou para H.264.`);
     selectedSource = state.share.source;
     await startShare({ engine: 'native-direct', noAv1: true, forceH264: from === 'hevc', autoDirect: state.share.autoDirect });
   } finally { restartingCodec = false; }
@@ -4837,11 +5053,13 @@ async function collectStats() {
     const n = state.nativeStats;
     meTile.stats.textContent = n
       ? `Nativo · ${n.width}x${n.height} · captura ${n.captureFps}fps · enviado ${n.fps}fps · ${fmtMbps(n.kbps * 1000)} ` +
-        `· encode ${n.encodeMs}ms · descartados ${n.dropped} · ${state.share.encoder} · ` +
+        `· encode ${n.encodeMs}ms · descartados ${n.dropped}${n.late ? ` · atrasados ${n.late}` : ''} · ${state.share.encoder} · ` +
         `p/ ${out.count} amigo(s), total ${fmtMbps(out.bytes)}\n` +
-        `alvo ${fmtMbps((state.nativeKbps || 0) * 1000)} · banda estimada ${state.netInfo.avail ? fmtMbps(state.netInfo.avail * 1000) : '?'} · ` +
+        `alvo ${fmtMbps((state.nativeKbps || 0) * 1000)} · banda estimada ${state.netInfo.avail ? fmtMbps(state.netInfo.avail * 1000) : '?'}` +
+        `${state.netInfo.pace ? ` (teto de envio ${fmtMbps(state.netInfo.pace * 1000)})` : ''} · ` +
         `perda ${(state.netInfo.loss * 100).toFixed(1)}% · rtt ${state.netInfo.rtt ? Math.round(state.netInfo.rtt * 1000) : '?'}ms · ` +
-        `NACK ${state.netInfo.nack} · PLI ${state.netInfo.pli} · keyframes ${n.keys}` + routes
+        `NACK ${state.netInfo.nack} · PLI ${state.netInfo.pli} · keyframes ${n.keys}` +
+        (state.netInfo.why ? `\nrede: ${state.netInfo.why}` : '') + routes
       : 'Iniciando captura nativa...';
   } else if (meTile && state.share) {
     const LIMIT = { bandwidth: 'internet', cpu: 'processador', other: 'outro' };

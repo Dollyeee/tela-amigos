@@ -13,7 +13,8 @@ const out = (cmd) => execSync(cmd, { cwd: root, encoding: 'utf8' }).trim();
 // transmitindo). Se falhar, nada é publicado. "--skip-test" pula (só em emergência).
 run('npm run build:helper');
 if (!process.argv.includes('--skip-test')) {
-  try { run('node scripts/smoke-test.js'); } catch {
+  // (primeiro o controle de bitrate numa rede simulada: é rápido e não abre o app)
+  try { run('node scripts/netctl-test.js'); run('node scripts/smoke-test.js'); } catch {
     console.error('\nO teste automático falhou: versão NÃO publicada.');
     process.exit(1);
   }
