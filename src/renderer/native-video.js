@@ -18,6 +18,34 @@ window.NativeVideo = (() => {
   // encoder reinicia = keyframe). Sem quadro nosso, também devolve dados vazios.
   let av1 = false;
   let slotAsk = 0;
+  // QUADRO-CHAVE DA TRILHA VAZIA (H.264/H.265): nunca leva um quadro nosso. Quando um quadro-chave
+  // entra na fila de envio, o Chromium joga fora os pacotes do mesmo vídeo que ainda esperavam para
+  // sair (para o quadro-chave chegar logo). Só que esse quadro-chave é o da trilha vazia, não o
+  // nosso: o quadro nosso que estava saindo sumia pela metade, sem deixar buraco na numeração dos
+  // pacotes (nada para reenviar), e quem assistia ficava até ~3 s com a imagem parada, até pedir
+  // um keyframe. Esse lugar fica vazio e o app manda um quadro vazio extra logo em seguida para o
+  // quadro nosso não ficar esperando (ver askExtra).
+  // (No AV1 o nosso keyframe precisa do lugar de keyframe; lá o corte só pega quadros anteriores ao
+  //  nosso keyframe, que não fazem falta.)
+  let lagMs = 12.5;   // um quadro nosso que esperou mais que isso na fila perdeu a "carona" dele
+  let lastExtra = 0;
+  // Pede ao app um quadro vazio a mais: tem quadro nosso na fila sem quadro vazio para levá-lo (lugar
+  // de quadro-chave pulado, ou um quadro vazio descartado pelo Chromium). Sem isso o atraso de um
+  // quadro ficava para sempre, a fila ia enchendo e acabava num keyframe forçado.
+  function askExtra(p) {
+    const now = performance.now();
+    if (now - lastExtra < 5) return;
+    lastExtra = now;
+    p.ex = (p.ex || 0) + 1;
+    postMessage({ type: 'extra' });
+  }
+  let trace = null; // diagnóstico (testes): registro de cada quadro que passou pelo transform
+  function note(frame, size, key) {
+    if (!trace) return;
+    let ts = null; try { ts = frame.getMetadata().rtpTimestamp; } catch (e) {}
+    trace.push([Date.now() % 1000000, frame.type, ts, size, key ? 1 : 0]);
+    if (trace.length > 8000) trace.shift();
+  }
   function skip(frame, ctl) { if (hevc || av1) { frame.data = new ArrayBuffer(0); ctl.enqueue(frame); } }
   // no máximo 1 pedido a cada 500 ms; pedidos dentro da janela são adiados (não perdidos)
   function reqKey() {
@@ -43,7 +71,7 @@ window.NativeVideo = (() => {
     for (const p of peers.values()) if (p.active && p.waitingKey && Date.now() >= (p.keyAt || 0)) { reqKey(); break; }
     // diagnóstico: quantos quadros foram enviados/pulados/descartados por amigo
     const s = {};
-    for (const [id, p] of peers) { s[id] = { all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey, backoff: p.backoff || 0 }; p.all = p.sent = p.empty = p.flush = 0; }
+    for (const [id, p] of peers) { s[id] = { all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, kd: p.kd || 0, ex: p.ex || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey, backoff: p.backoff || 0 }; p.all = p.sent = p.empty = p.flush = p.kd = p.ex = 0; }
     postMessage({ type: 'stats', peers: s });
   }, 1000);
 
@@ -58,7 +86,7 @@ window.NativeVideo = (() => {
       const list = [...peers.values()].filter((p) => p.active);
       list.forEach((p, i) => {
         if (p.waitingKey) { if (!m.key) return; p.waitingKey = false; }
-        p.q.push({ key: m.key, data: i === list.length - 1 ? m.data : m.data.slice(0) });
+        p.q.push({ key: m.key, at: performance.now(), data: i === list.length - 1 ? m.data : m.data.slice(0) });
         // o encoder do Chromium ficou para trás: descarta e recomeça num keyframe
         if (p.q.length > (av1 ? 12 : 4)) flushPeer(p);
       });
@@ -71,10 +99,13 @@ window.NativeVideo = (() => {
     } else if (m.type === 'codec') {
       hevc = m.codec === 'hevc';
       av1 = m.codec === 'av1';
+      lagMs = 750 / (m.fps > 0 ? m.fps : 60);
     } else if (m.type === 'reset') {
       for (const p of peers.values()) { p.q.length = 0; p.waitingKey = true; }
     } else if (m.type === 'remove') {
       peers.delete(m.id);
+    } else if (m.type === 'trace') {
+      if (m.dump) postMessage({ type: 'trace', ring: trace || [] }); else trace = m.on ? [] : null;
     }
   };
   function av1Slot(p, frame, ctl) {
@@ -97,6 +128,7 @@ window.NativeVideo = (() => {
     if (item && p.q.length > 12 && !item.key) { flushPeer(p, true); item = null; }
     if (!item) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; }
     p.q.shift();
+    if (p.q.length && !p.q[0].key && performance.now() - item.at > lagMs) askExtra(p);
     frame.data = item.data;
     p.sentAny = true;
     p.sent = (p.sent || 0) + 1;
@@ -112,9 +144,15 @@ window.NativeVideo = (() => {
         if (!p.native) { ctl.enqueue(frame); return; } // modo Chromium: não mexe
         // (keyframes da trilha vazia NÃO são usados como pedido: o Chromium gera vários quando a
         //  estimativa de banda muda. Os pedidos reais (PLI/FIR) são lidos das estatísticas no app.)
+        if (frame.type === 'key') p.kd = (p.kd || 0) + 1;
         if (av1) { av1Slot(p, frame, ctl); return; }
+        // quadro-chave da trilha vazia: não leva nada (explicação lá em cima)
+        if (frame.type === 'key') { note(frame, -2, 0); skip(frame, ctl); if (p.q.length) askExtra(p); return; }
         const item = p.q.shift();
-        if (!item) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; } // ainda sem quadro nosso: não envia nada
+        if (!item) { p.empty = (p.empty || 0) + 1; note(frame, -1, 0); skip(frame, ctl); return; } // ainda sem quadro nosso: não envia nada
+        // este quadro esperou demais e ainda tem outro atrás dele: faltou um quadro vazio
+        if (p.q.length && performance.now() - item.at > lagMs) askExtra(p);
+        note(frame, item.data.byteLength, item.key);
         frame.data = item.data;
         p.sentAny = true;
         p.sent = (p.sent || 0) + 1;
@@ -134,6 +172,9 @@ window.NativeVideo = (() => {
   let codec = 'h264'; // 'h264', 'hevc' ou 'av1' (o que o helper está gerando)
   let altSize = false;  // AV1: alterna o tamanho da trilha vazia para o Chromium gerar um keyframe
   let pushKey = null;   // teste sintético: pedido de keyframe vai para o gerador do teste
+  let traceCb = null;
+  let lastDummyAt = 0, extraTimer = null, period = 1000 / 60;
+  let dummyW = 0, dummyH = 0;
   // quadro "vazio" que o Chromium codifica e nós trocamos pelo nosso. No H.265 precisa ser maior:
   // os encoders HEVC de hardware recusam 64x64 (e o Chromium não tem HEVC por software)
   let DW = 64, DH = 64;
@@ -152,6 +193,8 @@ window.NativeVideo = (() => {
       if (e.data.type === 'key') { if (pushKey) pushKey(); else window.Helper.videoKey(); }
       else if (e.data.type === 'keyslot') altSize = !altSize; // AV1: próximo quadro vazio muda de tamanho
       else if (e.data.type === 'stats') window.NativeVideo.lastStats = e.data.peers;
+      else if (e.data.type === 'extra') extraDummy();
+      else if (e.data.type === 'trace' && traceCb) { const cb = traceCb; traceCb = null; cb(e.data.ring); }
     };
     return worker;
   }
@@ -219,14 +262,36 @@ window.NativeVideo = (() => {
 
     // quadro vazio no mesmo ritmo: cada um "carrega" um quadro nosso
     if (ts <= lastTs) return;
+    writeDummy(ts);
+  }
+
+  // Quadro vazio: cinza parado, só um cantinho de 8x8 muda a cada quadro. Antes a imagem inteira
+  // mudava a cada quadro e o encoder de software do Chromium via "troca de cena" o tempo todo:
+  // gerava um quadro-chave a cada 17 quadros (~3,5 por segundo) e cada um deles podia cortar o
+  // quadro nosso que estava saindo (ver o comentário no worker).
+  function writeDummy(ts) {
     lastTs = ts;
+    lastDummyAt = performance.now();
     frameNo++;
     const w = altSize ? DW + 16 : DW, h = altSize ? DH + 16 : DH;
-    for (let i = 0; i < w * h; i++) dummy[i] = (i + frameNo * 7) & 255;
-    dummy.fill(128, w * h, (w * h * 3) / 2);
+    if (w !== dummyW || h !== dummyH) { dummy.fill(128, 0, (w * h * 3) / 2); dummyW = w; dummyH = h; }
+    const v = (frameNo * 37) & 255;
+    for (let y = 0; y < 8; y++) dummy.fill(v, y * w, y * w + 8);
     const vf = new VideoFrame(dummy.subarray(0, (w * h * 3) / 2), { format: 'I420', codedWidth: w, codedHeight: h, timestamp: ts });
     dbg.dummy++;
     writer.write(vf).catch((e) => { dbg.writeErr = String(e && e.message || e); vf.close(); });
+  }
+
+  // O worker ficou com um quadro nosso sem quadro vazio para levá-lo: manda um a mais, no meio do
+  // intervalo (o Chromium descarta quadros colados um no outro; e se o próximo quadro normal já
+  // está para chegar, ele mesmo leva e o worker pede de novo se ainda sobrar).
+  function extraDummy() {
+    if (!running || !inject || !writer || lastTs < 0) return;
+    const since = performance.now() - lastDummyAt;
+    if (since < 3) { if (!extraTimer) extraTimer = setTimeout(() => { extraTimer = null; extraDummy(); }, 3 - since); return; }
+    if (since > period - 3) return;
+    dbg.extra = (dbg.extra || 0) + 1;
+    writeDummy(lastTs + Math.round(since * 1000));
   }
 
   // opts.inject = true: envio direto do H.264 nativo (só rede perfeita)
@@ -239,7 +304,8 @@ window.NativeVideo = (() => {
     worker.postMessage({ type: 'reset' });
     inject = !!opts.inject;
     codec = opts.codec === 'hevc' || opts.codec === 'av1' ? opts.codec : 'h264';
-    worker.postMessage({ type: 'codec', codec });
+    period = 1000 / (Number(opts.fps) > 0 ? Number(opts.fps) : 60);
+    worker.postMessage({ type: 'codec', codec, fps: 1000 / period });
     altSize = false;
     pushKey = opts.synthetic && opts.onKey ? opts.onKey : null;
     makeDummy();
@@ -254,6 +320,7 @@ window.NativeVideo = (() => {
     previewWriter = previewGen.writable.getWriter();
     makePreviewDecoder();
     lastTs = -1;
+    dummyW = dummyH = 0;
     running = true;
     if (opts.synthetic) {
       return { track: inject ? generator : previewGen, preview: new MediaStream([previewGen]), width: opts.width, height: opts.height,
@@ -270,13 +337,14 @@ window.NativeVideo = (() => {
     return {
       track: inject ? generator : previewGen,
       preview: new MediaStream([previewGen]),
-      width: res.width, height: res.height, encoder: res.encoder, codec: res.codec || 'h264',
+      width: res.width, height: res.height, encoder: res.encoder, codec: res.codec || 'h264', minQp: res.minQp || 0,
     };
   }
 
   async function stop() {
     const was = running;
     running = false;
+    clearTimeout(extraTimer); extraTimer = null;
     if (was) { try { await window.Helper.videoStop(); } catch {} }
     try { writer && writer.close(); } catch {}
     try { previewWriter && previewWriter.close(); } catch {}
@@ -306,5 +374,8 @@ window.NativeVideo = (() => {
 
   // pedido de keyframe (no teste automático vai para o gerador do teste)
   function key() { if (pushKey) pushKey(); else window.Helper.videoKey(); }
-  return { start, stop, attach, setMode, remove, setPreview, key, isRunning: () => running, dbg };
+  // diagnóstico (testes): liga o registro quadro a quadro do transform e devolve o que foi registrado
+  function trace(on) { ensureWorker().postMessage({ type: 'trace', on }); }
+  function traceDump() { return new Promise((r) => { traceCb = r; ensureWorker().postMessage({ type: 'trace', dump: true }); }); }
+  return { start, stop, attach, setMode, remove, setPreview, key, isRunning: () => running, dbg, trace, traceDump };
 })();
