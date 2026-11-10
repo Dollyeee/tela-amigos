@@ -115,7 +115,7 @@ export class Room {
           if (used >= this.monthlyLimitGb()) throw new Error(`limite do mês do servidor de vídeo atingido (${Math.round(used)} GB)`);
           const d = await this.sfuCall('/sessions/new', 'POST');
           m.sfu.add(String(d.sessionId));
-          return reply(true, { sessionId: d.sessionId, usedGb: Math.round(used) });
+          return reply(true, { sessionId: d.sessionId, usedGb: Math.round(used), limitGb: this.monthlyLimitGb() });
         }
         case 'tracks': {
           const tracks = Array.isArray(body.tracks) ? body.tracks : [];
@@ -173,7 +173,18 @@ export class Room {
       if (msg.type === 'sfu' && id) { this.onSfu(ws, id, msg); return; }
       if (msg.type === 'sfu-usage' && id) { // GB recebidos do servidor de vídeo (conta o limite do mês)
         const bytes = Number(msg.bytes) || 0;
-        if (bytes > 0) this.usageStub().fetch('https://usage/add', { method: 'POST', body: JSON.stringify({ bytes }) }).catch(() => {});
+        if (bytes > 0) {
+          this.usageStub().fetch('https://usage/add', { method: 'POST', body: JSON.stringify({ bytes }) })
+            .then((r) => r.json())
+            .then((d) => {
+              // O limite do mês só era conferido ao abrir uma sessão nova: uma transmissão longa já em
+              // andamento passava dele (e do grátis) sem ninguém perceber. Agora, ao atingir o limite,
+              // avisa a sala inteira: os apps saem do servidor de vídeo e seguem pela conexão direta.
+              const limit = this.monthlyLimitGb();
+              if (d && d.gb >= limit) for (const [, m] of this.members) this.send(m.ws, { type: 'sfu-limit', usedGb: Math.round(d.gb), limitGb: limit });
+            })
+            .catch(() => {});
+        }
         return;
       }
       if (msg.type === 'leave') { ws.leaving = true; try { ws.close(1000, 'saiu'); } catch {} this.onClose(ws, id); return; }
