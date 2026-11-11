@@ -317,6 +317,22 @@ async function initLobby() {
     await window.native.hostStop();
     refreshMyRoom();
   };
+  // (ligados aqui, uma vez só: antes ficavam dentro de refreshMyRoom, depois de uma espera, e o
+  // "entrar sozinho" clicava no botão antes de ele ter o que fazer)
+  $('#btn-join').onclick = () => {
+    if (!checkName()) return;
+    let ip = $('#host-ip').value.trim();
+    if (isOnlineCode(ip)) {
+      ip = ip.toUpperCase();
+      if (!onlineServer()) return showLobbyError('Sala online ainda não está disponível nesta versão.');
+    }
+    if (!/^[\w.-]+$/.test(ip)) return showLobbyError('Digite o IP do Radmin de quem hospeda ou o código da sala online.');
+    localStorage.setItem('hostIp', ip);
+    localStorage.setItem('lastRole', 'guest');
+    state.hostIp = ip;
+    connect(ip, false);
+  };
+  $('#host-ip').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btn-join').click(); });
   refreshMyRoom();
   renderRooms();
   discoverLoop();
@@ -333,7 +349,11 @@ async function autoJoinOnStart() {
   const ip = localStorage.getItem('hostIp');
   const deadline = Date.now() + 30 * 60 * 1000;
   for (;;) {
-    if (!$('#lobby').classList.contains('hidden') || Date.now() > deadline || localStorage.getItem('autoJoin') !== '1') return;
+    // para quando já entrou numa sala (o lobby some). A condição estava invertida desde a v1.0.30:
+    // como o lobby começa visível, saía na primeira volta e a opção nunca fazia nada.
+    if ($('#lobby').classList.contains('hidden') || Date.now() > deadline || localStorage.getItem('autoJoin') !== '1') return;
+    // a pessoa começou a digitar outra sala: não fica voltando para a de antes
+    if (role !== 'host' && ip && $('#host-ip').value.trim() && $('#host-ip').value.trim() !== ip) return;
     if (!$('#btn-join').disabled) {
       $('#name').value = name;
       if (role === 'host') { $('#btn-host').click(); }
@@ -436,21 +456,6 @@ async function refreshMyRoom() {
       ? `Sua sala está aberta: ${st.names.join(', ')}`
       : 'Sua sala está aberta (vazia)';
   }
-
-  $('#btn-join').onclick = () => {
-    if (!checkName()) return;
-    let ip = $('#host-ip').value.trim();
-    if (isOnlineCode(ip)) {
-      ip = ip.toUpperCase();
-      if (!onlineServer()) return showLobbyError('Sala online ainda não está disponível nesta versão.');
-    }
-    if (!/^[\w.-]+$/.test(ip)) return showLobbyError('Digite o IP do Radmin de quem hospeda ou o código da sala online.');
-    localStorage.setItem('hostIp', ip);
-    localStorage.setItem('lastRole', 'guest');
-    state.hostIp = ip;
-    connect(ip, false);
-  };
-  $('#host-ip').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btn-join').click(); });
 }
 
 function checkName() {
@@ -585,7 +590,13 @@ function onSignal(msg) {
           // o que eles mandaram enquanto eu estava fora se perdeu: pede o estado de novo
           sendRelay(peer.id, { kind: 'state-req' });
           unstickNegotiation(peer);
+          // e o que EU mandei enquanto a sala estava fora também se perdeu (trocar o foco ou esconder
+          // uma tela nesse meio tempo: o amigo seguia mandando a qualidade de antes): manda de novo
+          peer.iWant = null;
+          peer.iWant2 = null;
+          if (peer.sfuPub) sendRelay(peer.id, { kind: 'sfu-pull', on: !!peer.sfuIn });
         }
+        render(); // refaz os pedidos de qualidade ("want") de cada tela
         toast('Reconectado à sala.');
         break;
       }
@@ -670,6 +681,10 @@ function onRelay(from, data) {
     case 'state-req': // o amigo reconectou à sala: reenvia meu estado e destrava a negociação
       sendState(from);
       unstickNegotiation(peer);
+      // os meus pedidos que chegaram enquanto ele estava fora também se perderam
+      if (peer.iWant) sendRelay(from, { kind: 'want', level: peer.iWant, maxH: peer.iWantH });
+      if (peer.iWant2) sendRelay(from, { kind: 'want2', level: peer.iWant2 });
+      if (peer.sfuPub) sendRelay(from, { kind: 'sfu-pull', on: !!peer.sfuIn });
       break;
     // em fila por amigo: uma descrição/candidato nunca é processado no meio de outro
     case 'sdp': peer.sigChain = peer.sigChain.then(() => handleDescription(peer, data.description)); break;
@@ -774,7 +789,7 @@ function onRelay(from, data) {
     case 'ready': onReady(from, String(data.id)); break;
     case 'ink':
       if (Array.isArray(data.segs)) {
-        const segs = data.segs.slice(0, 200).filter((sg) => Array.isArray(sg) && sg.length === 4 && sg.every((v) => Number.isFinite(v) && v >= 0 && v <= 1));
+        const segs = data.segs.slice(0, drawBudget(peer, 'ink', 200, 600)).filter((sg) => Array.isArray(sg) && sg.length === 4 && sg.every((v) => Number.isFinite(v) && v >= 0 && v <= 1));
         if (segs.length) showInk(data.target, from, peer.name, segs);
       }
       break;
@@ -797,10 +812,10 @@ function onRelay(from, data) {
       }
       break;
     case 'point':
-      if (Number.isFinite(data.x) && Number.isFinite(data.y)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y, !!data.draw);
+      if (Number.isFinite(data.x) && Number.isFinite(data.y) && drawBudget(peer, 'point', 1, 400)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y, !!data.draw);
       break;
     case 'press':
-      if (Number.isFinite(data.x) && Number.isFinite(data.y)) showPress(String(data.target), peer.id, peer.name, data.x, data.y);
+      if (Number.isFinite(data.x) && Number.isFinite(data.y) && drawBudget(peer, 'point', 1, 400)) showPress(String(data.target), peer.id, peer.name, data.x, data.y);
       break;
     case 'point-end':
       hideLaser(String(data.target), peer.id);
@@ -893,7 +908,9 @@ function createPeer(id, name) {
       // vídeo: tela ou câmera? decide em resolveTracks (o amigo informa os ids no "state")
       const sid = (e.streams && e.streams[0] && e.streams[0].id) || `sem-id-${peer.videoTracks.size}`;
       peer.videoTracks.set(sid, e.track);
-      if (state.gaming) applyPlayoutBuffer();
+      // (sempre: o atraso escolhido para este amigo, "Imagem lisa"/"Atraso mínimo", vale por conexão
+      // e antes só era reaplicado numa conexão nova se houvesse um jogo aberto)
+      applyPlayoutBuffer();
     }
     resolveTracks(peer);
   };
@@ -1218,7 +1235,9 @@ async function sfuSyncInner() {
   if (want) {
     try {
       const s = share.settings;
-      const old = [...state.peers.values()].find((p) => !p.sfu2);
+      // (só conta quem já mandou o estado dele: um amigo que acabou de entrar ainda não disse nada, e
+      // tratá-lo como "versão antiga" rebaixava a transmissão para H.264 à toa, com um aviso falso)
+      const old = [...state.peers.values()].find((p) => p.h265 !== undefined && !p.sfu2);
       if (share.direct && share.codec && share.codec !== 'h264' && old) {
         // H.265/AV1 pelo servidor só quando todos na sala puxam esses codecs de lá (versão nova, com
         // a conexão de receber separada); senão passa para H.264 e publica depois
@@ -1260,7 +1279,9 @@ function sfuPullSync(peer) {
   peer.sfuChain = (peer.sfuChain || Promise.resolve()).then(() => sfuPullInner(peer)).catch((e) => console.warn('servidor de vídeo (receber)', e));
 }
 async function sfuPullInner(peer) {
-  if (!state.peers.has(peer.id)) return;
+  // (o objeto, não só o número: depois de refazer a conexão com um amigo o número é o mesmo, e uma
+  // tentativa agendada para a conexão antiga puxava a mesma transmissão de novo, em dobro, até o fim)
+  if (state.peers.get(peer.id) !== peer) return;
   const pub = peer.sharing ? peer.sfuPub : null;
   const level = peer.iWant || 'full';
   const key = pub ? `${pub.s}/${pub.v}` : null;
@@ -1276,14 +1297,16 @@ async function sfuPullInner(peer) {
     peer.sfuIn = null;
     resolveTracks(peer);
     sendRelay(peer.id, { kind: 'sfu-pull', on: false });
-    await window.Sfu.unpull(old.key);
+    await window.Sfu.unpull(old.key, old.pull);
   }
   if (!want) return;
   if (peer.sfuIn) { await window.Sfu.setRid(key, rid).catch((e) => console.warn('servidor de vídeo: qualidade', e.message)); return; }
   try {
     const res = await window.Sfu.pull(key, pub, rid);
-    if (!state.peers.has(peer.id) || !peer.sfuPub || `${peer.sfuPub.s}/${peer.sfuPub.v}` !== key) { await window.Sfu.unpull(key); return; }
-    peer.sfuIn = { key, video: res.video, audio: res.audio, videoRecv: res.videoRecv, audioRecv: res.audioRecv, one: pub.n === 1 };
+    // a conexão com o amigo foi refeita (ou ele trocou de transmissão) enquanto puxava: fecha
+    // exatamente o que ESTA tentativa abriu (a conexão nova pode já ter puxado a mesma de novo)
+    if (state.peers.get(peer.id) !== peer || !peer.sfuPub || `${peer.sfuPub.s}/${peer.sfuPub.v}` !== key) { await window.Sfu.unpull(key, res); return; }
+    peer.sfuIn = { key, pull: res, video: res.video, audio: res.audio, videoRecv: res.videoRecv, audioRecv: res.audioRecv, one: pub.n === 1 };
     resolveTracks(peer);
     applyPlayoutBuffer();
     sendRelay(peer.id, { kind: 'sfu-pull', on: true });
@@ -1383,7 +1406,7 @@ function sfuFallback(peer) {
   peer.sfuIn = null;
   resolveTracks(peer);
   sendRelay(peer.id, { kind: 'sfu-pull', on: false });
-  window.Sfu.unpull(sin.key).catch(() => {});
+  window.Sfu.unpull(sin.key, sin.pull).catch(() => {});
   if (prevN + 1 < 3) setTimeout(() => sfuPullSync(peer), 10000 * (prevN + 1) + 500);
 }
 
@@ -1455,7 +1478,7 @@ setInterval(() => { sfuStallWatch().catch(() => {}); }, 2000);
 function removePeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
-  if (peer.sfuIn) { window.Sfu.unpull(peer.sfuIn.key).catch(() => {}); peer.sfuIn = null; }
+  if (peer.sfuIn) { window.Sfu.unpull(peer.sfuIn.key, peer.sfuIn.pull).catch(() => {}); peer.sfuIn = null; }
   if (histOpen === id) closeHistory();
   closeMenus();
   peer.pc.close();
@@ -1992,9 +2015,16 @@ function startFromModal() {
 }
 
 // overrides: ex. { engine: 'chromium' } quando a captura nativa caiu várias vezes
+// overrides.keep: reinício automático da transmissão que está no ar (parte das configurações dela)
 let shareBusy = false;
+// Muda a cada "Parar"/"Sair". Um início que ainda estava abrindo a captura confere e desiste: antes
+// ele terminava depois e a transmissão voltava sozinha (ou ficava ligada, escondida, fora da sala, e
+// ia ao ar na próxima sala em que a pessoa entrasse).
+let shareGen = 0;
 async function startShare(overrides) {
   if (shareBusy || !selectedSource) return; // evita dois inícios ao mesmo tempo (duplo clique)
+  // fora de uma sala não há para quem transmitir (o modal de escolher a tela pode ter ficado aberto)
+  if ($('#room').classList.contains('hidden')) return;
 
   shareBusy = true;
   try {
@@ -2004,8 +2034,35 @@ async function startShare(overrides) {
   }
 }
 
+// O início foi cancelado no meio ("Parar"/"Sair"): fecha o que já tinha sido aberto. Para o helper o
+// pedido de parar vai direto, de novo: se o "Parar" chegou entre o pedido e o começo de fato da
+// captura, o parar foi na frente e a captura ficaria ligada sem ninguém para receber.
+async function cancelStart(tried, stream) {
+  if (tried.native) {
+    try { await window.NativeVideo.stop(); } catch {}
+    try { await window.Helper.videoStop(); } catch {}
+  }
+  try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch {}
+  if (tried.audio) {
+    try { await window.HelperAudio.stop(); } catch {}
+    try { await window.Helper.audioStop(); } catch {}
+  }
+  $('#btn-start-share').disabled = false;
+}
+
 async function startShareInner(overrides) {
-  const settings = { ...readSettings(), ...(overrides || {}) };
+  const gen = shareGen;
+  // Reinício automático (troca de codec, resolução pela rede, captura que caiu...): parte do que
+  // está no ar. Antes relia os campos do modal de compartilhar, e o que a pessoa tivesse deixado
+  // marcado lá sem confirmar passava a valer (até o som: "só o jogo" virava "todo o som do PC" se
+  // o programa não estivesse mais na lista).
+  let base;
+  if (overrides && overrides.keep && state.share) {
+    base = { ...state.share.settings };
+    delete base.startKbps; // só vale para o reinício que o pediu
+  } else base = readSettings();
+  const settings = { ...base, ...(overrides || {}) };
+  delete settings.keep;
   const src = selectedSource;
   $('#btn-start-share').disabled = true;
   // área da tela só existe na captura nativa
@@ -2029,10 +2086,12 @@ async function startShareInner(overrides) {
   // Discord); a adaptativa manda 3 qualidades feitas pelo Chromium
   const direct = settings.engine === 'native-direct';
   let stream, video, preview, nativeInfo = null;
+  const tried = { native: false, audio: false }; // o que este início chegou a pedir ao helper
   if (settings.engine.startsWith('native') && state.nativeStuck) {
     toast(`A placa de vídeo travou na captura nativa (${state.nativeStuck}). Usando a captura do Chromium até reiniciar o app.`, 'error');
   } else if (settings.engine.startsWith('native') && (await window.native.audioAvailable())) {
     try {
+      tried.native = true;
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
       state.nativeKbps = directMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
@@ -2058,24 +2117,36 @@ async function startShareInner(overrides) {
         sourceId: src.id, displayId: src.displayId, inject: direct, crop: src.crop || null,
         fps: settings.fps, kbps: direct ? state.nativeKbps : 50000, maxWidth: maxW, maxHeight: maxH,
       };
-      for (let i = 0; i < codecs.length && !nativeInfo; i++) {
+      for (let i = 0; i < codecs.length && !nativeInfo && gen === shareGen; i++) {
         try {
           const o = { ...opts, codec: codecs[i] };
           nativeInfo = window.__testNative ? await window.__testNative(o) : await window.NativeVideo.start(o);
         } catch (e) {
+          if (gen !== shareGen) break; // pararam no meio: não tenta o codec seguinte
           if (i === codecs.length - 1) throw e;
           if (codecs[i] === 'av1') state.noAv1Encoder = /Nenhum encoder/.test(e.message); // placa sem AV1: não tenta de novo
           console.warn(`${codecs[i]} nativo falhou, tentando ${codecs[i + 1]}:`, e.message);
         }
       }
-      video = nativeInfo.track;
-      if (!direct) video.contentHint = settings.mode; // "Prioridade" vale também no modo adaptativo
-      preview = nativeInfo.preview;
-      stream = new MediaStream([video]);
+      if (gen === shareGen) {
+        video = nativeInfo.track;
+        if (!direct) video.contentHint = settings.mode; // "Prioridade" vale também no modo adaptativo
+        preview = nativeInfo.preview;
+        stream = new MediaStream([video]);
+      }
     } catch (e) {
       if (/placa de vídeo travou/.test(e.message)) state.nativeStuck = e.message.slice(0, 160);
-      toast(`Captura nativa falhou (${e.message}). Usando a captura do Chromium.`, 'error');
+      if (gen === shareGen) toast(`Captura nativa falhou (${e.message})${src.crop ? '' : '. Usando a captura do Chromium'}.`, 'error');
     }
+  }
+  if (gen !== shareGen) { await cancelStart(tried, stream); return; }
+  // Só uma ÁREA da tela foi escolhida e a captura nativa não está funcionando: a do Chromium só sabe
+  // capturar a tela INTEIRA, e era isso que ia para os amigos (ainda com o nome "(área)").
+  if (!video && src.crop) {
+    toast('Não deu para transmitir só a área escolhida (a captura nativa não está funcionando agora). Nada foi transmitido: tente de novo ou escolha a tela inteira.', 'error');
+    $('#btn-start-share').disabled = false;
+    if (state.share) await stopShare(); // a captura anterior já foi parada
+    return;
   }
   if (!video) {
     try {
@@ -2102,10 +2173,12 @@ async function startShareInner(overrides) {
     video.contentHint = settings.mode;
     preview = stream;
   }
+  if (gen !== shareGen) { await cancelStart(tried, stream); return; }
 
   let audio = null, audioErr = '';
   if (settings.audio !== 'none') {
     try {
+      tried.audio = true;
       if (state.share && state.share.audio) await window.HelperAudio.stop();
       const [mode, pid, device] = settings.audio.startsWith('app:')
         ? ['app', Number(settings.audio.slice(4)), undefined]
@@ -2121,6 +2194,8 @@ async function startShareInner(overrides) {
   } else if (state.share && state.share.audio) {
     await window.HelperAudio.stop();
   }
+  // "Parar"/"Sair" enquanto a captura abria: desfaz em vez de entrar no ar
+  if (gen !== shareGen) { await cancelStart(tried, stream); return; }
 
   state.share = {
     stream, video, audio, settings, preview,
@@ -2166,6 +2241,11 @@ async function startShareInner(overrides) {
   }
   render();
   sfuSync();
+  // alguém que não decodifica este codec disse isso enquanto a captura abria (aí ainda não havia
+  // transmissão para trocar, e ele ficava sem imagem): confere agora
+  if (state.share.direct && state.share.codec !== 'h264') {
+    setTimeout(() => { const p = directCodecProblem(); if (p) restartDirectCodec(p.who, p.from, p.why); }, 0);
+  }
 }
 
 // ------------------------------------------------------------------ teste de conexão
@@ -2621,7 +2701,7 @@ async function smartResDirect() {
   try {
     selectedSource = share.source;
     const s = share.settings;
-    await startShare({ engine: 'native-direct', autoDirect: share.autoDirect, noAv1: s.noAv1, forceH264: s.forceH264,
+    await startShare({ keep: true, engine: 'native-direct', autoDirect: share.autoDirect, noAv1: s.noAv1, forceH264: s.forceH264,
       smartH: next >= top - 8 ? 0 : next, fullW: share.fullW, fullH: share.fullH, startKbps: state.nativeKbps });
   } finally { smartRestarting = false; }
 }
@@ -2737,16 +2817,27 @@ function applyLiveBitrate(mbps) {
 
 // Resolução/FPS/prioridade/captura: reinicia só a captura da mesma tela
 async function applyAdjust() {
-  if (!state.share) return;
-  $('#opt-res').value = $('#adj-res').value;
-  $('#opt-fps').value = $('#adj-fps').value;
-  $('#opt-mode').value = $('#adj-mode').value;
-  $('#opt-engine').value = $('#adj-engine').value;
-  $('#opt-bitrate').value = $('#adj-bitrate').value;
-  if (state.share.audio) $('#opt-audio').value = state.settings.audio; // mantém o áudio como estava
+  const sh = state.share;
+  if (!sh) return;
+  const adj = {
+    res: $('#adj-res').value, fps: Number($('#adj-fps').value), mode: $('#adj-mode').value,
+    engine: $('#adj-engine').value, bitrate: Number($('#adj-bitrate').value),
+  };
+  // ficam valendo também para a próxima transmissão (e aparecem assim no modal de compartilhar)
+  Object.assign(state.settings, adj);
+  saveSettings();
+  $('#opt-res').value = adj.res;
+  $('#opt-fps').value = String(adj.fps);
+  $('#opt-mode').value = adj.mode;
+  $('#opt-engine').value = adj.engine;
+  $('#opt-bitrate').value = adj.bitrate;
   $('#adjust-panel').classList.add('hidden');
-  selectedSource = state.share.source;
-  await startShare();
+  selectedSource = sh.source;
+  // O resto (som, codec) continua como está no ar. Antes o som era relido do campo do modal de
+  // compartilhar, e se o programa escolhido não estivesse mais naquela lista o campo ficava vazio:
+  // "só o jogo" virava "todo o som do PC" sem aviso. O que foi decidido sozinho durante a transmissão
+  // (codec rebaixado, resolução reduzida pela rede, troca para a direta) é reavaliado do zero.
+  await startShare({ keep: true, ...adj, smartH: 0, autoDirect: false, noAv1: false, forceH264: false });
 }
 
 // ------------------------------------------------------------------ chat, reações e laser
@@ -2819,7 +2910,9 @@ function trailLayer(tile) {
   tile.trail = c;
   tile.trailLines = [];
   const draw = () => {
-    if (!c.isConnected) return;
+    // a tela saiu da página com um traço ainda vivo (o amigo parou de transmitir, tela oculta...):
+    // sem liberar a marca aqui, quando ela voltava a caneta e o rastro nunca mais desenhavam nela
+    if (!c.isConnected) { tile.trailAnimating = false; return; }
     const r = tile.el.getBoundingClientRect();
     if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) { c.width = Math.round(r.width); c.height = Math.round(r.height); }
     const g = c.getContext('2d');
@@ -2841,8 +2934,25 @@ function trailLayer(tile) {
     }
     if (tile.trailLines.length) requestAnimationFrame(draw); else tile.trailAnimating = false;
   };
-  tile.trailDraw = () => { if (!tile.trailAnimating) { tile.trailAnimating = true; requestAnimationFrame(draw); } };
+  tile.trailDraw = () => {
+    // (teto: um amigo com defeito ou mal-intencionado mandando traços sem parar travaria o desenho)
+    if (tile.trailLines.length > TRAIL_MAX) tile.trailLines.splice(0, tile.trailLines.length - TRAIL_MAX);
+    if (!tile.trailAnimating) { tile.trailAnimating = true; requestAnimationFrame(draw); }
+  };
   return c;
+}
+const TRAIL_MAX = 2500; // traços vivos por tela (desenhando sem parar, uma pessoa fica em ~1000)
+// Ritmo do que um amigo manda para desenhar na tela (traços, mãozinha): desenhando rápido, uma pessoa
+// fica bem abaixo disto. Um app com defeito (ou alguém de má-fé) mandando sem parar enchia o desenho
+// de todos e a janela por cima do monitor de quem transmite, a ponto de atrasar a placa de vídeo.
+function drawBudget(peer, kind, n, perSec) {
+  const now = performance.now();
+  const all = peer.drawB || (peer.drawB = {});
+  const b = all[kind] || (all[kind] = { at: 0, n: 0 });
+  if (now - b.at > 1000) { b.at = now; b.n = 0; }
+  const ok = Math.max(0, Math.min(n, perSec - b.n));
+  b.n += ok;
+  return ok;
 }
 
 // ------------------------------------------------------------------ caneta (desenho que fica)
@@ -2943,7 +3053,10 @@ function sendToMyDesktop(target, fromId, kind = 'hand') {
     state.share.source.type === 'screen' && localStorage.getItem(DESK_KEYS[kind]) !== '0';
 }
 
+const frac01 = (v) => Math.min(1, Math.max(0, Number(v) || 0));
 function showLaser(target, fromId, name, x, y, drawing = false) {
+  // posição dentro da imagem (0..1); o que vem de um amigo pode ser qualquer número
+  x = frac01(x); y = frac01(y);
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   const tile = tileByOwner(target);
   if (tile && tile.el.isConnected && !tile.swapped) {
@@ -2985,6 +3098,7 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
 
 // "apertar": a mão faz o gesto e sai uma ondinha no ponto
 function showPress(target, fromId, name, x, y) {
+  x = frac01(x); y = frac01(y);
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   showLaser(target, fromId, name, x, y);
   const tile = tileByOwner(target);
@@ -3116,11 +3230,13 @@ async function toggleReplay(id) {
     const opts = {
       // câmera do amigo entra no clipe na posição em que ela está na tela
       compose: () => (tile && !tile.camBox.classList.contains('hidden')) ? { video: tile.camVideo, pos: camPos(tile) } : null,
+      // a trilha desta tela pode trocar com o replay ligado (ver Clips): sempre a atual
+      source: () => tileStream(id),
     };
     // áudio do PC inteiro (Discord, jogo...) misturado com o som da transmissão
     if (localStorage.getItem('clipSys') !== '0' && (await window.native.audioAvailable())) {
       try {
-        const mix = await window.ClipAudio.mixFor(stream);
+        const mix = await window.ClipAudio.mixFor(() => tileStream(id));
         opts.audioTrack = mix.track;
         opts.release = mix.release;
       } catch (e) { console.warn('áudio do PC no clipe', e); }
@@ -3278,10 +3394,11 @@ async function toggleRecording(id) {
   if (!stream || !stream.getVideoTracks().length) { toast('Essa tela não está transmitindo nada para gravar.', 'error'); return; }
   const opts = {
     compose: () => (tile && !tile.camBox.classList.contains('hidden')) ? { video: tile.camVideo, pos: camPos(tile) } : null,
+    source: () => tileStream(id), // a trilha pode trocar no meio da gravação: sempre a atual
   };
   if (localStorage.getItem('clipSys') !== '0' && (await window.native.audioAvailable())) {
     try {
-      const mix = await window.ClipAudio.mixFor(stream);
+      const mix = await window.ClipAudio.mixFor(() => tileStream(id));
       opts.audioTrack = mix.track;
       opts.release = mix.release;
     } catch (e) { console.warn('áudio do PC na gravação', e); }
@@ -3362,11 +3479,17 @@ function closeOverlay(id) {
 state.lightMode = false;
 let cpuStrikes = 0, cpuSeenAt = 0;
 async function healthLoop() {
-  if (state.share && state.peers.size) {
+  if (state.share && state.peers.size) { try { await healthSender(state.share); } catch {} }
+  await healthViewer();
+}
+// (sh = a transmissão no começo da volta: se ela parar ou for reiniciada durante as esperas, esta
+// volta termina aqui. Antes dava erro no meio e a parte de quem assiste era pulada nessa volta.)
+async function healthSender(sh) {
+  {
     let cpu = false;
     let sendMime = '';
     let outFps = 0; // quadros por segundo que estou mandando (quem recebe distingue tela parada de travada)
-    const sfuS = state.share.sfu && window.Sfu.pubSender();
+    const sfuS = sh.sfu && window.Sfu.pubSender();
     if (sfuS) { try { (await sfuS.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') outFps = Math.max(outFps, r.framesPerSecond || 0); }); } catch {} }
     for (const peer of state.peers.values()) {
       if (!peer.vT.sender.track) continue;
@@ -3382,15 +3505,15 @@ async function healthLoop() {
         });
       } catch {}
     }
+    if (state.share !== sh) return; // parou ou reiniciou durante as esperas
     if (sendMime) markSendingCodec(sendMime);
     const ns = state.nativeStats;
     // encoder do helper não dá conta: quadros descartados, ou boa parte deles saindo atrasada (o
     // helper agora espera o encoder liberar em vez de descartar)
-    const nsFps = (state.share.settings && Number(state.share.settings.fps)) || 60;
-    if (ns && state.share.native && (ns.dropped > 6 || (ns.late || 0) > nsFps * 0.4)) cpu = true;
+    const nsFps = (sh.settings && Number(sh.settings.fps)) || 60;
+    if (ns && sh.native && (ns.dropped > 6 || (ns.late || 0) > nsFps * 0.4)) cpu = true;
     const now = Date.now();
     if (cpu) { cpuStrikes++; cpuSeenAt = now; } else cpuStrikes = 0;
-    const sh = state.share;
     if (cpuStrikes >= 2 && sh.native && !sh.direct && !sh.autoDirect && localStorage.getItem('autoDirect') !== '0') {
       // Captura nativa adaptativa: o WebRTC recodifica a tela uma vez POR AMIGO e, com um jogo
       // pesado disputando a placa, cada quadro chegava a levar 200+ ms. A "Nativa direta" manda o
@@ -3410,10 +3533,14 @@ async function healthLoop() {
       for (const peer of state.peers.values()) applySendParams(peer);
     }
     // a causa certa para o indicador dos amigos: PC no limite, captura abaixo do alvo, jogando
-    const capFps = ns && state.share.native ? ns.captureFps : null;
-    sendRelay(null, { kind: 'health', direct: !!state.share.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (state.share.settings && state.share.settings.fps) || 60), gaming: !!state.gaming, out: Math.round(outFps) });
+    // (gaming = um jogo desenhando o tempo todo; navegador/player em tela cheia não conta: lá,
+    //  nenhum quadro novo é só vídeo pausado ou página parada)
+    const capFps = ns && sh.native ? ns.captureFps : null;
+    sendRelay(null, { kind: 'health', direct: !!sh.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (sh.settings && sh.settings.fps) || 60), gaming: gameDrawing(), out: Math.round(outFps) });
   }
+}
 
+async function healthViewer() {
   for (const peer of state.peers.values()) {
     if (!peer.sharing || !peer.tile || state.hidden.has(peer.id)) continue;
     let v = null, rtt = null;
@@ -3455,7 +3582,12 @@ async function healthLoop() {
     const h = peer.health || {};
     // "poucos quadros" é relativo ao que o amigo escolheu (30 ou 60 fps)
     const lowFps = thumb ? 12 : Math.min(40, (h.target || 60) * 0.75), badFps = thumb ? 5 : 15;
-    const senderSlow = h.cpu || (h.cap != null && h.target && h.cap < h.target * 0.75);
+    // a captura dele parou com um jogo aberto (o app dele tenta reiniciar sozinho)
+    const capStopped = !!h.gaming && h.cap === 0;
+    // "PC dele no limite" = o app DELE avisou (encoder atrasado/descartando). Antes contava também
+    // "capturando menos quadros que o alvo", mas a captura só conta quadros NOVOS: tela parada ou um
+    // filme a 24/30 fps acusavam "PC no limite" para todo mundo, com a imagem perfeita.
+    const senderSlow = !!h.cpu || capStopped;
     const netBad = loss > 0.01 || (rtt && rtt > 0.12) || (freezes >= 1 && lostD > 0);
     const kbpsIn = ((q.bytes - prev.bytes) * 8) / dt / 1000;
     // "Nativa direta" dele vindo direto para mim: aviso quanto recebi nestes 2 s. O app dele compara
@@ -3471,7 +3603,7 @@ async function healthLoop() {
       if (senderSlow) {
         reason = `PC de ${peer.name} no limite${h.cap != null ? ` (capturando ${Math.round(h.cap)} fps)` : ''}${h.gaming ? ' — jogo pesado' : ''}`;
         short = `PC de ${peer.name}`;
-        if (h.cap === 0 && h.gaming) { // não é rede nem o meu PC: a captura dele travou com o jogo
+        if (capStopped) { // não é rede nem o meu PC: a captura dele travou com o jogo
           reason = `a captura de ${peer.name} parou (0 fps com o jogo aberto); o app dele tenta reiniciar sozinho`;
           short = 'captura dele parou';
         }
@@ -3550,6 +3682,16 @@ function onHelperEvent(msg) {
   }
   if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
+  } else if (msg.type === 'helper-exit' && state.share && state.share.audio) {
+    // Captura do Chromium com o som pelo auxiliar: o som acabou junto com ele. Antes ficava mudo sem
+    // aviso, e os amigos continuavam vendo o controle de volume como se houvesse som.
+    const sh = state.share;
+    sh.audio = null;
+    sh.audioWhy = 'o auxiliar de captura fechou';
+    window.HelperAudio.stop().catch(() => {});
+    toast('O som da transmissão parou (o auxiliar de captura fechou). Pare e transmita de novo para o som voltar.', 'error');
+    for (const peer of state.peers.values()) { applySendParams(peer); sendState(peer.id); }
+    sfuSync();
   }
 }
 
@@ -3572,7 +3714,12 @@ function applyPlayoutBuffer() {
     // pelo servidor de vídeo a imagem e o som chegam por outra conexão (antes a "Imagem lisa" não valia lá)
     if (peer.sfuIn) recvs.push(...[peer.sfuIn.videoRecv, peer.sfuIn.audioRecv].filter(Boolean));
     for (const r of recvs) {
-      if (r.track && (r.track.kind === 'video' || mode === 'smooth')) { try { r.jitterBufferTarget = target; } catch {} }
+      if (!r.track) continue;
+      // som: só a "Imagem lisa" mexe nele, e fora dela ele VOLTA ao normal. Antes ficava nos 350 ms
+      // para sempre depois de passar pela "Imagem lisa", e a imagem (sincronizada com o som)
+      // continuava atrasada mesmo em "Atraso mínimo".
+      const t = r.track.kind === 'video' ? target : (mode === 'smooth' ? 350 : null);
+      try { r.jitterBufferTarget = t; } catch {}
     }
     if (peer.tile && peer.tile.latBtn) {
       peer.tile.latBtn.classList.toggle('active', mode !== 'auto');
@@ -3592,36 +3739,68 @@ function cycleLatency(id) {
 
 // Entrou alguém sem H.265 durante a "Nativa direta" em H.265: reinicia em H.264 (o vídeo direto
 // é o mesmo para todos, então precisa ser um codec que todos decodificam)
+// O que a "Nativa direta" em H.265/AV1 tem de errado com quem está na sala agora (ou null): alguém
+// que não decodifica o codec, ou (pelo servidor de vídeo) alguém numa versão antiga do app. Só conta
+// quem já mandou o estado dele: quem acabou de entrar ainda não disse o que decodifica, e quando
+// disser o tratamento do "state" confere de novo.
+function directCodecProblem() {
+  const sh = state.share;
+  if (!sh || !sh.direct || !sh.codec || sh.codec === 'h264') return null;
+  const known = [...state.peers.values()].filter((p) => p.h265 !== undefined);
+  const bad = known.find((p) => (sh.codec === 'hevc' && !p.h265) || (sh.codec === 'av1' && !p.av1));
+  if (bad) return { who: bad.name, from: sh.codec, why: '' };
+  const old = sfuWanted() ? known.find((p) => !p.sfu2) : null;
+  return old ? { who: old.name, from: 'hevc', why: 'sfu' } : null;
+}
+
 let restartingCodec = false;
 async function restartDirectCodec(who, from = 'hevc', why = '') {
   if (restartingCodec || !state.share) return;
   restartingCodec = true;
+  let before = null;
   try {
+    if (shareBusy) {
+      // Outro (re)início em andamento (troca de tela, Ajustes, resolução pela rede, captura que
+      // caiu): o startShare ignoraria este pedido. Antes a função voltava na mesma hora, achava o
+      // mesmo amigo sem suporte e chamava a si mesma de novo, sem nunca dar vez ao resto do app: a
+      // interface travava de vez (e, depois de recarregar, o H.265/AV1 ficava bloqueado neste PC).
+      // Agora espera o outro terminar e confere se ainda precisa.
+      for (let i = 0; shareBusy && i < 300; i++) await new Promise((r) => setTimeout(r, 100));
+      const p = shareBusy ? null : directCodecProblem();
+      if (!p) return;
+      ({ who, from, why } = p);
+    }
+    before = state.share;
+    if (!before) return;
     toast(why === 'sfu'
       ? `${who} está numa versão antiga do app: pelo servidor de vídeo a sua transmissão passou para H.264 (com todos atualizados, a próxima já sai em H.265).`
       : from === 'av1'
         ? `${who} não tem placa que decodifica AV1: a sua transmissão trocou de codec.`
         : `${who} não decodifica H.265: a sua transmissão passou para H.264.`);
-    selectedSource = state.share.source;
-    await startShare({ engine: 'native-direct', noAv1: true, forceH264: from === 'hevc', autoDirect: state.share.autoDirect });
+    selectedSource = before.source;
+    await startShare({
+      keep: true, engine: 'native-direct', noAv1: true, forceH264: from === 'hevc' || !!before.settings.forceH264,
+      autoDirect: before.autoDirect, startKbps: state.nativeKbps,
+    });
   } finally { restartingCodec = false; }
-  // alguém sem suporte entrou durante a troca: confere de novo
-  const sh = state.share;
-  if (sh && sh.direct) {
-    const bad = [...state.peers.values()].find((p) => (sh.codec === 'hevc' && !p.h265) || (sh.codec === 'av1' && !p.av1));
-    if (bad) restartDirectCodec(bad.name, sh.codec);
+  // Alguém sem suporte entrou durante a troca: confere de novo. Em outra volta do laço de eventos, e
+  // só se a transmissão mudou mesmo (um reinício que não aconteceu nunca pode virar repetição).
+  if (state.share && state.share !== before) {
+    setTimeout(() => { const p = directCodecProblem(); if (p) restartDirectCodec(p.who, p.from, p.why); }, 0);
   }
 }
 
 let switchingDirect = false;
 async function switchToDirect() {
-  if (switchingDirect || !state.share) return;
+  // (com outro início em andamento o startShare ignoraria o pedido, e o aviso dizia que trocou sem
+  //  trocar; se o PC continuar no limite, o healthLoop pede de novo em alguns segundos)
+  if (switchingDirect || shareBusy || !state.share) return;
   switchingDirect = true;
   try {
     toast('Seu PC está ocupado (jogo pesado): troquei para "Nativa direta", que pesa bem menos. Dá para voltar em Ajustes.');
     console.warn('PC no limite na captura adaptativa: trocando para nativa direta');
     selectedSource = state.share.source;
-    await startShare({ engine: 'native-direct', autoDirect: true });
+    await startShare({ keep: true, engine: 'native-direct', autoDirect: true, smartH: 0 });
   } finally { switchingDirect = false; }
 }
 
@@ -3646,7 +3825,9 @@ async function recoverShare(reason, forceChromium = false) {
     await new Promise((r) => setTimeout(r, 800));
     if (!state.share || !src) return;
     selectedSource = src;
-    await startShare(tooMany ? { engine: 'chromium' } : undefined);
+    // (a mesma transmissão, com as configurações dela; na "direta" continua no bitrate em que estava)
+    await startShare(tooMany ? { keep: true, engine: 'chromium', smartH: 0 }
+      : { keep: true, startKbps: state.share.direct ? state.nativeKbps : 0 });
   } finally {
     recovering = false;
   }
@@ -3659,9 +3840,16 @@ async function recoverShare(reason, forceChromium = false) {
 // (Sem jogo aberto, 0 fps pode ser só a tela parada: aí não faz nada.)
 let capZero = null; // { share, since }
 const capStalls = [];
+// "Jogando", para o helper, é qualquer janela em primeiro plano cobrindo o monitor inteiro. Navegador
+// e player de vídeo em tela cheia também cobrem, mas NÃO desenham o tempo todo: vídeo pausado ou
+// página parada = nenhum quadro novo, sem nada estar travado. Antes, pausar um filme em tela cheia
+// por 6 s reiniciava a captura, e pausar de novo em até 3 min jogava a transmissão para a captura
+// do Chromium (com aviso de erro) pelo resto dela.
+const NOT_A_GAME = /^(chrome|msedge|firefox|opera|brave|vivaldi|arc|zen|librewolf|waterfox|thorium|chromium|browser|iexplore|vlc|mpc-hc|mpc-hc64|mpc-be|mpc-be64|mpv|mpvnet|potplayer|potplayer64|potplayermini|potplayermini64|wmplayer|stremio|kodi|plex|discord|spotify)\.exe$/i;
+function gameDrawing() { return !!state.gaming && !NOT_A_GAME.test(state.gamingExe || ''); }
 function captureStallWatch(st) {
   const sh = state.share;
-  if (!sh || !sh.native || !state.gaming || recovering || (st.captureFps || 0) > 0) { capZero = null; return; }
+  if (!sh || !sh.native || !gameDrawing() || recovering || (st.captureFps || 0) > 0) { capZero = null; return; }
   const now = Date.now();
   if (!capZero || capZero.share !== sh) { capZero = { share: sh, since: now }; return; }
   if (now - capZero.since < 6000) return;
@@ -3693,6 +3881,7 @@ function shareStartWatch() {
 setInterval(shareStartWatch, 1000);
 
 async function stopShare() {
+  shareGen++; // um início que ainda esteja abrindo a captura desiste (ver startShareInner)
   const share = state.share;
   if (!share) return;
   state.share = null;
@@ -3767,6 +3956,12 @@ async function leaveRoom() {
   state.isHost = false;
   closeHistory();
   closeMenus();
+  // estes dois ficam fora da área da sala e continuavam abertos por cima do lobby (dava até para
+  // clicar em "Compartilhar" sem estar em sala nenhuma)
+  state.pickSecond = false;
+  $('#share-modal').classList.add('hidden');
+  $('#share-modal').classList.remove('second');
+  $('#nettest-modal').classList.add('hidden');
   state.hostIp = '';
   lastTrayKey = '';
   window.native.trayStatus({ room: '', people: [], sharing: false });
@@ -4137,7 +4332,7 @@ function getTile(id) {
     return meTile;
   }
   const peer = state.peers.get(id);
-  if (!peer.tile) peer.tile = makeTile(id);
+  if (!peer.tile) { peer.tile = makeTile(id); applyPlayoutBuffer(); } // (o botão de atraso nasce no modo guardado)
   updateTileMedia(id);
   const what = peer.sharing ? (peer.tile.swapped ? `2ª tela: ${peer.share2Name}` : peer.sourceName) : 'Câmera';
   setTileLabel(peer.tile, peer.name, peer.name + (what ? ` — ${what}` : ''));
@@ -4324,22 +4519,29 @@ function isSharing(id) {
 }
 
 // ------------------------------------------------------------------ câmera
+let cameraBusy = false;
 async function toggleCamera() {
+  // um 2º clique enquanto a câmera ainda abria pedia outra: a primeira ficava ligada (luz acesa)
+  // sem ninguém para desligar
+  if (cameraBusy) return;
   if (state.camera) {
     state.camera.track.stop();
     state.camera = null;
   } else {
+    cameraBusy = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
       });
+      // saiu da sala enquanto a câmera abria: não deixa ligada no lobby
+      if ($('#room').classList.contains('hidden')) { stream.getTracks().forEach((t) => t.stop()); return; }
       state.camera = { stream, track: stream.getVideoTracks()[0] };
       state.camera.track.contentHint = 'motion';
     } catch (e) {
       toast(`Não consegui abrir a câmera: ${e.message}`, 'error');
       return;
-    }
+    } finally { cameraBusy = false; }
   }
   if (state.camera && !state.order.includes('me')) state.order.unshift('me');
   $('#btn-camera').classList.toggle('active', !!state.camera);
@@ -4961,7 +5163,9 @@ function markSendingCodec(mime) {
 function checkCodecCrash(why) {
   const c = localStorage.getItem('sendingCodec');
   localStorage.removeItem('sendingCodec');
-  if (!why || (c !== 'H265' && c !== 'AV1')) return false;
+  // Só quando a interface CAIU de verdade (o codec derrubou o Chromium). Falta de memória ('oom') ou
+  // o processo encerrado por fora ('killed') não são culpa do codec, e este bloqueio é para sempre.
+  if (!why || !/^(crashed|abnormal-exit)$/.test(why) || (c !== 'H265' && c !== 'AV1')) return false;
   localStorage.setItem(`codecBad:${c}`, '1');
   const label = c === 'H265' ? 'H.265' : 'AV1';
   console.error(`interface caiu (${why}) transmitindo em ${label}: ${label} bloqueado para enviar neste PC`);
@@ -5007,6 +5211,21 @@ async function collectStats() {
       if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands.set(r.id, r);
       if (r.type === 'codec') codecs.set(r.id, r.mimeType.split('/')[1]);
     });
+    // tela recebida pelo servidor de vídeo: os números dela estão na conexão com o servidor (antes a
+    // linha de estatísticas dessa tela ficava em branco ou parada)
+    let sfuCodec = null;
+    const sin = peer.sfuIn;
+    if (sin && sin.videoRecv) {
+      try {
+        const rep = await sin.videoRecv.getStats();
+        rep.forEach((r) => {
+          if (r.type !== 'inbound-rtp' || r.kind !== 'video') return;
+          inV = r;
+          const c = r.codecId && rep.get(r.codecId);
+          sfuCodec = (c && c.mimeType ? c.mimeType.split('/')[1] : null) || '?';
+        });
+      } catch {}
+    }
     // rota usada: IP local -> IP remoto (tipo). Pelo Radmin deve ser 26.x -> 26.x (host)
     let route = '?';
     if (pair) {
@@ -5018,17 +5237,17 @@ async function collectStats() {
     const dt = prev.t ? (now - prev.t) / 1000 : 0;
     // recebendo
     if (inV && peer.tile) {
-      const bps = dt && prev.inBytes != null ? ((inV.bytesReceived - prev.inBytes) * 8) / dt : 0;
+      const bps = dt && prev.inBytes != null ? Math.max(0, ((inV.bytesReceived - prev.inBytes) * 8) / dt) : 0;
       const lost = inV.packetsLost || 0;
       // atraso do buffer de recepção (ms) e travadas detectadas pelo próprio WebRTC
       const jb = prev.jbEmitted != null && inV.jitterBufferEmittedCount > prev.jbEmitted
         ? ((inV.jitterBufferDelay - prev.jbDelay) / (inV.jitterBufferEmittedCount - prev.jbEmitted)) * 1000 : null;
       peer.tile.stats.textContent =
         `${inV.frameWidth || 0}x${inV.frameHeight || 0} @ ${Math.round(inV.framesPerSecond || 0)}fps · ` +
-        `${fmtMbps(bps)} · ${codecs.get(inV.codecId) || '?'} · ping ${rtt != null ? Math.round(rtt * 1000) : '?'}ms · ` +
+        `${fmtMbps(bps)} · ${sfuCodec || codecs.get(inV.codecId) || '?'} · ping ${rtt != null ? Math.round(rtt * 1000) : '?'}ms · ` +
         `buffer ${jb != null ? Math.round(jb) : '?'}ms · travadas ${inV.freezeCount || 0} · perdidos ${lost} · ` +
         `NACK ${inV.nackCount || 0} · PLI ${inV.pliCount || 0} · keyframes ${inV.keyFramesDecoded || 0} · ` +
-        `descartados ${inV.framesDropped || 0}\nrota ${route}` +
+        `descartados ${inV.framesDropped || 0}\nrota ${route}${sfuCodec ? ' · imagem pelo servidor de vídeo' : ''}` +
         (inV.decoderImplementation ? ` · dec ${inV.decoderImplementation}` : '');
       peer.jb = { jbDelay: inV.jitterBufferDelay, jbEmitted: inV.jitterBufferEmittedCount };
     }
@@ -5102,9 +5321,10 @@ function initRoomUi() {
   // abrir com o Windows (na bandeja) e entrar sozinho na última sala
   window.native.autostart().then((on) => { $('#opt-autostart').checked = !!on; }).catch(() => {});
   $('#opt-autostart').onchange = async () => {
-    const on = await window.native.autostart($('#opt-autostart').checked);
-    $('#opt-autostart').checked = !!on;
-    if ($('#opt-autostart').checked !== on) toast('Só funciona no app instalado.', 'error');
+    const want = $('#opt-autostart').checked;
+    const on = !!(await window.native.autostart(want));
+    $('#opt-autostart').checked = on;
+    if (want && !on) toast('Só funciona no app instalado.', 'error'); // (a comparação antiga nunca dava verdadeiro)
   };
   $('#opt-autojoin').checked = localStorage.getItem('autoJoin') === '1';
   $('#opt-autojoin').onchange = () => localStorage.setItem('autoJoin', $('#opt-autojoin').checked ? '1' : '0');

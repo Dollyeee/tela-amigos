@@ -66,6 +66,28 @@ window.Sdp = (() => {
     return out.join('\r\n');
   }
 
+  // Resposta de uma conexão que só RECEBE (o que eu puxo do servidor de vídeo): marca "stereo=1" no
+  // Opus. O decodificador do Chromium usa o número de canais da descrição LOCAL: sem isso ele
+  // decodifica em mono mesmo quando quem transmite manda estéreo.
+  function stereoAnswer(desc) {
+    try {
+      const lines = desc.sdp.split('\r\n');
+      const opus = new Set();
+      for (const l of lines) { const m = l.match(/^a=rtpmap:(\d+) opus\/48000/i); if (m) opus.add(m[1]); }
+      if (!opus.size) return desc;
+      const hasFmtp = new Set(lines.map((l) => (l.match(/^a=fmtp:(\d+) /) || [])[1]).filter(Boolean));
+      const out = [];
+      for (const l of lines) {
+        const f = l.match(/^a=fmtp:(\d+) (.*)$/);
+        if (f && opus.has(f[1])) { out.push(/(^|;)\s*stereo=/.test(f[2]) ? l : `${l};stereo=1`); continue; }
+        out.push(l);
+        const r = l.match(/^a=rtpmap:(\d+) /);
+        if (r && opus.has(r[1]) && !hasFmtp.has(r[1])) out.push(`a=fmtp:${r[1]} stereo=1`);
+      }
+      return { type: desc.type, sdp: out.join('\r\n') };
+    } catch { return desc; }
+  }
+
   // codec que derrubou o app NESTE PC ao transmitir (ex.: H.265 na RX 7600: o Chromium aborta):
   // nunca mais é usado para enviar aqui (receber continua normal)
   const sendBad = (name) => localStorage.getItem(`codecBad:${name}`) === '1';
@@ -130,5 +152,5 @@ window.Sdp = (() => {
     return h264.length ? [...h264, ...extras] : null;
   }
 
-  return { sendBad, munge, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw, av1Ready };
+  return { sendBad, munge, stereoAnswer, codecPreferences, h264OnlyPreferences, h265OnlyPreferences, av1OnlyPreferences, hasH265, hasAV1Hw, av1Ready };
 })();

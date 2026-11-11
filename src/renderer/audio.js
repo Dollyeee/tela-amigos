@@ -74,11 +74,14 @@ window.HelperAudio = (() => {
 
   async function stop() {
     if (!ctx) return;
-    try { await window.Helper.audioStop(); } catch {}
-    try { node.disconnect(); } catch {}
-    try { await ctx.close(); } catch {}
+    // em variáveis próprias: um start() novo pode criar os dele enquanto o helper ainda está parando
+    // (antes este stop, ao voltar da espera, fechava e apagava os do start novo)
+    const c = ctx, n = node;
     ctx = null;
     node = null;
+    try { await window.Helper.audioStop(); } catch {}
+    try { n.disconnect(); } catch {}
+    try { await c.close(); } catch {}
   }
 
   return { start, stop, WORKLET };
@@ -115,22 +118,37 @@ window.ClipAudio = (() => {
     try { await starting; } finally { starting = null; }
   }
 
-  async function mixFor(stream) {
+  // source: o MediaStream da tela ou uma função que devolve o atual. A trilha de som de uma tela
+  // pode trocar com o clipe/gravação ligados (o amigo reiniciou a transmissão, ou ela passou da
+  // conexão direta para o servidor de vídeo): a mistura confere a cada meio segundo e religa na
+  // trilha nova. Antes ficava presa na antiga e o som do amigo sumia do clipe.
+  async function mixFor(source) {
     await ensure();
     users++;
-    const dest = ctx.createMediaStreamDestination();
+    const c = ctx, node = sysNode; // os desta mistura (um desligar/ligar depois cria outros)
+    const dest = c.createMediaStreamDestination();
     dest.channelCount = 2;
-    sysNode.connect(dest);
-    const at = stream && stream.getAudioTracks()[0];
-    const src = at ? ctx.createMediaStreamSource(new MediaStream([at])) : null;
-    if (src) src.connect(dest);
+    node.connect(dest);
+    let at = null, src = null;
+    const sync = () => {
+      let s = null;
+      try { s = typeof source === 'function' ? source() : source; } catch {}
+      const t = (s && s.getAudioTracks()[0]) || null;
+      if (t === at) return;
+      try { src && src.disconnect(); } catch {}
+      at = t; src = null;
+      try { if (t) { src = c.createMediaStreamSource(new MediaStream([t])); src.connect(dest); } } catch (e) { console.warn('áudio do clipe', e); }
+    };
+    sync();
+    const timer = typeof source === 'function' ? setInterval(sync, 500) : null;
     let released = false;
     return {
       track: dest.stream.getAudioTracks()[0],
       release() {
         if (released) return;
         released = true;
-        try { sysNode && sysNode.disconnect(dest); } catch {}
+        clearInterval(timer);
+        try { node.disconnect(dest); } catch {}
         try { src && src.disconnect(); } catch {}
         if (--users <= 0) shutdown();
       },

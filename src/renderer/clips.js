@@ -23,7 +23,7 @@ window.Clips = (() => {
       this.bitrate = 10_000_000;
       this.init();
       this.startVideo(stream);
-      this.startAudio(opts.audioTrack ? new MediaStream([opts.audioTrack]) : stream);
+      this.startAudio(stream);
     }
 
     init() {}
@@ -48,12 +48,19 @@ window.Clips = (() => {
       g.beginPath(); g.roundRect(x, y, cw, ch, r); g.stroke();
     }
 
+    // A trilha de uma tela pode trocar com o replay/gravação ligados: a transmissão foi reiniciada
+    // (troca de tela, de codec, resolução pela rede) ou a tela do amigo passou da conexão direta para
+    // o servidor de vídeo (e de volta). Antes o replay ficava preso na trilha antiga: "Salvar clipe"
+    // gravava os 30 s de ANTES da troca e a gravação parava de crescer com o contador andando.
+    // opts.source() devolve o MediaStream atual da tela; aqui sai a trilha viva dele (ou null).
+    liveTrack(stream, kind) {
+      let s = stream;
+      try { if (this.opts.source) s = this.opts.source() || null; } catch {}
+      const t = s ? (kind === 'audio' ? s.getAudioTracks() : s.getVideoTracks())[0] : null;
+      return t && t.readyState === 'live' ? t : null;
+    }
+
     async startVideo(stream) {
-      const track = stream.getVideoTracks()[0];
-      if (!track) return;
-      this.vTrack = track.clone();
-      const reader = new MediaStreamTrackProcessor({ track: this.vTrack }).readable.getReader();
-      this.vReader = reader;
       let encoder = null, cfgKey = '';
       const makeEncoder = async (w, h) => {
         if (encoder) { try { await encoder.flush(); encoder.close(); } catch {} }
@@ -71,38 +78,74 @@ window.Clips = (() => {
         });
         this.video.length = 0; // pedaços antigos (outro tamanho) não servem mais
       };
+      // Emenda dos horários: cada trilha tem o relógio dela, e o clipe precisa de um só, sempre
+      // crescente. A 1ª trilha passa como vem (off = 0); as seguintes continuam de onde a anterior
+      // parou, mais o tempo real que ficou sem imagem.
+      let lastTs = -1, lastAt = 0, lastKeyTs = -1, sinceKey = 0;
       try {
-        for (;;) {
-          const { value: frame, done } = await reader.read();
-          if (done || this.stopped) { frame && frame.close(); break; }
-          const key = `${frame.displayWidth}x${frame.displayHeight}`;
-          // gravação: o tamanho fica fixo (o arquivo não pode mudar de resolução no meio)
-          if (key !== cfgKey && !(this.fixedSize && encoder)) { cfgKey = key; await makeEncoder(frame.displayWidth, frame.displayHeight); }
-          if (encoder.encodeQueueSize > 6) { frame.close(); continue; } // placa ocupada: pula um quadro
-          let f = frame;
-          const withCam = !!(this.opts.compose && this.opts.compose());
-          if (withCam || frame.displayWidth !== this.width || frame.displayHeight !== this.height) {
-            // desenha num canvas: reduz para o tamanho do clipe e/ou põe a câmera por cima
-            const c = this.canvas || (this.canvas = new OffscreenCanvas(this.width, this.height));
-            if (c.width !== this.width) { c.width = this.width; c.height = this.height; }
-            const g = c.getContext('2d');
-            g.drawImage(frame, 0, 0, this.width, this.height);
-            if (withCam) this.drawCam(g, this.width, this.height);
-            f = new VideoFrame(c, { timestamp: frame.timestamp });
-            frame.close();
+        while (!this.stopped) {
+          const src = this.liveTrack(stream, 'video');
+          if (!src) { await new Promise((r) => setTimeout(r, 300)); continue; } // sem imagem agora: espera voltar
+          const track = src.clone();
+          this.vTrack = track;
+          const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+          this.vReader = reader;
+          // a trilha da tela trocou: solta esta leitura (a antiga pode nunca mais mandar nada nem "acabar")
+          const watch = setInterval(() => { if (this.stopped || this.liveTrack(stream, 'video') !== src) reader.cancel().catch(() => {}); }, 300);
+          let off = null;
+          try {
+            for (;;) {
+              const { value: frame, done } = await reader.read();
+              if (done || this.stopped) { frame && frame.close(); break; }
+              if (off == null) off = lastTs < 0 ? 0 : lastTs + Math.max(1000, Math.round((performance.now() - lastAt) * 1000)) - frame.timestamp;
+              const ts = frame.timestamp + off;
+              if (ts <= lastTs) { frame.close(); continue; } // (nunca para trás)
+              const key = `${frame.displayWidth}x${frame.displayHeight}`;
+              // gravação: o tamanho fica fixo (o arquivo não pode mudar de resolução no meio)
+              if (key !== cfgKey && !(this.fixedSize && encoder)) { cfgKey = key; await makeEncoder(frame.displayWidth, frame.displayHeight); lastKeyTs = -1; }
+              if (encoder.encodeQueueSize > 6) { frame.close(); continue; } // placa ocupada: pula um quadro
+              let f = frame;
+              const withCam = !!(this.opts.compose && this.opts.compose());
+              if (withCam || frame.displayWidth !== this.width || frame.displayHeight !== this.height) {
+                // desenha num canvas: reduz para o tamanho do clipe e/ou põe a câmera por cima
+                const c = this.canvas || (this.canvas = new OffscreenCanvas(this.width, this.height));
+                // (a altura também: 2560x1440 -> 2560x1080 mudava só a altura e a imagem saía achatada)
+                if (c.width !== this.width || c.height !== this.height) { c.width = this.width; c.height = this.height; }
+                const g = c.getContext('2d');
+                g.drawImage(frame, 0, 0, this.width, this.height);
+                if (withCam) this.drawCam(g, this.width, this.height);
+                f = new VideoFrame(c, { timestamp: ts });
+                frame.close();
+              } else if (off !== 0) {
+                f = new VideoFrame(frame, { timestamp: ts }); // mesma imagem, horário emendado
+                frame.close();
+              }
+              // keyframe a cada ~1 s (clipe) ou ~2 s (gravação). Por quadros E por tempo: com a tela
+              // quase parada chegam 1-2 quadros por segundo, e contando só quadros o keyframe demorava
+              // mais que os 31 s guardados (o replay ficava vazio: "ainda não há imagem suficiente").
+              const wantKey = lastKeyTs < 0 || sinceKey >= this.keyEvery || ts - lastKeyTs >= (this.keyEvery / 60) * 1e6;
+              encoder.encode(f, { keyFrame: wantKey });
+              if (wantKey) { lastKeyTs = ts; sinceKey = 0; }
+              sinceKey++;
+              this.frames++;
+              lastTs = ts; lastAt = performance.now();
+              f.close();
+            }
+          } finally {
+            clearInterval(watch);
+            try { track.stop(); } catch {}
           }
-          encoder.encode(f, { keyFrame: this.frames % this.keyEvery === 0 }); // keyframe ~1 s (clipe)
-          this.frames++;
-          f.close();
+          if (!this.stopped) await new Promise((r) => setTimeout(r, 100)); // (nunca um laço sem pausa)
         }
       } catch (e) { console.warn('clipe', e); }
       // flush antes de fechar: close() joga fora o que ainda está na fila (fim da gravação)
       if (encoder) { try { await encoder.flush(); } catch {} try { encoder.close(); } catch {} }
     }
 
+    // (at = quando o pedaço chegou; é por ele que o som é alinhado com a imagem ao montar o clipe)
     pushVideo(chunk, meta) {
       if (meta && meta.decoderConfig) this.videoConfig = meta.decoderConfig;
-      this.video.push({ chunk, meta });
+      this.video.push({ chunk, meta, at: performance.now() });
       // corta o começo, sempre começando num keyframe
       const last = chunk.timestamp;
       while (this.video.length > 1 && last - this.video[0].chunk.timestamp > KEEP_US) this.video.shift();
@@ -111,34 +154,70 @@ window.Clips = (() => {
 
     pushAudio(chunk, meta) {
       if (meta && meta.decoderConfig) this.audioConfig = meta.decoderConfig;
-      this.audio.push({ chunk, meta });
+      this.audio.push({ chunk, meta, at: performance.now() });
       const last = chunk.timestamp;
       while (this.audio.length > 1 && last - this.audio[0].chunk.timestamp > KEEP_US) this.audio.shift();
     }
 
+    // Som: opts.audioTrack (a mistura som do PC + tela, que já acompanha a tela sozinha) ou o som da
+    // própria tela, seguindo a trilha atual como no vídeo.
     async startAudio(stream) {
-      const track = stream.getAudioTracks()[0];
-      this.hasAudio = !!(track && typeof AudioEncoder !== 'undefined');
+      const fixed = this.opts.audioTrack || null;
+      const current = () => (fixed ? (fixed.readyState === 'live' ? fixed : null) : this.liveTrack(stream, 'audio'));
+      this.hasAudio = !!(current() && typeof AudioEncoder !== 'undefined');
       if (!this.hasAudio) return;
-      this.aTrack = track.clone();
-      const reader = new MediaStreamTrackProcessor({ track: this.aTrack }).readable.getReader();
-      this.aReader = reader;
       let encoder = null;
+      // Emenda dos horários depois de uma troca de trilha: os pedaços da 1ª passam como saem (sem
+      // cópia); os das seguintes continuam de onde a anterior parou, mais o tempo real sem som.
+      let shift = 0, gapPending = false, lastEnd = -1, lastAt = 0;
+      const out = (chunk, meta) => {
+        if (gapPending) {
+          gapPending = false;
+          shift = lastEnd + Math.max(0, Math.round((performance.now() - lastAt) * 1000)) - chunk.timestamp;
+        }
+        let c = chunk;
+        if (shift) {
+          const buf = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(buf);
+          c = new EncodedAudioChunk({ type: chunk.type, timestamp: chunk.timestamp + shift, duration: chunk.duration || undefined, data: buf });
+        }
+        lastEnd = c.timestamp + (c.duration || 20000);
+        lastAt = performance.now();
+        this.pushAudio(c, meta);
+      };
       try {
-        for (;;) {
-          const { value: data, done } = await reader.read();
-          if (done || this.stopped) { data && data.close(); break; }
-          if (!encoder) {
-            this.sampleRate = data.sampleRate;
-            this.channels = Math.min(2, data.numberOfChannels);
-            encoder = new AudioEncoder({
-              output: (chunk, meta) => this.pushAudio(chunk, meta),
-              error: (e) => console.warn('clipe (áudio)', e),
-            });
-            encoder.configure({ codec: 'opus', sampleRate: this.sampleRate, numberOfChannels: this.channels, bitrate: 160_000 });
+        while (!this.stopped) {
+          const src = current();
+          if (!src) {
+            if (fixed) break; // a mistura acabou
+            await new Promise((r) => setTimeout(r, 300));
+            continue;
           }
-          encoder.encode(data);
-          data.close();
+          const track = src.clone();
+          this.aTrack = track;
+          const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+          this.aReader = reader;
+          const watch = fixed ? null : setInterval(() => { if (this.stopped || current() !== src) reader.cancel().catch(() => {}); }, 300);
+          if (lastEnd >= 0) gapPending = true;
+          try {
+            for (;;) {
+              const { value: data, done } = await reader.read();
+              if (done || this.stopped) { data && data.close(); break; }
+              if (!encoder) {
+                this.sampleRate = data.sampleRate;
+                this.channels = Math.min(2, data.numberOfChannels);
+                encoder = new AudioEncoder({ output: out, error: (e) => console.warn('clipe (áudio)', e) });
+                encoder.configure({ codec: 'opus', sampleRate: this.sampleRate, numberOfChannels: this.channels, bitrate: 160_000 });
+              }
+              // outra trilha com outro formato (mono x estéreo): o encoder já configurado não aceita
+              if (data.sampleRate === this.sampleRate && Math.min(2, data.numberOfChannels) === this.channels) encoder.encode(data);
+              data.close();
+            }
+          } finally {
+            if (watch) clearInterval(watch);
+            try { track.stop(); } catch {}
+          }
+          if (!this.stopped) await new Promise((r) => setTimeout(r, 100)); // (nunca um laço sem pausa)
         }
       } catch (e) { console.warn('clipe (áudio)', e); }
       if (encoder) { try { await encoder.flush(); } catch {} try { encoder.close(); } catch {} }
@@ -149,7 +228,10 @@ window.Clips = (() => {
       const vids = this.video.slice();
       if (!vids.length || !this.videoConfig) return null;
       const start = vids[0].chunk.timestamp;
-      const auds = this.audio.filter((a) => a.chunk.timestamp >= start);
+      // O som começa junto com o 1º quadro do clipe, pelo momento em que cada pedaço chegou. Os
+      // horários de vídeo e de som vêm de relógios diferentes: comparar um com o outro nunca cortava
+      // nada, sobrava até 1 s de som antes da imagem e o som saía esse tanto atrasado no clipe.
+      const auds = this.audio.filter((a) => a.at >= vids[0].at);
       const muxer = new Mp4Muxer.Muxer({
         target: new Mp4Muxer.ArrayBufferTarget(),
         video: { codec: 'avc', width: this.width, height: this.height, frameRate: 60 },
@@ -170,8 +252,8 @@ window.Clips = (() => {
     stop() {
       this.stopped = true;
       try { this.opts.release && this.opts.release(); } catch {}
-      try { this.vReader && this.vReader.cancel(); } catch {}
-      try { this.aReader && this.aReader.cancel(); } catch {}
+      try { this.vReader && this.vReader.cancel().catch(() => {}); } catch {}
+      try { this.aReader && this.aReader.cancel().catch(() => {}); } catch {}
       try { this.vTrack && this.vTrack.stop(); } catch {}
       try { this.aTrack && this.aTrack.stop(); } catch {}
     }

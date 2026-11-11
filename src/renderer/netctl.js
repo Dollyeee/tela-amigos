@@ -238,8 +238,10 @@
     return { target, level: worst, why, did, notes, pace };
   }
 
-  // corte pedido por fora (ex.: quem recebe pelo servidor de vídeo reclamou)
-  function externalCut(ctl, R, f, now) { markCut(ctl, R, now); return R * f; }
+  // corte pedido por fora (ex.: quem recebe pelo servidor de vídeo reclamou). É um corte com
+  // evidência: esquece o "de onde caiu só pelo teto de envio" (senão a decisão seguinte voltava
+  // direto para lá e desfazia o corte um segundo depois).
+  function externalCut(ctl, R, f, now) { markCut(ctl, R, now); ctl.paceFrom = 0; return R * f; }
 
   const api = { newPath, resetPath, classify, newCtl, decide, externalCut, paceOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -243,5 +243,29 @@ for (const sc of scenarios) {
   console.log(`         média: novo ${Math.round(avg(l, 0, sc.secs))} kb/s (fila no envio ${fz} s) · antigo ${Math.round(avg(lo, 0, sc.secs))} kb/s (fila no envio ${frozen(lo)} s)`);
   if (verbose || !ok) for (const r of l) if (r.why || verbose) console.log(`           t=${r.t} R=${r.R} atraso=${Math.round(r.delay * 1000)}ms perda=${(r.loss * 100).toFixed(1)}%${r.frozen ? ' FILA' : ''} ${r.why}`);
 }
+// Corte pedido por fora (quem recebe pelo servidor de vídeo reclamou) com o bitrate já seguro pelo
+// teto de envio: a decisão seguinte não pode voltar direto para onde estava (desfaria o corte).
+{
+  const p = makePath({ name: 'Servidor', floor: 0, bweCap: () => 8000, seed: 9 });
+  const ctl = NetCtl.newCtl();
+  let R = 12000, t = 0;
+  const tick = () => {
+    const now = 100000 + t * 1000;
+    const s = p.step(R, t);
+    NetCtl.classify(p.st, s, R, now);
+    R = NetCtl.decide(ctl, [{ name: p.name, st: p.st, s }], R, 12000, 1000, now).target;
+    t++;
+  };
+  for (let i = 0; i < 20; i++) tick(); // o teto de envio (~7,4 Mb/s) segura o bitrate
+  const before = R;
+  R = Math.round(NetCtl.externalCut(ctl, R, 0.8, 100000 + t * 1000));
+  const cut = R;
+  tick();
+  const ok = before > 7000 && cut < before * 0.85 && R <= cut * 1.1;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok    ' : 'FALHOU'} corte pedido por quem assiste, com o bitrate já no teto de envio`);
+  console.log(`         ${before} kb/s -> corte para ${cut} -> um segundo depois ${R} (não pode voltar para ${before})`);
+}
+
 console.log(failed ? `\n${failed} cenário(s) falharam` : '\ntodos os cenários passaram');
 process.exit(failed ? 1 : 0);

@@ -76,7 +76,9 @@ window.Sfu = (() => {
 
   function reset() {
     for (const c of [P, S]) { clearTimeout(c.downTimer); c.downTimer = null; }
-    for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('servidor de vídeo encerrado')); }
+    // (marcado como "sessão refeita": quem chamou não avisa "servidor indisponível", porque a
+    // recuperação já está em andamento ou a pessoa saiu da sala)
+    for (const [, p] of pending) { clearTimeout(p.timer); const e = new Error('servidor de vídeo encerrado'); e.sfuLost = true; p.reject(e); }
     pending.clear();
     for (const c of [P, S]) { try { c.pc && c.pc.close(); } catch {} c.pc = null; c.sid = null; }
     pub = null; pulls.clear(); lastBytes = 0;
@@ -258,7 +260,9 @@ window.Sfu = (() => {
         if (r.requiresImmediateRenegotiation && r.sessionDescription) {
           mid = true;
           await pc.setRemoteDescription(r.sessionDescription);
-          await pc.setLocalDescription(await pc.createAnswer());
+          // (com "stereo=1": sem isso o Chromium decodifica o som que vem do servidor em mono; na
+          // conexão direta o app já marcava, aqui a resposta ia como o Chromium a gera)
+          await pc.setLocalDescription(window.Sdp.stereoAnswer(await pc.createAnswer()));
           await call('renegotiate', { sid, body: { sessionDescription: { type: 'answer', sdp: pc.localDescription.sdp } } });
           mid = false;
         }
@@ -267,7 +271,7 @@ window.Sfu = (() => {
           if (okMids.length) await call('close', { sid, body: { tracks: okMids, force: true } }).catch(() => {});
           throw new Error(bad.errorDescription || bad.errorCode);
         }
-        const res = { mids: [], video: null, audio: null, videoRecv: null, audioRecv: null, videoMid: null, info, rid: one ? null : rid };
+        const res = { sid, mids: [], video: null, audio: null, videoRecv: null, audioRecv: null, videoMid: null, info, rid: one ? null : rid };
         for (const t of r.tracks || []) {
           const tr = pc.getTransceivers().find((x) => x.mid === String(t.mid));
           if (!tr) continue;
@@ -292,11 +296,15 @@ window.Sfu = (() => {
     });
   }
 
-  function unpull(key) {
+  // only = o resultado do pull a fechar. A mesma transmissão pode ter sido puxada de novo por cima
+  // (conexão com o amigo refeita no meio): sem dizer qual, fechava a nova e a antiga ficava
+  // baixando sozinha até a transmissão acabar.
+  function unpull(key, only) {
     return serial(S, async () => {
-      const p = pulls.get(key);
+      const p = only || pulls.get(key);
       if (!p) return;
-      pulls.delete(key);
+      if (pulls.get(key) === p) pulls.delete(key);
+      if (p.sid && p.sid !== S.sid) return; // de uma sessão que já foi jogada fora: nada a fechar
       try { if (S.sid && p.mids.length) await call('close', { sid: S.sid, body: { tracks: p.mids.map((mid) => ({ mid })), force: true } }); } catch (e) { console.warn('servidor de vídeo: parar de puxar', e.message); }
     });
   }

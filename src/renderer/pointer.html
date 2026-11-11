@@ -35,11 +35,15 @@
   const canvas = document.getElementById('trail');
   let animating = false;
   function drawTrail() {
-    canvas.width = innerWidth; canvas.height = innerHeight;
+    // (só muda o tamanho quando precisa: recriar a cada quadro uma tela do tamanho do monitor inteiro
+    //  pesava na placa de vídeo enquanto houvesse um traço vivo, com o jogo aberto por baixo)
+    if (canvas.width !== innerWidth || canvas.height !== innerHeight) { canvas.width = innerWidth; canvas.height = innerHeight; }
     const g = canvas.getContext('2d');
+    g.clearRect(0, 0, canvas.width, canvas.height);
     const now = performance.now();
     // cada traço tem sua duração (rastro 2,5 s; caneta ~8 s, some só no final)
     for (let i = lines.length - 1; i >= 0; i--) if (now - lines[i].t > (lines[i].life || 2500)) lines.splice(i, 1);
+    if (lines.length > 2500) lines.splice(0, lines.length - 2500); // teto: traços demais travariam o desenho
     for (const s of lines) {
       const life = s.life || 2500, age = now - s.t;
       g.globalAlpha = s.life ? Math.max(0, Math.min(1, (life - age) / 1200)) : Math.max(0, 1 - age / 2500);

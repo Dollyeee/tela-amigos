@@ -58,6 +58,10 @@ const scriptA = common + `
     if (${JSON.stringify(CODEC)} === 'HEVC') localStorage.setItem('av1', '0'); else localStorage.removeItem('av1'); // sem AV1 = a direta cai no H.265
     $('#opt-codec').value = ${JSON.stringify(CODEC === 'HEVC' ? 'H265' : CODEC)}; $('#opt-bitrate').value = 12;
     $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option>'; $('#opt-audio').value = 'none'; // nunca captura som no teste
+    // entre duas cópias no mesmo PC a estimativa de banda do WebRTC às vezes desaba no começo; a
+    // "resolução inteligente" então reiniciava a captura em 720p no meio da medição (o helper passa
+    // por 0 quadros/s e o teste acusava falha sem haver defeito)
+    localStorage.setItem('smartRes', '0');
     window.NativeVideo.trace(true);
     await startShare();
     if (!state.share) throw new Error('não começou a transmitir');

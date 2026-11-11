@@ -345,15 +345,19 @@ window.NativeVideo = (() => {
     const was = running;
     running = false;
     clearTimeout(extraTimer); extraTimer = null;
-    if (was) { try { await window.Helper.videoStop(); } catch {} }
-    try { writer && writer.close(); } catch {}
-    try { previewWriter && previewWriter.close(); } catch {}
-    try { generator && generator.stop(); } catch {}
-    try { previewGen && previewGen.stop(); } catch {}
-    try { decoder && decoder.state !== 'closed' && decoder.close(); } catch {}
+    // Em variáveis próprias, antes de esperar o helper: um start() novo pode criar as trilhas dele
+    // enquanto esta parada ainda espera (parar e transmitir de novo em seguida). Antes, ao voltar da
+    // espera, esta parada fechava as trilhas do start novo: "captura nativa falhou" sem motivo.
+    const w = writer, pw = previewWriter, g = generator, pg = previewGen, d = decoder;
     writer = previewWriter = generator = previewGen = decoder = null;
     decoderReady = false;
     if (worker) worker.postMessage({ type: 'reset' });
+    if (was) { try { await window.Helper.videoStop(); } catch {} }
+    try { w && w.close(); } catch {}
+    try { pw && pw.close(); } catch {}
+    try { g && g.stop(); } catch {}
+    try { pg && pg.stop(); } catch {}
+    try { d && d.state !== 'closed' && d.close(); } catch {}
   }
 
   // Precisa ser chamado ANTES da primeira negociação da conexão: o Chromium ignora
