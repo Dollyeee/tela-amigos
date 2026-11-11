@@ -97,6 +97,16 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Reconexão automática com o servidor de vídeo**: se a conexão com o servidor cair ou travar, quem transmite volta a mandar direto na hora (sem tela preta) e em ~1,5 s tudo é refeito numa conexão nova. Se nada chegar do servidor por 6 s, quem assiste passa a receber direto sozinho. Caiu 3 vezes em 3 minutos: fica 5 minutos só na conexão direta.
 - **Tela do amigo travada em 0 fps se arruma sozinha**: se ele está mandando imagem e nada aparece aqui, o app pede um quadro completo (3 s), refaz o caminho do vídeo (9 s) e, se ainda não voltou, refaz a conexão só com esse amigo (20 s), o mesmo que sair e entrar na sala. Tela parada de verdade (nada mudando) não conta.
 - **Captura travada com jogo aberto**: se a captura de quem transmite ficar em 0 fps com um jogo aberto (placa de vídeo reiniciou, jogo em tela cheia exclusiva), o app reinicia a captura sozinho em 6 s; se travar de novo, passa para a captura do Chromium e sugere colocar o jogo em "Tela cheia sem bordas". Se a captura começar e não mandar nenhuma imagem em 10 s (só o som), faz o mesmo.
+- **Revisão geral (v1.0.59)**, o que muda para quem usa:
+  - *Privacidade*: "Parar" ou "Sair" enquanto a captura ainda abria não deixa mais a transmissão voltar sozinha (nem ficar ligada escondida e ir ao ar na próxima sala); escolher **só uma área** da tela nunca mais vira a tela inteira quando a captura nativa falha; uma **janela** que o Windows não deixa capturar só vira "monitor inteiro" se ela ocupa o monitor todo (e avisa na tela); no Windows 10, janela minimizada fica na última imagem em vez de mostrar o que está atrás; "Aplicar" nos Ajustes não troca mais o som de "só o jogo" para "todo o som do PC".
+  - *Travamento*: trocar de codec (entrou alguém sem H.265/AV1) no meio de outro reinício da transmissão travava a interface de vez.
+  - *Som pelo servidor de vídeo* chegava em **mono**; agora chega em estéreo.
+  - *Clipes e gravações* seguem a tela quando a transmissão reinicia ou passa da conexão direta para o servidor (antes paravam sem avisar e o clipe salvo era o de antes da troca); o som do clipe não sai mais até 1 s atrasado; com a tela quase parada o replay não fica mais vazio.
+  - **Entrar sozinho na última sala** nunca funcionou (condição invertida desde a v1.0.30): agora funciona para quem deixou a opção marcada.
+  - *Avisos falsos*: tela parada ou filme a 24/30 fps não acusam mais "PC de fulano no limite"; pausar um vídeo em tela cheia (navegador/player) não reinicia mais a captura nem joga a transmissão para a captura do Chromium.
+  - *Atraso*: sair da "Imagem lisa" devolve o som ao atraso normal (ficava +0,35 s para sempre); o modo guardado por amigo vale também em conexões novas.
+  - *Servidor de vídeo*: uma tela não é mais puxada em dobro depois de a conexão com o amigo ser refeita (gastava o limite do mês em dobro); as estatísticas (S) mostram as telas que vêm por ele.
+  - Menores: caneta/rastro voltam a desenhar depois de a tela sair e voltar; a câmera não fica ligada com dois cliques seguidos; a interface que recarrega no meio de uma transmissão manda o auxiliar parar a captura; clipes, fotos e diagnósticos saem com a data e a hora do PC (iam em UTC); traços e mãozinhas de um amigo têm ritmo máximo; cursor no lugar certo e monitor com escala (125%, 150%) na resolução certa na captura do Windows 10; o H.265/AV1 só fica bloqueado para enviar num PC quando a interface cai de verdade transmitindo nele (falta de memória não conta mais); se o auxiliar de captura fechar com a captura do Chromium, o app avisa que o som parou.
 
 ## Desenvolver
 ```
@@ -106,6 +116,12 @@ npm run build             # gera dist/TelaAmigos-Setup-x.y.z.exe localmente
 npm run release           # sobe a versão, compila e publica no GitHub -> amigos atualizam sozinhos
 ```
 Requer Node.js, .NET 10 SDK e `gh` logado.
+
+Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada vez):
+- `npm test` – teste automático geral (roda sozinho no `npm run release`, junto com `scripts/netctl-test.js`);
+- `node scripts/lifecycle-test.js` – parar/sair no meio do início, área da tela, reinícios automáticos, troca
+  de codec, clipes seguindo a tela (captura falsa: não usa a placa de vídeo);
+- `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro.
 
 - `src/main.js` – processo principal (janela, sala em segundo plano, procura de salas, atualização)
 - `src/room-server.js`, `src/signaling.js` – servidor da sala (processo próprio, sobrevive ao app)

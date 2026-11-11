@@ -66,14 +66,16 @@ export class Room {
   async usage(req, path) {
     const month = new Date().toISOString().slice(0, 7);
     const st = this.state.storage;
-    const cur = (await st.get(`gb:${month}`)) || 0;
     if (path === '/add' && req.method === 'POST') {
+      // O corpo é lido ANTES do total: entre ler o total e gravar não pode haver outra espera, senão
+      // duas somas ao mesmo tempo liam o mesmo total e uma delas se perdia (uso contado a menos).
       const { bytes } = await req.json().catch(() => ({}));
       const add = Math.max(0, Math.min(Number(bytes) || 0, 4e9)) / 1e9;
+      const cur = (await st.get(`gb:${month}`)) || 0;
       await st.put(`gb:${month}`, cur + add);
       return json({ gb: cur + add });
     }
-    return json({ gb: cur, month });
+    return json({ gb: (await st.get(`gb:${month}`)) || 0, month });
   }
   usageStub() { return this.env.ROOMS.get(this.env.ROOMS.idFromName(USAGE_ROOM)); }
   async usedGb() {

@@ -6,3 +6,4 @@ audio-helper/obj/
 cert/
 *.log
 online-server/.wrangler/
+__pycache__/
