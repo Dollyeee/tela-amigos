@@ -126,13 +126,26 @@ static class Program
         }));
     }
 
+    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+
     static async Task Main()
     {
+        // Coordenadas de tela em pixels de verdade. Sem isto o Windows entrega ao helper as posições
+        // de monitores e janelas já divididas pela escala (125%, 150%...): no Windows 10 um monitor
+        // 1080p a 125% era transmitido em 1536x864, e o recorte de uma janela num segundo monitor
+        // podia sair deslocado. (-4 = "por monitor, versão 2"; antes de qualquer outra chamada.)
+        try { if (!SetProcessDpiAwarenessContext(new IntPtr(-4))) SetProcessDPIAware(); }
+        catch { try { SetProcessDPIAware(); } catch { } }
         StartWriter();
         StartVideoWorker();
         SendJson(new { type = "ready" });
+        // Os comandos chegam em UTF-8 (o JSON do app). Console.In leria na página de código do
+        // Windows, e um programa com acento no nome nunca batia com o nome que o mixer mandava (o
+        // volume daquele programa não mudava).
+        using var stdin = new StreamReader(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false));
         string? line;
-        while ((line = await Console.In.ReadLineAsync()) != null)
+        while ((line = await stdin.ReadLineAsync()) != null)
         {
             int? id = null;
             try
@@ -704,11 +717,13 @@ sealed class Mixer : IDisposable
     {
         if (!running) return;
         bool need;
+        ProcessCapture? dead = null;
         lock (capLock)
         {
-            if (captures.TryGetValue(-1, out var c) && c.Dead) { captures.Remove(-1); c.Dispose(); }
+            if (captures.TryGetValue(-1, out var c) && c.Dead) { captures.Remove(-1); dead = c; }
             need = !captures.ContainsKey(-1) && !(failedUntil.TryGetValue(-1, out var until) && until > DateTime.UtcNow);
         }
+        dead?.Dispose(); // fora da trava: o Dispose espera a thread da captura (travaria a mistura)
         if (need) StartCapture(new ProcessCapture(deviceId!));
     }
 
@@ -739,9 +754,12 @@ sealed class Mixer : IDisposable
     // apps sendo capturados agora (para o mixer da interface)
     public List<object> Apps()
     {
-        lock (capLock)
-            return captures.Values.Where(c => !c.Dead && c.Exe.Length > 0)
-                .Select(c => (object)new { pid = c.Pid, exe = c.Exe, name = FriendlyName(c.Pid, c.Exe), gain = AudioGains.For(c.Exe) }).ToList();
+        // Só a lista sai de dentro da trava: achar o nome de cada programa demora (abre o processo e
+        // lê o .exe do disco), e a mistura do som pega essa mesma trava a cada 10 ms. Com o mixer
+        // aberto na interface (pergunta a cada 3 s), o som transmitido podia falhar nesses instantes.
+        (int Pid, string Exe)[] list;
+        lock (capLock) list = captures.Values.Where(c => !c.Dead && c.Exe.Length > 0).Select(c => (c.Pid, c.Exe)).ToArray();
+        return list.Select(c => (object)new { pid = c.Pid, exe = c.Exe, name = FriendlyName(c.Pid, c.Exe), gain = AudioGains.For(c.Exe) }).ToList();
     }
 
     static string FriendlyName(int pid, string exe)

@@ -308,17 +308,26 @@ sealed unsafe class VideoStreamer : IDisposable
             Marshal.FreeCoTaskMem(arr);
             if (activate == null) throw new Exception("encoder sumiu da lista");
         });
-        Step($"abrir a placa de vídeo ({adapter.Desc})", () => CreateDevice(adapter.Luid));
-        tgt = target;
-        Step("iniciar a captura da tela/janela", () => StartCapture(target));
+        try
+        {
+            Step($"abrir a placa de vídeo ({adapter.Desc})", () => CreateDevice(adapter.Luid));
+            tgt = target;
+            Step("iniciar a captura da tela/janela", () => StartCapture(target));
 
-        // tamanho de saída: cabe em maxW x maxH mantendo proporção, sempre par (só a área escolhida)
-        double srcW = Math.Max(64, poolSize.Width * target.CropW), srcH = Math.Max(64, poolSize.Height * target.CropH);
-        double scale = Math.Min(1.0, Math.Min(maxW / srcW, maxH / srcH));
-        Width = Math.Max(64, (int)(srcW * scale) & ~1);
-        Height = Math.Max(64, (int)(srcH * scale) & ~1);
+            // tamanho de saída: cabe em maxW x maxH mantendo proporção, sempre par (só a área escolhida)
+            double srcW = Math.Max(64, poolSize.Width * target.CropW), srcH = Math.Max(64, poolSize.Height * target.CropH);
+            double scale = Math.Min(1.0, Math.Min(maxW / srcW, maxH / srcH));
+            Width = Math.Max(64, (int)(srcW * scale) & ~1);
+            Height = Math.Max(64, (int)(srcH * scale) & ~1);
 
-        Step("criar texturas de conversão", CreateOutputTextures);
+            Step("criar texturas de conversão", CreateOutputTextures);
+        }
+        catch
+        {
+            // a tentativa falhou antes de o encoder ser criado: solta a referência a ele
+            try { activate.Dispose(); } catch { }
+            throw;
+        }
         Step("configurar o encoder da placa de vídeo (se estiver no limite de sessões de codificação, " +
              "feche OBS, gravação da NVIDIA ou outros apps que gravam a tela)", () => CreateEncoder(activate));
 
@@ -523,10 +532,15 @@ sealed unsafe class VideoStreamer : IDisposable
             }
             catch (Exception ex)
             {
-                // algumas janelas (jogos em tela cheia exclusiva, anticheat) não deixam capturar:
-                // captura o monitor onde a janela está
+                // janela que já fechou: erro (nada de trocar pelo monitor inteiro sem a pessoa pedir)
+                if (!IsWindow(hwnd)) throw new Exception("a janela escolhida não existe mais");
+                // Algumas janelas (jogos em tela cheia exclusiva, anticheat) não deixam capturar. Se a
+                // janela ocupa o monitor inteiro, captura o monitor (é a mesma imagem) e AVISA na tela
+                // (antes o aviso ia só para o registro). Se não ocupa, NÃO troca pelo monitor: iria ao
+                // ar tudo o que está em volta dela. O app tenta então a captura do Chromium, só da janela.
+                if (!CoversMonitor(hwnd, hmon)) throw new Exception($"o Windows não deixou capturar esta janela ({ex.Message})");
                 item = CreateItem(window: IntPtr.Zero, monitor: hmon);
-                Program.SendJson(new { type = "warn", message = $"Não deu para capturar só a janela ({ex.Message}); capturando o monitor dela." });
+                Program.SendJson(new { type = "video-warn", message = "Não deu para capturar só a janela (tela cheia exclusiva?): transmitindo o monitor inteiro em que ela está." });
             }
         }
         else
@@ -672,8 +686,16 @@ sealed unsafe class VideoStreamer : IDisposable
                 {
                     if (device == null) return;
                     if (info.LastMouseUpdateTime != 0 && cursor != null) cursor.Update(d, info);
-                    var desc = tex.Description;
-                    OnCapturedTexture(tex, (int)desc.Width, (int)desc.Height);
+                    // Janela minimizada: fica na última imagem dela. A duplicação é do monitor inteiro e
+                    // o recorte continuaria no lugar onde a janela estava, mostrando ao vivo o que está
+                    // ATRÁS dela (área de trabalho, outras janelas). Idem por um instante depois de
+                    // restaurar: a animação de abrir ainda deixa o fundo à mostra.
+                    if (ddHwnd != IntPtr.Zero && IsIconic(ddHwnd)) ddHoldUntil = clock.ElapsedTicks + Stopwatch.Frequency * 4 / 10;
+                    if (ddHwnd == IntPtr.Zero || clock.ElapsedTicks >= ddHoldUntil)
+                    {
+                        var desc = tex.Description;
+                        OnCapturedTexture(tex, (int)desc.Width, (int)desc.Height);
+                    }
                 }
             }
             catch (Exception ex) { Log("quadro DXGI: " + ex.Message); }
@@ -700,6 +722,17 @@ sealed unsafe class VideoStreamer : IDisposable
         dup = null;
         lock (gpuLock) { try { cursor?.Dispose(); } catch { } cursor = null; }
         ddHwnd = IntPtr.Zero;
+    }
+
+    long ddHoldUntil; // (clock.ElapsedTicks) até quando a imagem da janela fica parada (minimizada/abrindo)
+
+    /// A janela ocupa o monitor inteiro? (aí capturar o monitor mostra a mesma imagem)
+    static bool CoversMonitor(IntPtr hwnd, IntPtr hmon)
+    {
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetWindowRect(hwnd, out RECT r) || !GetMonitorInfo(hmon, ref mi)) return false;
+        var m = mi.rcMonitor;
+        return r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom;
     }
 
     /// Retângulo da janela em pixels da tela (bordas visíveis, sem a sombra). Minimizada: o último válido.
@@ -1291,7 +1324,8 @@ sealed unsafe class VideoStreamer : IDisposable
                     continue;
                 }
                 long t100 = n * 10_000_000L / fps;
-                if (offGrid) t100 = (clock.ElapsedTicks - start) * 10_000_000L / Stopwatch.Frequency;
+                // (em ponto flutuante: a conta inteira estourava depois de ~25 h de transmissão seguida)
+                if (offGrid) t100 = (long)((clock.ElapsedTicks - start) * (10_000_000.0 / Stopwatch.Frequency));
                 if (encSlow) { statLate++; lateScore = Math.Min(20, lateScore + 1); }
                 else lateScore *= 0.9;
                 if (t100 <= lastTime100ns) t100 = lastTime100ns + 1000; // sempre crescente
@@ -1401,14 +1435,11 @@ sealed unsafe class VideoStreamer : IDisposable
         if (droppedHandler != null && Program.OnVideoDropped == droppedHandler) Program.OnVideoDropped = null;
         CurrentStep = "parar o encoder";
         bool tickDone = tickThread == null || tickThread.Join(3000);
-        try
-        {
-            encoder?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero);
-            encoder?.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero);
-            using var shutdown = encoder?.QueryInterfaceOrNull<IMFShutdown>();
-            shutdown?.Shutdown();
-        }
-        catch { }
+        // (cada chamada no seu try: com o encoder em erro, um aviso recusado pulava o Shutdown, que é
+        //  o que solta a thread de eventos; aí eram 3 s de espera e os objetos da placa ficavam presos)
+        try { encoder?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero); } catch { }
+        try { encoder?.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero); } catch { }
+        try { using var shutdown = encoder?.QueryInterfaceOrNull<IMFShutdown>(); shutdown?.Shutdown(); } catch { }
         bool eventDone = eventThread == null || eventThread.Join(3000);
         if (!tickDone || !eventDone)
         {
@@ -1472,6 +1503,8 @@ sealed unsafe class VideoStreamer : IDisposable
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT rect, int size);

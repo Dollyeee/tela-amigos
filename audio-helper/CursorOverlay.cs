@@ -39,7 +39,7 @@ float4 ps(VSOut i) : SV_Target
     ID3D11ShaderResourceView? srv;
     ID3D11RenderTargetView? rtv;
     ID3D11Texture2D? rtvTarget;
-    int width, height, hotX, hotY;
+    int width, height;
     int posX, posY;
     bool visible;
 
@@ -100,7 +100,14 @@ float4 ps(VSOut i) : SV_Target
                 else
                 {
                     int s = y * pitch + x * 4;
-                    if (type == 4 && buf[s + 3] == 0xFF) { px[o] = 128; px[o + 1] = 128; px[o + 2] = 128; px[o + 3] = 255; continue; }
+                    if (type == 4 && buf[s + 3] == 0xFF)
+                    {
+                        // máscara 0xFF = "XOR com a tela". XOR com preto deixa a tela como está, ou seja,
+                        // transparente (antes virava cinza também: um quadrado cinza em volta do cursor)
+                        if ((buf[s] | buf[s + 1] | buf[s + 2]) == 0) continue;
+                        px[o] = 128; px[o + 1] = 128; px[o + 2] = 128; px[o + 3] = 255;
+                        continue;
+                    }
                     px[o] = buf[s]; px[o + 1] = buf[s + 1]; px[o + 2] = buf[s + 2];
                     px[o + 3] = type == 4 ? (byte)255 : buf[s + 3];
                 }
@@ -118,14 +125,16 @@ float4 ps(VSOut i) : SV_Target
         }
         srv = device.CreateShaderResourceView(tex);
         width = w; height = h;
-        hotX = shape.HotSpot.X; hotY = shape.HotSpot.Y;
     }
 
     /// Desenha o cursor em `target` (mesmo tamanho da tela duplicada). Chamar com a placa travada (gpuLock).
     public void Draw(ID3D11Texture2D target, int texW, int texH)
     {
         if (!visible || srv == null || texW <= 0 || texH <= 0) return;
-        float x0 = posX - hotX, y0 = posY - hotY, x1 = x0 + width, y1 = y0 + height;
+        // A posição que a duplicação entrega JÁ é a do canto de cima/esquerda do desenho (o Windows já
+        // descontou o ponto de clique). Descontar de novo deixava a mãozinha, o I de texto e a mira
+        // deslocados para cima e para a esquerda (a seta comum, com o clique na ponta, não mostrava).
+        float x0 = posX, y0 = posY, x1 = x0 + width, y1 = y0 + height;
         if (x1 <= 0 || y1 <= 0 || x0 >= texW || y0 >= texH) return;
         if (!ReferenceEquals(rtvTarget, target))
         {
