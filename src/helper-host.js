@@ -18,20 +18,42 @@ function post(msg) { if (port) port.postMessage(msg); }
 function ensure() {
   if (proc) return true;
   if (!exe) return false;
-  proc = spawn(exe, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+  let p;
+  try { p = spawn(exe, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); }
+  catch (e) { post({ t: 'event', msg: { type: 'helper-error', message: e.message } }); return false; }
+  proc = p;
   buf = Buffer.alloc(0);
-  proc.on('error', (e) => post({ t: 'event', msg: { type: 'helper-error', message: e.message } }));
-  proc.stdin.on('error', () => {});
-  proc.stdout.on('data', parse);
+  p.on('error', (e) => {
+    // nem chegou a abrir (bloqueado por antivírus, arquivo sumiu): o Node não avisa "exit" nesse
+    // caso, e sem isto "proc" ficava apontando para um processo que não existe (todo pedido
+    // seguinte só esperava até estourar o tempo, sem nunca tentar abrir de novo)
+    if (proc === p && !p.pid) proc = null;
+    post({ t: 'event', msg: { type: 'helper-error', message: e.message } });
+  });
+  p.stdin.on('error', () => {});
+  p.stdout.on('data', parse);
   if (lastBoost) sendBoost(); // helper novo: reaplica a prioridade de GPU
   // o processo principal acompanha o pid: só instala atualização depois que ele sumir de verdade
-  process.parentPort.postMessage({ type: 'helper-pid', pid: proc.pid || 0 });
-  proc.on('exit', (code) => {
-    proc = null;
+  process.parentPort.postMessage({ type: 'helper-pid', pid: p.pid || 0 });
+  p.on('exit', (code) => {
+    if (proc === p) proc = null;
     process.parentPort.postMessage({ type: 'helper-pid', pid: 0 });
     post({ t: 'event', msg: { type: 'helper-exit', code } });
   });
   return true;
+}
+
+// A página da interface foi trocada (recarregou depois de cair, ou a janela foi recriada): o que a
+// anterior deixou ligado no helper (captura da tela, som, vigia de jogo) ficou sem ninguém para
+// receber e seguia rodando (placa de vídeo codificando à toa) até a próxima transmissão ou até
+// fechar o app. O id -1 não é de nenhum pedido da página nova: as respostas são ignoradas.
+function stopCaptures() {
+  if (!proc) return;
+  try {
+    for (const c of [{ cmd: 'video-stop' }, { cmd: 'stop' }, { cmd: 'sysaudio-stop' }, { cmd: 'game-watch', on: false }]) {
+      proc.stdin.write(JSON.stringify({ ...c, id: -1 }) + '\n');
+    }
+  } catch {}
 }
 
 function parse(chunk) {
@@ -74,7 +96,7 @@ process.parentPort.on('message', (e) => {
     selfPid = m.selfPid;
   } else if (m.type === 'port') {
     // nova janela/recarga: troca o canal com a interface
-    if (port) try { port.close(); } catch {}
+    if (port) { try { port.close(); } catch {} stopCaptures(); }
     port = e.ports[0];
     port.on('message', onPortMessage);
     port.start();

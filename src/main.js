@@ -586,7 +586,7 @@ ipcMain.handle('diag:build', (_e, rendererText) => buildDiag(String(rendererText
 // opts.raw: texto pronto (diagnóstico que veio de um amigo); opts.name: nome dele no arquivo
 ipcMain.handle('diag:save', async (_e, rendererText, opts = {}) => {
   const text = opts.raw ? String(rendererText).slice(0, 5_000_000) : await buildDiag(rendererText);
-  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  const stamp = localIso().replace(/[:T]/g, '-').slice(0, 16);
   const who = opts.name ? '-' + String(opts.name).replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 30) : '';
   const file = path.join(TEST_HIDDEN ? app.getPath('userData') : app.getPath('desktop'), `TelaAmigos-diagnostico${who}-${stamp}.txt`);
   fs.writeFileSync(file, '﻿' + text, 'utf8'); // com BOM: acentos certos em qualquer editor
@@ -606,8 +606,11 @@ ipcMain.handle('clip:save', (_e, name, buffer) => {
   return file;
 });
 
-// data e hora com milissegundos: dois arquivos no mesmo segundo não se sobrescrevem
-function fileStamp() { return new Date().toISOString().replace(/[:T.]/g, '-').slice(0, 23); }
+// Data e hora DO PC para os nomes de arquivo. (Antes ia em UTC: no Brasil, um clipe salvo depois
+// das 21h saía com a data do dia seguinte.)
+function localIso() { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString(); }
+// com milissegundos: dois arquivos no mesmo segundo não se sobrescrevem
+function fileStamp() { return localIso().replace(/[:T.]/g, '-').slice(0, 23); }
 // clipes e gravações: Vídeos\Tela Amigos (no teste automático, dentro do perfil de teste)
 const TEST_HIDDEN = !!process.env.TELA_TEST_HIDDEN;
 function videosDir() {
@@ -743,7 +746,12 @@ function destroyHand(id) {
 }
 
 ipcMain.on('pointer:show', (_e, p) => {
+  if (!p || typeof p !== 'object') return;
   const d = displayById(p.displayId);
+  // a posição vem do amigo (fração 0..1 da tela transmitida): fora disso a mãozinha iria parar em
+  // outro monitor, e um número absurdo fazia a criação da janela lançar erro a cada movimento
+  const frac = (v) => Math.min(1, Math.max(0, Number(v) || 0));
+  p = { ...p, x: frac(p.x), y: frac(p.y) };
   const px = Math.round(d.bounds.x + p.x * d.bounds.width - HAND_TIP.x);
   const py = Math.round(d.bounds.y + p.y * d.bounds.height - HAND_TIP.y);
   // noHand: a pessoa escondeu as mãozinhas mas quer ver os desenhos
