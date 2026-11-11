@@ -1,7 +1,7 @@
 {
   "name": "tela-amigos",
   "productName": "Tela Amigos",
-  "version": "1.0.58",
+  "version": "1.0.59",
   "description": "Compartilhamento de tela entre amigos em alta qualidade",
   "main": "src/main.js",
   "repository": {
