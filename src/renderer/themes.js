@@ -281,17 +281,103 @@
   const paintRanges = () => document.querySelectorAll('input[type=range]').forEach(paint);
   document.addEventListener('input', (e) => { if (e.target && e.target.type === 'range') paint(e.target); }, true);
 
-  function set(id) {
-    if (!byId(id) || id === current) return;
+  // troca o tema na hora (sem animação): a cor da faixa dos botões da janela vai junto, a não ser que bar=false
+  function apply(id, bar = true) {
+    if (!byId(id) || id === current) return false;
     current = id;
     try { localStorage.setItem('theme', id); } catch {}
     document.documentElement.dataset.theme = id;
-    tellMain();
+    if (bar) tellMain();
     place();
     relabel();
     syncPickers();
     paintRanges();
     for (const cb of listeners) { try { cb(id); } catch (e) { console.warn('tema:', e); } }
+    return true;
+  }
+  const set = (id) => { apply(id); };
+
+  // ---- troca escolhida pela pessoa: o tema novo "se instala" com uma animação no estilo dele ----
+  // Usa a transição de tela do Chromium (View Transitions): ela fotografa o visual de antes, troca o tema por baixo
+  // e anima a passagem (tema-instala.css diz como, para cada tema). O visual novo fica "ao vivo" durante a animação
+  // (as telas dos amigos continuam tocando). Sem animação: com as animações do Windows desligadas, nas cópias abertas
+  // pelos testes (a não ser com force) e se o Chromium não tiver o recurso.
+  const reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+  let testing = true; // até o processo principal responder (é rápido): na dúvida, sem animação
+  try { window.native.testing().then((t) => { testing = !!t; }, () => { testing = false; }); } catch { testing = false; }
+  // o que aparece na plaquinha de "instalando"; o tema mostra só o que quiser (o estilo fica no tema-instala.css)
+  const KICKER = {
+    classico: 'Instalando', arena: 'Instalando', varanda: 'Montando a', 'varanda-noite': 'Montando a', neon: 'Ligando',
+    galeria: 'Nova exposição', caderno: 'virando a página…', planta: 'Folha', terminal: '$ tela-amigos --tema terminal',
+    sessao: 'A sessão vai começar', fliperama: 'Loading', tocafitas: 'lado A',
+  };
+  const LOG = ['baixando as cores', 'trocando as letras', 'arrumando a sala', 'pronto'];
+  let active = null; // transição em andamento
+  let seq = 0;
+  // quadros da dissolução de pixels (Fliperama): blocos que acendem em ordem sorteada, 24 x 15, em 12 passos
+  function pixelFrames() {
+    const root = document.documentElement;
+    if (root.style.getPropertyValue('--vt-px0')) return;
+    const W = 24, H = 15, N = 12, cells = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) cells.push([x, y]);
+    let s = 7; // sorteio sempre igual (a mesma animação toda vez)
+    const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    for (let i = cells.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [cells[i], cells[j]] = [cells[j], cells[i]]; }
+    for (let f = 0; f <= N; f++) {
+      const upto = Math.round((cells.length * f) / N);
+      let d = '';
+      for (let i = 0; i < upto; i++) d += `M${cells[i][0]} ${cells[i][1]}h1v1h-1z`;
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${W} ${H}' preserveAspectRatio='none' shape-rendering='crispEdges'><path d='${d || 'M0 0'}' fill='${d ? '#000' : 'none'}'/></svg>`;
+      root.style.setProperty(`--vt-px${f}`, `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
+    }
+  }
+  function hud(id) {
+    const t = byId(id);
+    const el = document.getElementById('vt-hud');
+    if (!el) return;
+    el.querySelector('.vt-k').textContent = KICKER[id] || 'Instalando';
+    el.querySelector('.vt-name').textContent = t.name;
+    el.querySelectorAll('.vt-log > span').forEach((s, i) => { s.textContent = LOG[i] || ''; });
+  }
+  async function pick(id, opts = {}) {
+    if (!byId(id) || id === current) return;
+    const root = document.documentElement;
+    const animate = !!document.startViewTransition && !reduceMotion.matches && (!testing || opts.force);
+    if (!animate) { apply(id); return; }
+    const my = ++seq;
+    if (active) { try { active.skipTransition(); } catch {} try { await active.finished; } catch {} }
+    if (my !== seq) return; // outra troca pediu a vez enquanto esta esperava
+    const from = current;
+    if (id === 'fliperama') pixelFrames();
+    // de onde a animação parte (o controle que a pessoa usou), para os temas que abrem a partir de um ponto
+    const x = opts.x != null ? opts.x : innerWidth / 2, y = opts.y != null ? opts.y : innerHeight / 2;
+    root.style.setProperty('--vt-x', `${Math.round(x)}px`);
+    root.style.setProperty('--vt-y', `${Math.round(y)}px`);
+    root.dataset.vt = id;
+    root.dataset.vtFrom = from;
+    hud(id);
+    const vt = document.startViewTransition(async () => {
+      apply(id, false);
+      root.classList.add('vt-on');
+      // letras do tema novo carregadas antes da foto do visual novo (sem isso o texto sairia invisível)
+      void document.body.offsetHeight;
+      await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]);
+    });
+    active = vt;
+    const done = () => {
+      if (active !== vt) return;
+      active = null;
+      root.classList.remove('vt-on', 'vt-run');
+      delete root.dataset.vt;
+      delete root.dataset.vtFrom;
+    };
+    vt.ready.then(() => {
+      root.classList.add('vt-run');
+      // a faixa dos botões da janela (do Windows) muda de cor no meio da animação
+      setTimeout(() => { if (current === id) tellMain(); }, 500);
+    }, () => { tellMain(); });
+    try { await vt.finished; } catch {} finally { done(); if (current === id) tellMain(); }
+    return vt;
   }
 
   // as duas listas de tema (rodapé e Opções) mostram sempre o mesmo valor
@@ -301,7 +387,8 @@
     for (const p of pickers()) {
       p.textContent = '';
       for (const t of THEMES) { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; p.appendChild(o); }
-      p.onchange = () => set(p.value);
+      // a animação parte da lista de tema que a pessoa usou
+      p.onchange = () => { const r = p.getBoundingClientRect(); pick(p.value, { x: r.left + r.width / 2, y: r.top + r.height / 2 }); };
     }
     // com um tema só não há o que escolher
     for (const el of document.querySelectorAll('.theme-row')) el.classList.toggle('hidden', THEMES.length < 2);
@@ -323,7 +410,9 @@
   window.Themes = {
     list: THEMES,
     get current() { return current; },
-    set,
+    set, // na hora, sem animação (testes, capturas, o app trocando sozinho)
+    pick, // escolhida pela pessoa: com a animação de instalação (opts: x, y = de onde parte; force = mesmo nos testes)
+    get transition() { return active; }, // a animação em andamento (para as capturas de prévia)
     onChange: (cb) => listeners.push(cb),
     tileSetup,
     // quanto o tema soma à imagem de cada tela: [largura, altura] em px (moldura, legenda fora da imagem...)

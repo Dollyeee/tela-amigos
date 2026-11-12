@@ -65,7 +65,8 @@
       label.textContent = t.name;
       name.append(label, make('i', 'nt-on', 'em uso'));
       card.append(img, name);
-      const pick = () => T.set(t.id);
+      // o tema se instala com a animação dele, partindo da miniatura clicada
+      const pick = () => { const r = card.getBoundingClientRect(); T.pick(t.id, { x: r.left + r.width / 2, y: r.top + r.height / 2 }); };
       card.onclick = pick;
       card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
       box.appendChild(card);
@@ -83,12 +84,14 @@
     });
   }
 
+  // a galeria de temas aparece uma vez só, mesmo quando mais de uma versão pede (quem pulou versões)
+  let galleryShown = false;
   function entry(e) {
     const s = make('section', 'news-entry');
     s.appendChild(make('p', 'news-kicker', `Versão ${e.v}`));
     s.appendChild(make('h3', 'news-title', e.title));
     if (e.text) s.appendChild(make('p', 'news-text', e.text));
-    if (e.themes && window.Themes && window.Themes.list.length > 1) s.appendChild(gallery());
+    if (e.themes && !galleryShown && window.Themes && window.Themes.list.length > 1) { galleryShown = true; s.appendChild(gallery()); }
     if (e.items && e.items.length) {
       const ul = make('ul', 'news-list');
       for (const it of e.items) ul.appendChild(make('li', '', it));
@@ -108,6 +111,7 @@
     if (!m || !b) return;
     b.textContent = '';
     if (!list.length) b.appendChild(make('p', 'news-text', 'Nenhuma novidade registrada ainda.'));
+    galleryShown = false;
     for (const e of list) b.appendChild(entry(e));
     markTheme();
     markOnClose = auto;

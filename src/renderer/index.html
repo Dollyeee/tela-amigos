@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="themes/fliperama.css">
   <link rel="stylesheet" href="themes/tocafitas.css">
   <link rel="stylesheet" href="fx.css">
+  <link rel="stylesheet" href="tema-instala.css">
 </head>
 <body>
 
@@ -341,6 +342,19 @@
   </div>
 
   <div id="toasts" class="toasts"></div>
+
+  <!-- troca de tema: o tema novo "se instala" com uma animação no estilo dele (themes.js: pick; tema-instala.css).
+       Só aparecem durante a animação. vt-fx: camadas de efeito (faixas, cortinas, linha de varredura...);
+       vt-hud: a plaquinha de "instalando" (cada tema mostra as partes que quiser) -->
+  <div id="vt-fx" class="vt-fx" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div id="vt-hud" class="vt-hud" aria-hidden="true">
+    <span class="vt-art"><i></i><i></i><i></i></span>
+    <span class="vt-k">Instalando</span>
+    <b class="vt-name"></b>
+    <span class="vt-bar"><i></i></span>
+    <span class="vt-pct"></span>
+    <span class="vt-log"><span></span><span></span><span></span><span></span></span>
+  </div>
 
   <div id="update-bar" class="update-bar hidden">
     <span id="update-text"></span>

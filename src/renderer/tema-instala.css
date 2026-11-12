@@ -1,0 +1,396 @@
+/* =====================================================================================
+   Instalação do tema: a animação da troca escolhida pela pessoa (Themes.pick, em themes.js).
+   O Chromium fotografa o visual de antes (::view-transition-old(root)), troca o tema por baixo e mostra o
+   visual novo "ao vivo" (::view-transition-new(root)): as telas dos amigos continuam tocando. Aqui cada tema diz
+   como ele entra. Marcas no <html> durante a animação:
+     data-vt="<tema>"  o tema que está se instalando (data-vt-from: o de antes)
+     .vt-on            a plaquinha (#vt-hud) e os efeitos (#vt-fx) aparecem, já no visual novo
+     .vt-run           a partir do instante em que a animação começa: as animações da plaquinha e dos efeitos
+                       andam junto com as das fotos
+   --vt-t: quanto dura (o "relógio" fica no grupo da tela). --vt-x / --vt-y: de onde parte (o controle que a pessoa
+   usou). --vt-px0..12: quadros da dissolução de pixels do Fliperama (feitos pelo themes.js).
+   Regras: tudo o que aparece só durante a animação termina invisível (fill-mode both), senão pisca no fim; a
+   plaquinha e os efeitos ficam acima das duas fotos; atrás das fotos aparece o fundo do tema novo.
+   ===================================================================================== */
+@property --vt-n { syntax: '<integer>'; inherits: true; initial-value: 0; }
+@property --vt-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --vt-a { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@counter-style vt-fita { system: extends decimal; pad: 3 "0"; }
+
+.vt-fx, .vt-hud { display: none; }
+html.vt-on .vt-fx, html.vt-on .vt-hud { display: block; }
+.vt-fx { position: fixed; inset: 0; z-index: 2147483000; overflow: hidden; pointer-events: none; view-transition-name: vt-fx; }
+.vt-fx > i { position: absolute; display: none; }
+.vt-hud { position: fixed; z-index: 2147483001; box-sizing: border-box; pointer-events: none; view-transition-name: vt-hud; opacity: 0; }
+.vt-hud > * { display: none; }
+.vt-hud .vt-art > i { display: none; }
+.vt-hud .vt-pct::after { counter-reset: vtp var(--vt-n); content: counter(vtp) '%'; }
+.vt-hud .vt-log > span { display: block; white-space: pre; }
+.vt-hud .vt-bar > i { display: block; height: 100%; transform-origin: 0 50%; }
+
+/* as fotos: sem o esmaecer padrão do Chromium; cada tema anima as duas */
+html[data-vt]::view-transition-old(root), html[data-vt]::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+html[data-vt]::view-transition-image-pair(root) { isolation: auto; }
+html[data-vt]::view-transition-group(vt-fx), html[data-vt]::view-transition-group(vt-hud),
+html[data-vt]::view-transition-new(vt-fx), html[data-vt]::view-transition-new(vt-hud) { animation: none; }
+html[data-vt]::view-transition-group(root) { animation: vt-keep var(--vt-t, 1500ms) linear both; }
+@keyframes vt-keep { from { opacity: 1; } to { opacity: 1; } }
+/* peças comuns */
+@keyframes vt-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes vt-count { from { --vt-n: 0; } to { --vt-n: 100; } }
+@keyframes vt-show { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vt-hide { from { opacity: 1; } to { opacity: 0; } }
+
+/* ---------- Clássico: o tema abre num círculo de borda macia a partir de onde a pessoa escolheu ---------- */
+html[data-vt="classico"] { --vt-t: 1150ms; }
+html[data-vt="classico"]::view-transition-old(root) { animation: vt-cl-old 900ms cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes vt-cl-old { to { transform: scale(.985); filter: brightness(.65); } }
+html[data-vt="classico"]::view-transition-new(root) {
+  -webkit-mask-image: radial-gradient(circle at var(--vt-x) var(--vt-y), #000 calc(var(--vt-r) - 44px), transparent var(--vt-r));
+  mask-image: radial-gradient(circle at var(--vt-x) var(--vt-y), #000 calc(var(--vt-r) - 44px), transparent var(--vt-r));
+  animation: vt-cl-new 950ms cubic-bezier(.55, .05, .3, 1) both;
+}
+@keyframes vt-cl-new { from { --vt-r: 0px; } to { --vt-r: 2900px; } }
+html[data-vt="classico"] .vt-hud { left: 50%; bottom: 44px; width: 300px; margin-left: -150px; padding: 14px 18px 16px; border: 1px solid #2a2e3a; border-radius: 14px;
+  background: rgba(22, 24, 31, .95); box-shadow: 0 16px 44px rgba(0, 0, 0, .5); color: #e8eaf0; font: 14px/1.3 "Segoe UI", system-ui, sans-serif; }
+html[data-vt="classico"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html[data-vt="classico"] .vt-k { color: #8a90a2; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+html[data-vt="classico"] .vt-name { margin: 2px 0 11px; font-size: 18px; font-weight: 700; }
+html[data-vt="classico"] .vt-bar { height: 4px; border-radius: 4px; background: #2a2e3a; overflow: hidden; }
+html[data-vt="classico"] .vt-bar > i { background: linear-gradient(90deg, #7b6cff, #4da3ff); }
+html.vt-run[data-vt="classico"] .vt-hud { animation: vt-cl-hud 1150ms ease both; }
+@keyframes vt-cl-hud { 0% { opacity: 0; transform: translateY(14px); } 20%, 78% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-6px); } }
+html.vt-run[data-vt="classico"] .vt-bar > i { animation: vt-fill 700ms 180ms cubic-bezier(.3, .1, .3, 1) both; }
+
+/* ---------- Arena: vinheta de transmissão: um bloco vermelho inclinado atravessa a tela e deixa o tema novo ---------- */
+html[data-vt="arena"] { --vt-t: 1400ms; }
+html[data-vt="arena"]::view-transition-new(root) {
+  clip-path: polygon(-60vw 0, calc(var(--vt-a) + 12.5vh) 0, calc(var(--vt-a) - 12.5vh) 100%, -60vw 100%);
+  animation: vt-ar-new 760ms cubic-bezier(.75, 0, .25, 1) both;
+}
+@keyframes vt-ar-new { from { --vt-a: -45vw; } to { --vt-a: 150vw; } }
+html[data-vt="arena"] .vt-fx > i { display: block; top: -20%; height: 140%; }
+html[data-vt="arena"] .vt-fx > i:nth-child(1) { left: 0; width: 36vw; background: linear-gradient(90deg, #b8102a, #ff3347 30%, #ff3347 72%, #c4152a); box-shadow: 0 0 80px rgba(255, 51, 71, .5); }
+html[data-vt="arena"] .vt-fx > i:nth-child(2) { left: 0; width: 1.3vw; background: #fff; }
+html[data-vt="arena"] .vt-fx > i:nth-child(3) { left: 0; width: 7vw; background: #0e0f12; }
+html.vt-run[data-vt="arena"] .vt-fx > i:nth-child(1) { animation: vt-ar-slab 760ms cubic-bezier(.75, 0, .25, 1) both; }
+html.vt-run[data-vt="arena"] .vt-fx > i:nth-child(2) { animation: vt-ar-white 760ms cubic-bezier(.75, 0, .25, 1) both; }
+html.vt-run[data-vt="arena"] .vt-fx > i:nth-child(3) { animation: vt-ar-dark 760ms cubic-bezier(.75, 0, .25, 1) both; }
+/* o bloco fica centrado na borda do tema novo (--vt-a); a faixa branca na frente, a escura atrás */
+@keyframes vt-ar-slab { from { transform: translateX(-63vw) skewX(-14deg); } to { transform: translateX(132vw) skewX(-14deg); } }
+@keyframes vt-ar-white { from { transform: translateX(-24vw) skewX(-14deg); } to { transform: translateX(171vw) skewX(-14deg); } }
+@keyframes vt-ar-dark { from { transform: translateX(-73vw) skewX(-14deg); } to { transform: translateX(122vw) skewX(-14deg); } }
+html[data-vt="arena"] .vt-hud { left: 52px; bottom: 70px; display: grid; grid-template-columns: auto auto; align-items: end; column-gap: 22px; padding: 14px 24px 16px 20px;
+  border-left: 8px solid #ff3347; background: rgba(14, 15, 18, .97); box-shadow: 0 20px 50px rgba(0, 0, 0, .55); color: #f3f4f6; transform: skewX(-8deg); }
+html[data-vt="arena"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar, .vt-pct) { display: block; transform: skewX(8deg); }
+html[data-vt="arena"] .vt-k { grid-column: 1 / -1; margin-bottom: 4px; color: #ff6a78; font: 700 12px/1 "Barlow", sans-serif; letter-spacing: .26em; text-transform: uppercase; }
+html[data-vt="arena"] .vt-name { font: italic 800 50px/.95 "Barlow Condensed", "Arial Narrow", sans-serif; letter-spacing: .01em; text-transform: uppercase; }
+html[data-vt="arena"] .vt-pct { padding-bottom: 4px; color: #ff3347; font: italic 700 28px/1 "Barlow Condensed", "Arial Narrow", sans-serif; }
+html[data-vt="arena"] .vt-bar { grid-column: 1 / -1; height: 7px; margin-top: 12px; background: repeating-linear-gradient(-60deg, #2c3039 0 6px, #22252d 6px 12px); overflow: hidden; }
+html[data-vt="arena"] .vt-bar > i { background: repeating-linear-gradient(-60deg, #ff3347 0 6px, #ff6a78 6px 12px); }
+html.vt-run[data-vt="arena"] .vt-hud { animation: vt-ar-hud 1400ms both; }
+@keyframes vt-ar-hud {
+  0%, 30% { opacity: 0; clip-path: inset(0 100% 0 0); transform: skewX(-8deg); }
+  44% { opacity: 1; clip-path: inset(0 0 0 0); transform: skewX(-8deg); animation-timing-function: ease-in; }
+  84% { opacity: 1; clip-path: inset(0 0 0 0); transform: skewX(-8deg); }
+  100% { opacity: 0; clip-path: inset(0 0 0 0); transform: skewX(-8deg) translateX(-48px); }
+}
+html.vt-run[data-vt="arena"] .vt-bar > i { animation: vt-fill 620ms 520ms cubic-bezier(.4, 0, .2, 1) both; }
+html.vt-run[data-vt="arena"] .vt-pct { animation: vt-count 620ms 520ms cubic-bezier(.4, 0, .2, 1) both; }
+
+/* ---------- Varanda (dia e noite): o toldo listrado desce desenrolando o tema novo; folhas caem ---------- */
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) { --vt-t: 1550ms; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"])::view-transition-new(root) {
+  clip-path: inset(0 0 calc(100% - var(--vt-a)) 0); animation: vt-va-new 980ms 100ms cubic-bezier(.5, .05, .3, 1) both;
+}
+@keyframes vt-va-new { from { --vt-a: 0px; } to { --vt-a: calc(100vh + 90px); } }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(1) { display: block; left: -2px; right: -2px; top: 0; height: 66px;
+  background: repeating-linear-gradient(90deg, #ff6a55 0 52px, #ffd166 52px 104px);
+  -webkit-mask: linear-gradient(#000 0 0) top / 100% 46px no-repeat, radial-gradient(circle at 26px 0, #000 25.5px, transparent 26px) 0 46px / 52px 20px repeat-x;
+  mask: linear-gradient(#000 0 0) top / 100% 46px no-repeat, radial-gradient(circle at 26px 0, #000 25.5px, transparent 26px) 0 46px / 52px 20px repeat-x; }
+html.vt-run:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(1) { animation: vt-va-awn 980ms 100ms cubic-bezier(.5, .05, .3, 1) both; }
+/* a borda do tema novo fica no meio do toldo (o toldo tem 66 px) */
+@keyframes vt-va-awn { from { transform: translateY(-33px); } to { transform: translateY(calc(100vh + 57px)); } }
+/* folhas: quadrados de cantos opostos redondos, como as do tema */
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:is(:nth-child(2), :nth-child(3), :nth-child(4)) { display: block; top: -60px; width: 34px; height: 34px;
+  border-radius: 0 100% 0 100%; background: #2f9e6e; box-shadow: inset -4px -4px 0 rgba(0, 0, 0, .12); }
+html[data-vt="varanda-noite"] .vt-fx > i:is(:nth-child(2), :nth-child(3), :nth-child(4)) { background: #4fc28d; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(2) { left: 18%; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(3) { left: 63%; width: 26px; height: 26px; background: #ffd166; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(4) { left: 84%; width: 30px; height: 30px; }
+html.vt-run:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(2) { animation: vt-va-leaf1 1350ms 180ms cubic-bezier(.35, .1, .55, 1) both; }
+html.vt-run:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(3) { animation: vt-va-leaf2 1300ms 320ms cubic-bezier(.35, .1, .55, 1) both; }
+html.vt-run:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-fx > i:nth-child(4) { animation: vt-va-leaf1 1250ms 440ms cubic-bezier(.35, .1, .55, 1) both; }
+@keyframes vt-va-leaf1 { 0% { opacity: 1; transform: translate(0, 0) rotate(0deg); } 50% { transform: translate(60px, 50vh) rotate(160deg); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(10px, 95vh) rotate(300deg); } }
+@keyframes vt-va-leaf2 { 0% { opacity: 1; transform: translate(0, 0) rotate(20deg); } 50% { transform: translate(-70px, 48vh) rotate(-140deg); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-20px, 92vh) rotate(-260deg); } }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-hud { left: 50%; top: 50%; width: 330px; margin: -78px 0 0 -165px; padding: 22px 26px 24px; border-radius: 26px;
+  background: var(--panel); box-shadow: 0 8px 0 var(--edge), 0 26px 60px rgba(23, 54, 43, .28); color: var(--text); text-align: center; font: 600 15px/1.3 "Nunito", "Segoe UI", sans-serif; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-k { color: var(--muted); font: 600 15px/1.2 "Nunito", "Segoe UI", sans-serif; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-name { margin: 2px 0 16px; font: 600 32px/1.1 "Fredoka", "Segoe UI", sans-serif; }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-bar { position: relative; height: 12px; border-radius: 999px; background: var(--panel-2); }
+html:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-bar > i { border-radius: 999px; background: linear-gradient(90deg, #2f9e6e, #4fc28d); }
+html.vt-run:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-hud { animation: vt-va-hud 1550ms both; }
+@keyframes vt-va-hud { 0%, 14% { opacity: 0; transform: scale(.86); } 28% { opacity: 1; transform: scale(1.03); } 34%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(10px) scale(.97); } }
+html.vt-run:is([data-vt="varanda"], [data-vt="varanda-noite"]) .vt-bar > i { animation: vt-fill 820ms 380ms cubic-bezier(.4, .1, .3, 1) both; }
+
+/* ---------- Neon: a sala apaga e o tema novo acende piscando como um letreiro ---------- */
+html[data-vt="neon"] { --vt-t: 1650ms; }
+html[data-vt="neon"]::view-transition-old(root) { animation: vt-ne-old 420ms cubic-bezier(.4, 0, 1, 1) both; }
+@keyframes vt-ne-old { to { filter: brightness(.07) saturate(.4); } }
+html[data-vt="neon"]::view-transition-new(root) { animation: vt-ne-new 950ms 520ms linear both; }
+@keyframes vt-ne-new {
+  0% { opacity: 0; filter: brightness(2.3) saturate(1.7); }
+  4% { opacity: .85; } 7% { opacity: .04; } 12% { opacity: .92; } 15% { opacity: .12; }
+  22% { opacity: 1; filter: brightness(2) saturate(1.6); } 28% { opacity: .5; } 31% { opacity: 1; }
+  60% { filter: brightness(1.25) saturate(1.2); } 100% { opacity: 1; filter: none; }
+}
+html[data-vt="neon"] .vt-hud { left: 50%; top: 50%; width: 520px; margin: -92px 0 0 -260px; text-align: center; color: #ff3ea5; }
+html[data-vt="neon"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html[data-vt="neon"] .vt-k { color: #35e6ff; font: 600 15px/1 "Outfit", "Segoe UI", sans-serif; letter-spacing: .5em; text-transform: uppercase;
+  text-shadow: 0 0 6px #35e6ff, 0 0 18px rgba(53, 230, 255, .8); }
+html[data-vt="neon"] .vt-name { margin: 6px 0 18px; color: #ffd6ee; font: 400 96px/1 "Tilt Neon", "Outfit", sans-serif;
+  text-shadow: 0 0 4px #fff, 0 0 12px #ff3ea5, 0 0 28px #ff3ea5, 0 0 60px rgba(255, 62, 165, .85); }
+html[data-vt="neon"] .vt-bar { width: 300px; height: 4px; margin: 0 auto; border-radius: 4px; background: rgba(53, 230, 255, .12); }
+html[data-vt="neon"] .vt-bar > i { border-radius: 4px; background: #c9fbff; box-shadow: 0 0 8px #35e6ff, 0 0 20px #35e6ff; }
+html.vt-run[data-vt="neon"] .vt-hud { animation: vt-ne-hud 1650ms linear both; }
+@keyframes vt-ne-hud {
+  0%, 8% { opacity: 0; } 10% { opacity: 1; } 12% { opacity: .1; } 15% { opacity: 1; } 17% { opacity: .3; } 20%, 76% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: scale(1.04); }
+}
+html.vt-run[data-vt="neon"] .vt-name { animation: vt-ne-buzz 900ms 260ms steps(1, end) both; }
+@keyframes vt-ne-buzz { 0%, 100% { opacity: 1; } 30% { opacity: .35; } 34% { opacity: 1; } 61% { opacity: .55; } 64% { opacity: 1; } }
+html.vt-run[data-vt="neon"] .vt-bar > i { animation: vt-fill 850ms 330ms cubic-bezier(.45, 0, .3, 1) both; }
+
+/* ---------- Galeria: a parede fica branca, a placa da exposição aparece e a parede abre para o tema novo ---------- */
+html[data-vt="galeria"] { --vt-t: 1650ms; }
+html[data-vt="galeria"]::view-transition-old(root) { animation: vt-hide 1ms 330ms both; }
+html[data-vt="galeria"]::view-transition-new(root) { animation: vt-show 1ms 330ms both; }
+html[data-vt="galeria"] .vt-fx > i:nth-child(1) { display: block; inset: 0; background: #fbfaf7;
+  -webkit-mask-image: linear-gradient(90deg, transparent var(--vt-a), #000 calc(var(--vt-a) + 220px)); mask-image: linear-gradient(90deg, transparent var(--vt-a), #000 calc(var(--vt-a) + 220px)); }
+html.vt-run[data-vt="galeria"] .vt-fx > i:nth-child(1) { animation: vt-ga-wall 1650ms both; }
+@keyframes vt-ga-wall {
+  0% { opacity: 0; --vt-a: -230px; animation-timing-function: cubic-bezier(.4, 0, .6, 1); }
+  20% { opacity: 1; --vt-a: -230px; }
+  58% { opacity: 1; --vt-a: -230px; animation-timing-function: cubic-bezier(.6, 0, .25, 1); }
+  100% { opacity: 1; --vt-a: 100vw; }
+}
+html[data-vt="galeria"] .vt-hud { left: 50%; top: 50%; width: 560px; margin: -84px 0 0 -280px; text-align: center; color: #121212; }
+html[data-vt="galeria"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html[data-vt="galeria"] .vt-k { color: #8b8a84; font: 600 11px/1 "Instrument Sans", "Segoe UI", sans-serif; letter-spacing: .34em; text-transform: uppercase; }
+html[data-vt="galeria"] .vt-name { margin: 14px 0 18px; font: italic 400 84px/1 "Instrument Serif", Georgia, serif; letter-spacing: -.01em; }
+html[data-vt="galeria"] .vt-bar { width: 280px; height: 1px; margin: 0 auto; background: #dddcd6; }
+html[data-vt="galeria"] .vt-bar > i { background: #121212; }
+html.vt-run[data-vt="galeria"] .vt-hud { animation: vt-ga-hud 1650ms both; }
+@keyframes vt-ga-hud { 0%, 15% { opacity: 0; transform: translateY(8px); } 28%, 52% { opacity: 1; transform: none; } 64%, 100% { opacity: 0; transform: translateY(-4px); } }
+html.vt-run[data-vt="galeria"] .vt-bar > i { animation: vt-fill 560ms 330ms cubic-bezier(.5, 0, .2, 1) both; }
+
+/* ---------- Caderno: a folha de antes vira para a esquerda e mostra a página nova ---------- */
+html[data-vt="caderno"] { --vt-t: 1500ms; }
+html[data-vt="caderno"]::view-transition-old(root) { z-index: 2; transform-origin: 0 50%; animation: vt-ca-turn 980ms 60ms cubic-bezier(.5, .02, .45, 1) both; }
+@keyframes vt-ca-turn {
+  0% { transform: perspective(2200px) rotateY(0deg); filter: brightness(1); box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
+  35% { box-shadow: 30px 0 60px rgba(30, 30, 30, .35); }
+  100% { transform: perspective(2200px) rotateY(-104deg); filter: brightness(.55); box-shadow: 30px 0 60px rgba(30, 30, 30, 0); }
+}
+html[data-vt="caderno"]::view-transition-new(root) { animation: vt-ca-under 980ms 60ms ease-out both; }
+@keyframes vt-ca-under { from { filter: brightness(.82); } to { filter: none; } }
+html[data-vt="caderno"] .vt-hud { left: 50%; top: 50%; width: 300px; margin: -86px 0 0 -150px; padding: 22px 26px 24px; background: #fff3a1; color: #20379c;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .05), 6px 10px 22px rgba(60, 50, 20, .22); text-align: center; }
+html[data-vt="caderno"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html[data-vt="caderno"] .vt-k { color: #6b7286; font: 400 20px/1.1 "Patrick Hand", "Segoe Print", cursive; }
+html[data-vt="caderno"] .vt-name { margin: 4px 0 2px; font: 700 40px/1.1 "Kalam", "Segoe Print", cursive; }
+/* o sublinhado à mão é o "progresso": aparece da esquerda para a direita, como se estivesse sendo riscado */
+html[data-vt="caderno"] .vt-bar { width: 200px; height: 16px; margin: 0 auto;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 16'%3E%3Cpath d='M3 9c22-5 41-6 63-3s37 5 58 1 40-6 73-1' fill='none' stroke='%2320379c' stroke-width='3.2' stroke-linecap='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat; }
+html.vt-run[data-vt="caderno"] .vt-hud { animation: vt-ca-note 1500ms both; }
+@keyframes vt-ca-note {
+  0%, 18% { opacity: 0; transform: rotate(-9deg) scale(.82); }
+  30% { opacity: 1; transform: rotate(-2deg) scale(1.03); } 36%, 80% { opacity: 1; transform: rotate(-3deg); }
+  100% { opacity: 0; transform: rotate(-3deg) translateY(14px); }
+}
+html.vt-run[data-vt="caderno"] .vt-bar { animation: vt-ca-draw 560ms 520ms cubic-bezier(.4, 0, .4, 1) both; }
+@keyframes vt-ca-draw { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+
+/* ---------- Planta: o plotter desenha a folha nova de cima para baixo, com a grade e o carimbo da planta ---------- */
+html[data-vt="planta"] { --vt-t: 1550ms; }
+html[data-vt="planta"]::view-transition-new(root) { clip-path: inset(0 0 calc(100% - var(--vt-a)) 0); animation: vt-pl-new 920ms 160ms cubic-bezier(.45, 0, .55, 1) both; }
+@keyframes vt-pl-new { from { --vt-a: 0px; } to { --vt-a: 100vh; } }
+/* a linha do plotter, a cabeça que vai e volta e a grade da folha */
+html[data-vt="planta"] .vt-fx > i:nth-child(1) { display: block; left: 0; right: 0; top: -1px; height: 2px; background: #f4f8ff;
+  box-shadow: 0 0 10px 1px rgba(244, 248, 255, .9), 0 0 36px rgba(160, 200, 255, .7); }
+html[data-vt="planta"] .vt-fx > i:nth-child(2) { display: block; left: 0; top: -9px; width: 26px; height: 16px; border: 2px solid #f4f8ff; background: rgba(29, 79, 176, .85); }
+html[data-vt="planta"] .vt-fx > i:nth-child(3) { display: block; inset: 0;
+  background: linear-gradient(rgba(244, 248, 255, .14) 1px, transparent 1px) 0 0 / 40px 40px, linear-gradient(90deg, rgba(244, 248, 255, .14) 1px, transparent 1px) 0 0 / 40px 40px; }
+html.vt-run[data-vt="planta"] .vt-fx > i:nth-child(1) { animation: vt-pl-scan 920ms 160ms cubic-bezier(.45, 0, .55, 1) both, vt-hide 220ms 1080ms both; }
+html.vt-run[data-vt="planta"] .vt-fx > i:nth-child(2) { animation: vt-pl-scan 920ms 160ms cubic-bezier(.45, 0, .55, 1) both, vt-pl-zig 230ms 160ms linear 4 alternate both, vt-hide 220ms 1080ms both; }
+html.vt-run[data-vt="planta"] .vt-fx > i:nth-child(3) { animation: vt-pl-grid 1550ms linear both; }
+@keyframes vt-pl-scan { from { transform: translateY(0); } to { transform: translateY(100vh); } }
+@keyframes vt-pl-zig { from { translate: 6vw 0; } to { translate: 90vw 0; } }
+@keyframes vt-pl-grid { 0% { opacity: 0; } 12%, 70% { opacity: 1; } 100% { opacity: 0; } }
+html[data-vt="planta"] .vt-hud { right: 34px; bottom: 34px; display: grid; grid-template-columns: auto 1fr; width: 330px; border: 2px solid #f4f8ff; background: #18439a;
+  color: #f4f8ff; font: 400 12px/1 "Share Tech Mono", Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; }
+html[data-vt="planta"] .vt-hud > :is(.vt-art, .vt-k, .vt-name, .vt-bar, .vt-pct) { display: block; }
+html[data-vt="planta"] .vt-art { grid-column: 1 / -1; padding: 9px 12px; border-bottom: 1px solid rgba(244, 248, 255, .6); color: #a9c2f0; }
+html[data-vt="planta"] .vt-art::before { content: 'Projeto · Tela Amigos'; }
+html[data-vt="planta"] .vt-k { padding: 12px 12px; border-right: 1px solid rgba(244, 248, 255, .6); color: #a9c2f0; }
+html[data-vt="planta"] .vt-name { padding: 8px 12px; font: 400 22px/1 "Architects Daughter", "Segoe Print", cursive; letter-spacing: .06em; }
+html[data-vt="planta"] .vt-bar { position: relative; grid-column: 1; height: 1px; margin: 17px 12px; background: #ffe066; }
+html[data-vt="planta"] .vt-bar > i { display: none; }
+html[data-vt="planta"] .vt-bar::before, html[data-vt="planta"] .vt-bar::after { content: ''; position: absolute; top: -5px; width: 1px; height: 11px; background: #ffe066; }
+html[data-vt="planta"] .vt-bar::before { left: 0; } html[data-vt="planta"] .vt-bar::after { right: 0; }
+html[data-vt="planta"] .vt-pct { padding: 10px 12px; border-top: 1px solid rgba(244, 248, 255, .6); grid-column: 1 / -1; color: #ffe066; font-size: 13px; }
+html[data-vt="planta"] .vt-pct::before { content: 'Plotando · '; color: #a9c2f0; }
+html[data-vt="planta"] .vt-hud .vt-bar { grid-row: 3; grid-column: 1 / -1; width: calc(100% - 24px); }
+html.vt-run[data-vt="planta"] .vt-hud { animation: vt-pl-hud 1550ms both; }
+@keyframes vt-pl-hud { 0%, 6% { opacity: 0; transform: translateY(10px); } 16%, 82% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+html.vt-run[data-vt="planta"] .vt-hud .vt-bar { animation: vt-fill 920ms 160ms cubic-bezier(.45, 0, .55, 1) both; }
+html.vt-run[data-vt="planta"] .vt-pct { animation: vt-count 920ms 160ms cubic-bezier(.45, 0, .55, 1) both; }
+
+/* ---------- Terminal: o monitor desliga, o sistema "instala" digitando e a tela nova vem em varredura ---------- */
+html[data-vt="terminal"] { --vt-t: 1800ms; }
+html[data-vt="terminal"]::view-transition-old(root) { animation: vt-te-off 300ms cubic-bezier(.6, 0, 1, 1) both; }
+@keyframes vt-te-off {
+  0% { transform: none; filter: none; opacity: 1; }
+  60% { transform: scaleY(.005); filter: brightness(4) saturate(0); opacity: 1; }
+  100% { transform: scale(0, .005); filter: brightness(4) saturate(0); opacity: 0; }
+}
+html[data-vt="terminal"]::view-transition-new(root) { clip-path: inset(0 0 calc(100% - var(--vt-a)) 0); animation: vt-te-scan 560ms 1000ms steps(18, end) both; }
+@keyframes vt-te-scan { from { --vt-a: 0px; } to { --vt-a: 100vh; } }
+/* fundo preto até a varredura e a linha verde dela; linhas de tubo por cima de tudo */
+html[data-vt="terminal"] .vt-fx > i:nth-child(1) { display: block; left: 0; right: 0; top: -2px; height: 3px; background: #a8ffcb; box-shadow: 0 0 14px 3px rgba(63, 220, 134, .9); opacity: 0; }
+html[data-vt="terminal"] .vt-fx > i:nth-child(2) { display: block; inset: 0; background: repeating-linear-gradient(rgba(5, 10, 7, 0) 0 2px, rgba(5, 10, 7, .28) 2px 4px); }
+html.vt-run[data-vt="terminal"] .vt-fx > i:nth-child(1) { animation: vt-te-line 560ms 1000ms steps(18, end) both, vt-te-blip 760ms 1000ms linear both; }
+@keyframes vt-te-line { from { transform: translateY(0); } to { transform: translateY(100vh); } }
+@keyframes vt-te-blip { 0% { opacity: 0; } 2%, 72% { opacity: 1; } 100% { opacity: 0; } }
+html.vt-run[data-vt="terminal"] .vt-fx > i:nth-child(2) { animation: vt-te-tubo 1800ms linear both; }
+@keyframes vt-te-tubo { 0%, 12% { opacity: 0; } 18%, 82% { opacity: 1; } 100% { opacity: 0; } }
+html[data-vt="terminal"] .vt-hud { left: 44px; top: 64px; width: min(640px, calc(100vw - 88px)); color: #3fdc86; font: 500 15px/1.75 "JetBrains Mono", Consolas, monospace;
+  text-shadow: 0 0 8px rgba(63, 220, 134, .55); }
+html[data-vt="terminal"] .vt-hud > :is(.vt-k, .vt-log, .vt-art) { display: block; }
+html[data-vt="terminal"] .vt-k { color: #a8ffcb; }
+html[data-vt="terminal"] .vt-log > span::before { content: '> '; color: #218a54; }
+html[data-vt="terminal"] .vt-log > span:not(:last-child)::after { content: ' ............ ok'; color: #218a54; }
+html[data-vt="terminal"] .vt-log > span:last-child { color: #a8ffcb; }
+html[data-vt="terminal"] .vt-art > i:first-child { display: inline-block; width: 10px; height: 18px; margin-top: 4px; background: #3fdc86; box-shadow: 0 0 8px rgba(63, 220, 134, .7); }
+/* cada linha "digitada" em sequência */
+html.vt-run[data-vt="terminal"] .vt-hud { animation: vt-te-hud 1800ms linear both; }
+@keyframes vt-te-hud { 0%, 11% { opacity: 0; } 12%, 56% { opacity: 1; } 64%, 100% { opacity: 0; } }
+html.vt-run[data-vt="terminal"] .vt-k { animation: vt-te-type 250ms 220ms steps(29, end) both; }
+html.vt-run[data-vt="terminal"] .vt-log > span:nth-child(1) { animation: vt-te-type 160ms 500ms steps(20, end) both; }
+html.vt-run[data-vt="terminal"] .vt-log > span:nth-child(2) { animation: vt-te-type 160ms 640ms steps(20, end) both; }
+html.vt-run[data-vt="terminal"] .vt-log > span:nth-child(3) { animation: vt-te-type 160ms 780ms steps(20, end) both; }
+html.vt-run[data-vt="terminal"] .vt-log > span:nth-child(4) { animation: vt-te-type 80ms 920ms steps(8, end) both; }
+@keyframes vt-te-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+html.vt-run[data-vt="terminal"] .vt-art > i:first-child { animation: vt-te-cur 360ms steps(1, end) infinite; }
+@keyframes vt-te-cur { 50% { opacity: 0; } }
+
+/* ---------- Sessão: as cortinas fecham sobre a sala, o letreiro anuncia a sessão e elas abrem no tema novo ---------- */
+html[data-vt="sessao"] { --vt-t: 1950ms; }
+html[data-vt="sessao"]::view-transition-old(root) { animation: vt-hide 1ms 560ms both; }
+html[data-vt="sessao"]::view-transition-new(root) { animation: vt-show 1ms 560ms both; }
+html[data-vt="sessao"] .vt-fx > i:is(:nth-child(1), :nth-child(2)) { display: block; top: 0; bottom: 0; width: 51vw;
+  background: linear-gradient(rgba(0, 0, 0, 0) 60%, rgba(0, 0, 0, .55)), repeating-linear-gradient(90deg, #4a0c11 0px, #7d1a20 18px, #57101a 34px, #8c2029 52px, #4a0c11 68px); }
+html[data-vt="sessao"] .vt-fx > i:nth-child(1) { left: 0; box-shadow: inset -3px 0 0 #d8b468, 14px 0 40px rgba(0, 0, 0, .6); }
+html[data-vt="sessao"] .vt-fx > i:nth-child(2) { right: 0; box-shadow: inset 3px 0 0 #d8b468, -14px 0 40px rgba(0, 0, 0, .6); }
+/* o lambrequim com franja dourada */
+html[data-vt="sessao"] .vt-fx > i:nth-child(3) { display: block; left: 0; right: 0; top: 0; height: 74px; border-bottom: 3px solid #d8b468;
+  background: linear-gradient(rgba(0, 0, 0, .35), rgba(0, 0, 0, 0)), repeating-linear-gradient(90deg, #5b0f1a 0 40px, #6e1420 40px 80px);
+  box-shadow: 0 10px 0 -4px rgba(216, 180, 104, .55), 0 18px 30px rgba(0, 0, 0, .5); }
+html.vt-run[data-vt="sessao"] .vt-fx > i:nth-child(1) { animation: vt-se-l 1950ms both; }
+html.vt-run[data-vt="sessao"] .vt-fx > i:nth-child(2) { animation: vt-se-r 1950ms both; }
+html.vt-run[data-vt="sessao"] .vt-fx > i:nth-child(3) { animation: vt-se-top 1950ms both; }
+@keyframes vt-se-l { 0% { transform: translateX(-101%); animation-timing-function: cubic-bezier(.55, 0, .35, 1); } 28%, 52% { transform: none; animation-timing-function: cubic-bezier(.65, 0, .35, 1); } 100% { transform: translateX(-101%); } }
+@keyframes vt-se-r { 0% { transform: translateX(101%); animation-timing-function: cubic-bezier(.55, 0, .35, 1); } 28%, 52% { transform: none; animation-timing-function: cubic-bezier(.65, 0, .35, 1); } 100% { transform: translateX(101%); } }
+@keyframes vt-se-top { 0% { transform: translateY(-110%); animation-timing-function: cubic-bezier(.3, 0, .2, 1); } 18%, 84% { transform: none; animation-timing-function: cubic-bezier(.6, 0, .4, 1); } 100% { transform: translateY(-110%); } }
+html[data-vt="sessao"] .vt-hud { left: 50%; top: 50%; width: 460px; margin: -88px 0 0 -230px; padding: 26px 30px 28px; border: 1px solid #8f7238; text-align: center;
+  background: radial-gradient(ellipse at 50% 40%, rgba(243, 217, 160, .14), rgba(8, 7, 6, 0) 70%), rgba(8, 7, 6, .88); box-shadow: 0 0 0 6px rgba(8, 7, 6, .7), 0 0 0 7px #8f7238, 0 30px 70px rgba(0, 0, 0, .7); }
+html[data-vt="sessao"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html[data-vt="sessao"] .vt-k { color: #efe6d6; font: italic 400 16px/1.2 "Jost", "Segoe UI", sans-serif; letter-spacing: .04em; }
+html[data-vt="sessao"] .vt-name { margin: 10px 0 18px; font: 600 48px/1 "Cinzel", "Times New Roman", serif; letter-spacing: .22em; text-transform: uppercase;
+  background: linear-gradient(#f3d9a0, #d8b468 55%, #a8853f); -webkit-background-clip: text; background-clip: text; color: transparent; }
+html[data-vt="sessao"] .vt-bar { position: relative; width: 260px; height: 1px; margin: 0 auto; background: rgba(216, 180, 104, .25); }
+html[data-vt="sessao"] .vt-bar > i { background: linear-gradient(90deg, #a8853f, #f3d9a0); }
+html[data-vt="sessao"] .vt-bar::before, html[data-vt="sessao"] .vt-bar::after { content: ''; position: absolute; top: -3px; width: 7px; height: 7px; background: #d8b468; transform: rotate(45deg); }
+html[data-vt="sessao"] .vt-bar::before { left: -12px; } html[data-vt="sessao"] .vt-bar::after { right: -12px; }
+html.vt-run[data-vt="sessao"] .vt-hud { animation: vt-se-hud 1950ms both; }
+@keyframes vt-se-hud { 0%, 24% { opacity: 0; transform: scale(.94); } 33%, 50% { opacity: 1; transform: none; } 58%, 100% { opacity: 0; transform: scale(1.03); } }
+html.vt-run[data-vt="sessao"] .vt-bar > i { animation: vt-fill 420ms 540ms cubic-bezier(.4, 0, .3, 1) both; }
+
+/* ---------- Fliperama: "LOADING" e a tela nova aparece em blocos sorteados, como num jogo de 8 bits ---------- */
+html[data-vt="fliperama"] { --vt-t: 1700ms; }
+html[data-vt="fliperama"]::view-transition-new(root) { -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  animation: vt-fl-new 840ms 380ms both; }
+@keyframes vt-fl-new {
+  0% { -webkit-mask-image: var(--vt-px0); mask-image: var(--vt-px0); animation-timing-function: step-end; }
+  8.33% { -webkit-mask-image: var(--vt-px1); mask-image: var(--vt-px1); animation-timing-function: step-end; }
+  16.67% { -webkit-mask-image: var(--vt-px2); mask-image: var(--vt-px2); animation-timing-function: step-end; }
+  25% { -webkit-mask-image: var(--vt-px3); mask-image: var(--vt-px3); animation-timing-function: step-end; }
+  33.33% { -webkit-mask-image: var(--vt-px4); mask-image: var(--vt-px4); animation-timing-function: step-end; }
+  41.67% { -webkit-mask-image: var(--vt-px5); mask-image: var(--vt-px5); animation-timing-function: step-end; }
+  50% { -webkit-mask-image: var(--vt-px6); mask-image: var(--vt-px6); animation-timing-function: step-end; }
+  58.33% { -webkit-mask-image: var(--vt-px7); mask-image: var(--vt-px7); animation-timing-function: step-end; }
+  66.67% { -webkit-mask-image: var(--vt-px8); mask-image: var(--vt-px8); animation-timing-function: step-end; }
+  75% { -webkit-mask-image: var(--vt-px9); mask-image: var(--vt-px9); animation-timing-function: step-end; }
+  83.33% { -webkit-mask-image: var(--vt-px10); mask-image: var(--vt-px10); animation-timing-function: step-end; }
+  91.67% { -webkit-mask-image: var(--vt-px11); mask-image: var(--vt-px11); animation-timing-function: step-end; }
+  100% { -webkit-mask-image: var(--vt-px12); mask-image: var(--vt-px12); }
+}
+/* linhas de tubo de TV por cima, durante a troca */
+html[data-vt="fliperama"] .vt-fx > i:nth-child(1) { display: block; inset: 0; background: repeating-linear-gradient(rgba(8, 6, 28, 0) 0 2px, rgba(8, 6, 28, .32) 2px 4px); }
+html.vt-run[data-vt="fliperama"] .vt-fx > i:nth-child(1) { animation: vt-fl-crt 1700ms steps(1, end) both; }
+@keyframes vt-fl-crt { 0% { opacity: 0; } 6%, 86% { opacity: 1; } 100% { opacity: 0; } }
+html[data-vt="fliperama"] .vt-hud { left: 50%; top: 50%; width: 400px; margin: -74px 0 0 -200px; padding: 22px 26px 24px; background: #1d1a55; text-align: center;
+  box-shadow: 0 -4px 0 0 #f7f5ff, 0 4px 0 0 #f7f5ff, -4px 0 0 0 #f7f5ff, 4px 0 0 0 #f7f5ff, 0 -8px 0 0 #08061c, 0 8px 0 0 #08061c, -8px 0 0 0 #08061c, 8px 0 0 0 #08061c, -4px -4px 0 0 #08061c, 4px -4px 0 0 #08061c, -4px 4px 0 0 #08061c, 4px 4px 0 0 #08061c;
+  font-variant-ligatures: none; font-synthesis: none; }
+html[data-vt="fliperama"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar, .vt-pct) { display: block; }
+html[data-vt="fliperama"] .vt-k { color: #ffd23f; font: 400 22px/1 "Press Start 2P", Consolas, monospace; text-transform: uppercase; text-shadow: 3px 3px 0 #ff3d5e, 6px 6px 0 #08061c; }
+html[data-vt="fliperama"] .vt-k::after { content: '...'; display: inline-block; width: 3ch; overflow: hidden; vertical-align: bottom; text-align: left; }
+html[data-vt="fliperama"] .vt-name { margin: 16px 0 18px; color: #f7f5ff; font: 400 10px/1 "Press Start 2P", Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
+html[data-vt="fliperama"] .vt-name::before { content: 'Instalando '; color: #aaa5e6; }
+html[data-vt="fliperama"] .vt-bar { height: 18px; padding: 3px; background: #08061c; box-shadow: 0 0 0 3px #f7f5ff; }
+html[data-vt="fliperama"] .vt-bar > i { background: repeating-linear-gradient(90deg, #5be36a 0 22px, transparent 22px 27px); }
+html[data-vt="fliperama"] .vt-pct { margin-top: 14px; color: #35e0e0; font: 400 10px/1 "Press Start 2P", Consolas, monospace; }
+html.vt-run[data-vt="fliperama"] .vt-hud { animation: vt-fl-hud 1700ms steps(1, end) both; }
+@keyframes vt-fl-hud { 0% { opacity: 0; } 4%, 80% { opacity: 1; } 82% { opacity: 0; } 84% { opacity: 1; } 86%, 100% { opacity: 0; } }
+html.vt-run[data-vt="fliperama"] .vt-k::after { animation: vt-fl-dots 600ms steps(4, end) 3 both; }
+@keyframes vt-fl-dots { from { width: 0; } to { width: 4ch; } }
+html.vt-run[data-vt="fliperama"] .vt-bar > i { animation: vt-fill 840ms 380ms steps(12, end) both; }
+html.vt-run[data-vt="fliperama"] .vt-pct { animation: vt-count 840ms 380ms steps(12, end) both; }
+
+/* ---------- Toca-fitas: a fita de antes sai e a nova entra de baixo, com o contador girando ---------- */
+html[data-vt="tocafitas"] { --vt-t: 1700ms; }
+html[data-vt="tocafitas"]::view-transition-old(root) { animation: vt-tf-out 520ms cubic-bezier(.5, 0, .75, 0) both; }
+@keyframes vt-tf-out { to { transform: translateY(-14%) scale(.96); opacity: 0; } }
+html[data-vt="tocafitas"]::view-transition-new(root) { animation: vt-tf-in 860ms 360ms cubic-bezier(.2, 1.25, .4, 1) both; }
+@keyframes vt-tf-in { from { transform: translateY(100%); } to { transform: none; } }
+/* a fita: corpo escuro com parafusos, etiqueta creme com as listras e o nome escrito à mão, as bobinas girando */
+html[data-vt="tocafitas"] .vt-hud { left: 50%; top: 50%; width: 360px; height: 220px; margin: -110px 0 0 -180px; border-radius: 16px;
+  background: radial-gradient(circle at 12px 12px, #6b5340 3px, transparent 3.5px), radial-gradient(circle at calc(100% - 12px) 12px, #6b5340 3px, transparent 3.5px),
+    radial-gradient(circle at 12px calc(100% - 12px), #6b5340 3px, transparent 3.5px), radial-gradient(circle at calc(100% - 12px) calc(100% - 12px), #6b5340 3px, transparent 3.5px), #1b130e;
+  box-shadow: inset 0 0 0 2px #4a3222, 0 8px 0 #120b07, 0 30px 70px rgba(0, 0, 0, .6); }
+html[data-vt="tocafitas"] .vt-hud > :is(.vt-art, .vt-k, .vt-name, .vt-pct) { display: block; }
+html[data-vt="tocafitas"] .vt-name { position: absolute; left: 22px; right: 22px; top: 18px; height: 86px; padding: 24px 18px 0; border-radius: 6px; background: #fbf5e4;
+  box-shadow: inset 0 9px 0 #e8702a, inset 0 14px 0 #e2a52b, inset 0 19px 0 #2c8c82; color: #26306e; font: 700 34px/1.2 "Caveat", "Segoe Print", cursive; text-align: left; }
+html[data-vt="tocafitas"] .vt-k { position: absolute; z-index: 1; left: 42px; top: 84px; color: #8d7a5c; font: 400 11px/1 "Share Tech Mono", Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; }
+html[data-vt="tocafitas"] .vt-art { position: absolute; left: 50%; bottom: 22px; width: 220px; height: 62px; margin-left: -110px; border-radius: 10px; background: #0a0705; box-shadow: inset 0 0 0 2px #2c1f16; }
+html[data-vt="tocafitas"] .vt-art > i:is(:nth-child(1), :nth-child(2)) { display: block; position: absolute; top: 9px; width: 44px; height: 44px; border-radius: 50%;
+  background: radial-gradient(circle, #e9dfc8 0 6px, transparent 6.5px), conic-gradient(#e9dfc8 0 10deg, #5a4a3a 10deg 120deg, #e9dfc8 120deg 130deg, #5a4a3a 130deg 240deg, #e9dfc8 240deg 250deg, #5a4a3a 250deg 360deg);
+  box-shadow: 0 0 0 2px #e9dfc8; }
+html[data-vt="tocafitas"] .vt-art > i:nth-child(1) { left: 16px; }
+html[data-vt="tocafitas"] .vt-art > i:nth-child(2) { right: 16px; }
+html[data-vt="tocafitas"] .vt-art > i:nth-child(3) { display: block; position: absolute; left: 72px; right: 72px; top: 22px; height: 18px; background: linear-gradient(#3b2a1f, #24180f); }
+/* o contador da fita, num visor âmbar */
+html[data-vt="tocafitas"] .vt-pct { position: absolute; right: 22px; bottom: 96px; padding: 4px 8px; border-radius: 3px; background: #0a0705; color: #ffb648;
+  font: 400 15px/1 "Share Tech Mono", Consolas, monospace; letter-spacing: .14em; box-shadow: 0 0 0 2px #2c1f16; text-shadow: 0 0 6px rgba(255, 182, 72, .55); }
+html[data-vt="tocafitas"] .vt-pct::after { content: counter(vtp, vt-fita); }
+html.vt-run[data-vt="tocafitas"] .vt-hud { animation: vt-tf-hud 1700ms both; }
+@keyframes vt-tf-hud { 0%, 6% { opacity: 0; transform: translateY(24px); } 18% { opacity: 1; transform: translateY(-3px); } 22%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-16px); } }
+html.vt-run[data-vt="tocafitas"] .vt-art > i:is(:nth-child(1), :nth-child(2)) { animation: vt-tf-reel 700ms linear infinite; }
+@keyframes vt-tf-reel { to { transform: rotate(-360deg); } }
+html.vt-run[data-vt="tocafitas"] .vt-pct { animation: vt-count 1050ms 220ms cubic-bezier(.3, .1, .3, 1) both; }
+
+/* animações desligadas no Windows: sem nada disso (o themes.js já troca na hora; isto é só garantia) */
+@media (prefers-reduced-motion: reduce) {
+  html[data-vt]::view-transition-group(*), html[data-vt]::view-transition-old(*), html[data-vt]::view-transition-new(*) { animation: none !important; }
+}
