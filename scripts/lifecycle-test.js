@@ -77,6 +77,51 @@ async function pageA() {
   try {
     for (const k of ['codecBad:H265', 'codecBad:AV1']) localStorage.removeItem(k);
     localStorage.setItem('av1', '0'); localStorage.setItem('autoJoin', '0'); localStorage.setItem('autoDirect', '0'); localStorage.setItem('smartRes', '0');
+
+    // ---------------------------------------------------------------- 0) Novidades: uma vez depois de cada atualização
+    {
+      await sleep(600);
+      const N = window.News, K = N.KEY, LOG = window.CHANGELOG;
+      const keep = { seen: localStorage.getItem(K), theme: window.Themes.current };
+      const open = () => !$('#news-modal').classList.contains('hidden');
+      const entries = () => document.querySelectorAll('#news-body .news-entry').length;
+      check('novidades: numa cópia de teste não abre sozinha', !open());
+      localStorage.removeItem(K);
+      check('novidades: instalação nova não abre nada e já fica em dia', N.check({ known: false, current: '9.9.9' }).length === 0 && !open() && localStorage.getItem(K) === '9.9.9');
+      localStorage.removeItem(K);
+      const first = N.check({ known: true, current: '9.9.9' });
+      check('novidades: quem já usava o app vê tudo na primeira vez', first.length === LOG.length && open() && entries() === LOG.length, 'entradas=' + entries());
+      check('novidades: só conta como vista depois de fechar', localStorage.getItem(K) === null);
+      const cards = [...document.querySelectorAll('#news-body .news-theme')];
+      const on = () => cards.filter((c) => c.classList.contains('on')).map((c) => c.dataset.id).join(',');
+      check('novidades: galeria com todos os temas e o atual marcado', cards.length === window.Themes.list.length && on() === window.Themes.current, cards.length + ' cartões; marcado=' + on());
+      await Promise.all(cards.map((c) => c.querySelector('img')).filter(Boolean).map((im) => im.decode().catch(() => {})));
+      const noImg = cards.filter((c) => { const im = c.querySelector('img'); return !im || !im.naturalWidth; }).map((c) => c.dataset.id);
+      check('novidades: a miniatura de cada tema carregou', noImg.length === 0, noImg.join(','));
+      const other = cards.find((c) => !c.classList.contains('on'));
+      other.click();
+      check('novidades: clicar num tema troca na hora e marca o novo', window.Themes.current === other.dataset.id && on() === other.dataset.id && document.documentElement.dataset.theme === other.dataset.id);
+      window.Themes.set(keep.theme);
+      check('novidades: trocar o tema por fora também acerta a marca', on() === keep.theme);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      check('novidades: Esc fecha e a versão fica como vista', !open() && localStorage.getItem(K) === '9.9.9');
+      check('novidades: não abre de novo na mesma versão', N.check({ known: true, current: '9.9.9' }).length === 0 && !open());
+      localStorage.setItem(K, '0.0.1');
+      check('novidades: versão nova mostra o que veio depois da última vista', N.check({ known: true, current: '9.9.9' }).length === LOG.length && open());
+      $('#news-ok').click();
+      check('novidades: "Entendi" fecha e marca', !open() && localStorage.getItem(K) === '9.9.9');
+      localStorage.setItem(K, '0.0.1');
+      $('#btn-news').click();
+      check('novidades: o link do rodapé abre todas as versões', open() && entries() === LOG.length);
+      $('#news-modal').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      check('novidades: clicar fora fecha; aberta pelo rodapé não mexe no que já foi visto', !open() && localStorage.getItem(K) === '0.0.1');
+      // volta ao que estava: a versão de verdade e o que este perfil de teste tinha guardado
+      const real = await window.native.appVersion();
+      localStorage.setItem(K, real);
+      N.check({ known: true, current: real });
+      if (keep.seen === null) localStorage.removeItem(K); else localStorage.setItem(K, keep.seen);
+    }
+
     await join('VIDA A');
     const peer = () => [...state.peers.values()][0];
     await until(() => peer() && peer().pc.connectionState === 'connected' && peer().h265 !== undefined, 30000, 'conectar ao amigo');
@@ -301,6 +346,18 @@ async function pageB() {
   try {
     for (const k of ['clipSys', 'mediactl', 'gamehide', 'autoMeasure']) localStorage.setItem(k, '0');
     await sleep(800);
+    // Esta cópia abre JÁ no Fliperama (guardado pela rodada anterior, no fim deste roteiro): é o tema que tira quatro
+    // botões da barra de cima. Trocar de tema tem de devolver todos na ordem da página (na v1.0.60 "Parar" voltava
+    // antes de "+ 2ª tela" e "Ajustes", até reabrir o app).
+    {
+      const HOME = 'btn-stats,btn-camera,btn-share,btn-share2,btn-adjust,btn-stop,btn-options,btn-leave,btn-close-room';
+      const top = () => [...document.querySelector('.top-actions').children].map((e) => e.id).join(',');
+      const bootTheme = window.Themes.current;
+      window.Themes.set('classico');
+      if (bootTheme === 'fliperama') check('abrir o app no Fliperama e trocar de tema: botões de cima na ordem certa', top() === HOME, top());
+      else log('CHECK pulado abrir o app no Fliperama e trocar de tema (vale a partir da segunda rodada: o tema fica guardado agora)');
+      localStorage.setItem('theme', 'fliperama'); // só para a próxima abertura desta cópia de teste; agora segue no Clássico
+    }
     // "Entrar sozinho na última sala": com a opção ligada, o app tem que entrar sem ninguém clicar
     const already = !$('#room').classList.contains('hidden'); // (rodada anterior deixou ligado: entrou ao abrir)
     if (!already) {

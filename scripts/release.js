@@ -9,7 +9,23 @@ const root = path.join(__dirname, '..');
 const run = (cmd, env) => execSync(cmd, { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } });
 const out = (cmd) => execSync(cmd, { cwd: root, encoding: 'utf8' }).trim();
 
-// antes de tudo: compila o helper e roda o teste automático (duas cópias do app conectando e
+const bump = process.argv.find((a) => ['patch', 'minor', 'major'].includes(a)) || 'patch';
+const pkgFile = path.join(root, 'package.json');
+const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+const [ma, mi, pa] = pkg.version.split('.').map(Number);
+const next = bump === 'major' ? `${ma + 1}.0.0` : bump === 'minor' ? `${ma}.${mi + 1}.0` : `${ma}.${mi}.${pa + 1}`;
+const skipBump = process.argv.includes('--no-bump');
+
+// antes de tudo, as novidades: o que os amigos leem na primeira vez que abrem o app atualizado. Sem a entrada
+// desta versão no topo de src/renderer/changelog.js nada é publicado. "--no-notes" publica sem ela (a tela de
+// novidades simplesmente não abre nessa versão).
+const target = skipBump ? pkg.version : next;
+try { run(`node scripts/news-test.js${process.argv.includes('--no-notes') ? '' : ` --para=${target}`}`); } catch {
+  console.error(`\nNovidades: a conferência acima falhou. Conte o que mudou na versão ${target} numa entrada nova no topo de\nsrc/renderer/changelog.js e rode de novo. Versão NÃO publicada.`);
+  process.exit(1);
+}
+
+// depois: compila o helper e roda o teste automático (duas cópias do app conectando e
 // transmitindo). Se falhar, nada é publicado. "--skip-test" pula (só em emergência).
 run('npm run build:helper');
 if (!process.argv.includes('--skip-test')) {
@@ -20,12 +36,6 @@ if (!process.argv.includes('--skip-test')) {
   }
 }
 
-const bump = process.argv.find((a) => ['patch', 'minor', 'major'].includes(a)) || 'patch';
-const pkgFile = path.join(root, 'package.json');
-const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
-const [ma, mi, pa] = pkg.version.split('.').map(Number);
-const next = bump === 'major' ? `${ma + 1}.0.0` : bump === 'minor' ? `${ma}.${mi + 1}.0` : `${ma}.${mi}.${pa + 1}`;
-const skipBump = process.argv.includes('--no-bump');
 if (!skipBump) {
   pkg.version = next;
   fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2) + '\n');

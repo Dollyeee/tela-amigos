@@ -111,6 +111,8 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
   - Cada tema tem as próprias cores, letras e arrumação da entrada, da sala e do "Compartilhar". O que cada botão faz não muda; em alguns temas parte dos botões de cada tela fica no "⋯".
   - **Emotes, mãozinha e riscos por tema**: os seis emotes são os mesmos para todos, e cada um vê no desenho do tema que escolheu. A mãozinha e os riscos da caneta também, inclusive os que aparecem no monitor de quem transmite.
   - Ainda sem tema: a janelinha da sobreposição, a de escolher área e as cores do gráfico do histórico.
+  - **Fliperama legível (v1.0.61)**: a letra de pixel do desenho fechava a abertura do "c" e do "C" em letra pequena e em negrito ("Tuca" saía "Tuoa"). Ela ficou só no texto corrido e nos nomes, sem negrito e em tamanhos que ficam legíveis de 100% a 200% de escala; botões, rótulos e avisos usam a letra dos títulos. Medido com as ferramentas `letras-*` do catálogo (fora do repositório).
+- **Novidades (v1.0.61)**: depois de cada atualização o app abre **uma vez** uma tela contando o que mudou naquela versão (a primeira mostra os temas, com as miniaturas: clicar numa troca o tema na hora). Fechou ("Entendi", Esc ou clicando fora), não aparece mais até a próxima atualização; quem pulou versões vê todas as que perdeu. Para rever quando quiser: **Novidades**, no rodapé da tela de entrada. Quem acabou de instalar o app não vê nada (não há "o que mudou").
 
 ## Desenvolver
 ```
@@ -121,8 +123,15 @@ npm run release           # sobe a versão, compila e publica no GitHub -> amigo
 ```
 Requer Node.js, .NET 10 SDK e `gh` logado.
 
+**Antes de cada `npm run release`**: contar o que mudou numa entrada nova no topo de `src/renderer/changelog.js`, com o
+número que a versão vai ter e em linguagem de quem usa o app. É o que a tela de novidades mostra aos amigos; sem ela o
+release para logo no começo (`--no-notes` publica assim mesmo: nessa versão a tela não abre).
+
 Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada vez):
-- `npm test` – teste automático geral (roda sozinho no `npm run release`, junto com `scripts/netctl-test.js`);
+- `npm test` – teste automático geral (roda sozinho no `npm run release`, junto com `scripts/netctl-test.js` e
+  `scripts/news-test.js`);
+- `node scripts/news-test.js` – a tela de novidades sem abrir o app: os textos de cada versão e a regra de abrir uma
+  vez depois de atualizar (o resto dela, com a janela de verdade, está no `lifecycle-test.js`);
 - `node scripts/lifecycle-test.js` – parar/sair no meio do início, área da tela, reinícios automáticos, troca
   de codec, clipes seguindo a tela (captura falsa: não usa a placa de vídeo);
 - `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro.
@@ -140,6 +149,10 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
   emotes, mãozinha e riscos de cada tema; `fonts/` – as letras dos temas, dentro do app (licenças em `fonts/licencas`).
   Os `.css` dos temas (menos o `arena.css`) são gerados de moldes com `node design/catalogo-temas/app-css.js <tema>`;
   a pasta `design/` (catálogo, moldes e capturas) fica fora do repositório.
+- `src/renderer/changelog.js` – as novidades de cada versão; `news.js` – a tela que mostra (abre sozinha uma vez por
+  atualização; guarda a última versão vista no `localStorage`); `news/tema-<id>.jpg` – miniaturas dos temas, refeitas
+  com `node scripts/theme-shots.js --size=1040x650 --prefix=mini- --cenas=2-sala-foco` e depois
+  `node_modules/electron/dist/electron.exe scripts/news-thumbs.js` quando um tema muda de cara.
 - `audio-helper/` – `VideoStreamer.cs` (captura + encoder), `HdrToneMapper.cs`, `Program.cs` (áudio por app)
 - `online-server/` – sala online (Cloudflare Worker + Durable Object; mesmo protocolo de `signaling.js`).
   Publicar: `cd online-server && npx wrangler login && npx wrangler deploy`; depois pôr a URL `wss://...`

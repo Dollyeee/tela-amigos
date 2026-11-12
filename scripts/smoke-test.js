@@ -30,6 +30,12 @@ async function join(name) {
   localStorage.setItem('mediactl', '0'); // nunca aperta tecla de mídia de verdade no teste
   localStorage.setItem('gamehide', '0'); // um jogo aberto no PC não pode esconder a prévia do teste
   await sleep(800);
+  // novidades: numa cópia de teste a tela não abre sozinha; pelo rodapé abre, mostra a versão mais nova e fecha
+  if (window.News.isOpen()) throw new Error('a tela de novidades abriu sozinha numa cópia de teste');
+  $('#btn-news').click();
+  if (!window.News.isOpen() || !document.querySelector('#news-body .news-entry .news-title')) throw new Error('a tela de novidades não abriu pelo rodapé');
+  window.News.close();
+  if (window.News.isOpen()) throw new Error('a tela de novidades não fechou');
   $('#name').value = name;
   checkName();
   joinRoom('127.0.0.1');

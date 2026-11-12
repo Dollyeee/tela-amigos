@@ -8,6 +8,8 @@
 //   --size=LxA        tamanho da janela (padrão 1280x800; o menor que o app aceita é 900x560)
 //   --eval=<arquivo>  para medir: roda o arquivo na página depois das capturas da entrada (ou, com --eval-sala, com a
 //                     sala montada no primeiro tema), mostra o que ele devolver e termina
+//   --cenas=a,b       só estas cenas (o fim do nome do arquivo, ex.: --cenas=2-sala-foco,1c-novidades)
+//   --so-entrada      para depois das cenas da tela de entrada (não entra na sala)
 // Saída: design/capturas/<tema>-<n>-<cena>.png (janela de 1280 x 800).
 // Rodar depois de mexer em src/renderer/themes/*.css, no themes.js ou no style.css.
 const { spawn } = require('child_process');
@@ -55,7 +57,9 @@ async function page(CFG) {
     throw new Error('tempo esgotado: ' + what);
   };
   // a captura é pedida ao processo principal por uma linha no console (ver main.js)
-  const shot = async (name) => { await sleep(450); console.log('SHOT ' + CFG.out + '/' + CFG.prefix + name + '.png'); await sleep(1300); log('captura ' + CFG.prefix + name); };
+  // (com --cenas, as outras cenas são montadas do mesmo jeito mas não viram arquivo nem esperam)
+  const want = (name) => !CFG.only.length || CFG.only.some((s) => name.endsWith('-' + s));
+  const shot = async (name) => { if (!want(name)) return; await sleep(450); console.log('SHOT ' + CFG.out + '/' + CFG.prefix + name + '.png'); await sleep(1300); log('captura ' + CFG.prefix + name); };
   // um app de antes dos temas não tem estes ganchos: aí só existe o visual de sempre
   const T = window.Themes || { list: [{ id: 'classico' }], set() {}, syncSelects() {} };
   const setQ = typeof setQText === 'function' ? setQText
@@ -97,14 +101,17 @@ async function page(CFG) {
     const cv = { tatico: await canvasOf('tatico', '#123'), corrida: await canvasOf('corrida', '#234'), aventura: await canvasOf('aventura', '#312'), codigo: await canvasOf('codigo', '#222') };
 
     // ---------------------------------------------------------------- entrada
-    const rooms = () => {
-      discovered = [
-        { ip: '26.87.140.12', hostName: 'Bia', members: 3, names: ['Bia', 'Rafa', 'Léo'] },
-        { ip: '26.44.9.130', hostName: 'Léo', members: 2, names: ['Léo', 'Tuca'] },
-      ];
-      renderRooms();
-      $('#rooms-searching').textContent = '';
-    };
+    // salas de mentira. A procura de salas de verdade roda de tempos em tempos e redesenha a lista (vazia): a partir
+    // daqui todo redesenho usa estas, senão uma captura ou outra saía com "Nenhuma sala encontrada"
+    const FAKE_ROOMS = [
+      { ip: '26.87.140.12', hostName: 'Bia', members: 3, names: ['Bia', 'Rafa', 'Léo'] },
+      { ip: '26.44.9.130', hostName: 'Léo', members: 2, names: ['Léo', 'Tuca'] },
+    ];
+    const renderRoomsReal = renderRooms;
+    renderRooms = () => { discovered = FAKE_ROOMS; renderRoomsReal(); $('#rooms-searching').textContent = ''; };
+    // (e o "procurando..." que pisca enquanto ela roda fica sempre apagado)
+    new MutationObserver(() => { if ($('#rooms-searching').textContent) $('#rooms-searching').textContent = ''; }).observe($('#rooms-searching'), { childList: true, characterData: true, subtree: true });
+    const rooms = () => renderRooms();
     $('#name').value = 'Tuca';
     if (window.paintMyName) window.paintMyName(); // alguns temas dão oi pelo nome
     // nada guardado de outra vez que este teste rodou (a sala de teste ficava na lista de recentes)
@@ -121,9 +128,19 @@ async function page(CFG) {
       $('#btn-host').textContent = 'Hospedar sala';
       await shot(`${t}-1-entrada`);
       if (open) { $('#my-room').classList.remove('hidden'); $('#btn-host').textContent = hostText; await shot(`${t}-1b-entrada-sala-aberta`); }
+      // a tela de novidades (o que mudou em cada versão): o começo e o fim da rolagem
+      if (window.News && (want(`${t}-1c-novidades`) || want(`${t}-1d-novidades-fim`))) {
+        window.News.open();
+        await Promise.all([...document.querySelectorAll('#news-body img')].map((im) => im.decode().catch(() => {})));
+        await shot(`${t}-1c-novidades`);
+        $('#news-body').scrollTop = $('#news-body').scrollHeight;
+        await shot(`${t}-1d-novidades-fim`);
+        window.News.close();
+      }
     }
 
     if (CFG.evalCode && !CFG.evalRoom) { log('EVAL ' + JSON.stringify(await window.__shotsEval())); log('FIM'); setTimeout(() => window.close(), 300); return; }
+    if (CFG.lobbyOnly) { log('FIM'); setTimeout(() => window.close(), 300); return; }
     // ---------------------------------------------------------------- sala com três amigos de mentira
     checkName();
     joinRoom('127.0.0.1');
@@ -214,7 +231,7 @@ async function page(CFG) {
       force.textContent = '';
       // emotes, mãozinha, toque e riscos dos amigos em cima da tela da Bia. Nunca na "minha" tela: isso abriria
       // as janelas por cima do monitor de verdade (para elas existe o scripts/fx-shots.js, que não mostra nada)
-      if (typeof showInk === 'function') {
+      if (typeof showInk === 'function' && want(`${t}-3b-emotes-e-riscos`)) {
         const tb = state.peers.get('901').tile;
         const wave = (y) => Array.from({ length: 44 }, (_, i) => [0.1 + i * 0.011, y + Math.sin(i / 3) * 0.05, 0.1 + (i + 1) * 0.011, y + Math.sin((i + 1) / 3) * 0.05]);
         showInk('901', '902', 'Rafa', wave(0.3));                                                     // caneta do Rafa
@@ -349,6 +366,7 @@ async function page(CFG) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tela-temas-'));
   const file = path.join(dir, 'pagina.js');
   const cfg = { themes: THEMES, out: OUT.replace(/\\/g, '/'), scenes: scenes(), prefix: PREFIX,
+    only: opt('cenas').split(',').map((s) => s.trim()).filter(Boolean), lobbyOnly: process.argv.includes('--so-entrada'),
     evalCode: opt('eval') ? fs.readFileSync(path.resolve(opt('eval')), 'utf8') : '', evalRoom: process.argv.includes('--eval-sala') };
   const evalFn = cfg.evalCode ? `window.__shotsEval = async () => (${cfg.evalCode}\n);\n` : '';
   fs.writeFileSync(file, `${evalFn}(${page})(${JSON.stringify(cfg)});\n`);
