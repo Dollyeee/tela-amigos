@@ -122,6 +122,37 @@ async function pageA() {
       if (keep.seen === null) localStorage.removeItem(K); else localStorage.setItem(K, keep.seen);
     }
 
+    // ---------------------------------------------------------------- 0b) Troca de tema com a animação de instalação
+    {
+      const T = window.Themes, root = document.documentElement;
+      const keepTheme = T.current;
+      const clean = () => !root.classList.contains('vt-on') && !root.classList.contains('vt-run') && !root.dataset.vt && !T.transition
+        && getComputedStyle($('#vt-hud')).display === 'none' && getComputedStyle($('#vt-fx')).display === 'none';
+      T.set('classico');
+      await T.pick('arena');
+      check('troca de tema numa cópia de teste: na hora, sem animação', T.current === 'arena' && root.dataset.theme === 'arena' && clean());
+      if (document.startViewTransition) {
+        const p = T.pick('neon', { force: true });
+        let vt = null;
+        for (let i = 0; i < 200 && !(vt = T.transition); i++) await sleep(5);
+        if (vt) await vt.ready;
+        check('troca com animação: a plaquinha e os efeitos aparecem enquanto o tema se instala', !!vt && root.classList.contains('vt-on') && root.dataset.vt === 'neon'
+          && getComputedStyle($('#vt-hud')).display !== 'none' && $('#vt-hud .vt-name').textContent === 'Neon');
+        const t0 = performance.now();
+        await p;
+        const dur = performance.now() - t0;
+        check('troca com animação: termina no tema novo, sem nada sobrando na tela', T.current === 'neon' && root.dataset.theme === 'neon' && clean(), Math.round(dur) + ' ms');
+        // duas trocas seguidas: a segunda corta a primeira e vale a última
+        const p1 = T.pick('fliperama', { force: true });
+        await sleep(120);
+        const p2 = T.pick('tocafitas', { force: true });
+        await Promise.all([p1, p2]);
+        check('duas trocas seguidas: vale a última, sem restos', T.current === 'tocafitas' && root.dataset.theme === 'tocafitas' && clean());
+        check('dissolução do Fliperama: os quadros foram montados', !!root.style.getPropertyValue('--vt-px12'));
+      } else log('CHECK pulado troca com animação (sem transição de tela neste Chromium)');
+      T.set(keepTheme);
+    }
+
     await join('VIDA A');
     const peer = () => [...state.peers.values()][0];
     await until(() => peer() && peer().pc.connectionState === 'connected' && peer().h265 !== undefined, 30000, 'conectar ao amigo');

@@ -11,6 +11,17 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.62',
+    title: 'Cada tema se instala do seu jeito',
+    text: 'Agora, quando você troca de tema, ele se instala com uma animação no estilo dele: o toldo da Varanda desce, o Neon acende piscando, as cortinas da Sessão abrem, o Fliperama carrega em blocos… Clique num tema aqui embaixo para ver.',
+    themes: true,
+    items: [
+      'Cada um tem a sua: o Clássico abre num círculo, o Arena passa uma faixa vermelha, a Galeria monta a exposição, o Caderno vira a página, a Planta é desenhada pelo plotter, o Terminal digita a instalação e o Toca-fitas troca a fita.',
+      'Leva menos de 2 segundos, e as telas dos amigos continuam passando durante a animação.',
+      'Quem desligou as animações do Windows vê a troca na hora, como antes.',
+    ],
+  },
+  {
     v: '1.0.61',
     title: 'Temas: escolha a cara do app',
     text: 'São dez visuais novos, além do Clássico. Clique em um para experimentar agora: muda só para você e dá para trocar quando quiser.',

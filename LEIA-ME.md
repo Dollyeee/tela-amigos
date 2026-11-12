@@ -111,6 +111,7 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
   - Cada tema tem as próprias cores, letras e arrumação da entrada, da sala e do "Compartilhar". O que cada botão faz não muda; em alguns temas parte dos botões de cada tela fica no "⋯".
   - **Emotes, mãozinha e riscos por tema**: os seis emotes são os mesmos para todos, e cada um vê no desenho do tema que escolheu. A mãozinha e os riscos da caneta também, inclusive os que aparecem no monitor de quem transmite.
   - Ainda sem tema: a janelinha da sobreposição, a de escolher área e as cores do gráfico do histórico.
+  - **Tema se instalando (v1.0.62)**: ao escolher um tema (na lista ou na galeria das novidades), ele "se instala" com uma animação no estilo dele, em menos de 2 s: Clássico abre num círculo a partir de onde você clicou, Arena passa uma faixa vermelha, Varanda desce o toldo, Neon acende piscando, Galeria monta a exposição, Caderno vira a página, Planta é desenhada pelo plotter, Terminal digita a instalação, Sessão fecha e abre as cortinas, Fliperama carrega em blocos e Toca-fitas troca a fita. As telas dos amigos continuam passando durante a animação. Com as animações do Windows desligadas, a troca é na hora.
   - **Fliperama legível (v1.0.61)**: a letra de pixel do desenho fechava a abertura do "c" e do "C" em letra pequena e em negrito ("Tuca" saía "Tuoa"). Ela ficou só no texto corrido e nos nomes, sem negrito e em tamanhos que ficam legíveis de 100% a 200% de escala; botões, rótulos e avisos usam a letra dos títulos. Medido com as ferramentas `letras-*` do catálogo (fora do repositório).
 - **Novidades (v1.0.61)**: depois de cada atualização o app abre **uma vez** uma tela contando o que mudou naquela versão (a primeira mostra os temas, com as miniaturas: clicar numa troca o tema na hora). Fechou ("Entendi", Esc ou clicando fora), não aparece mais até a próxima atualização; quem pulou versões vê todas as que perdeu. Para rever quando quiser: **Novidades**, no rodapé da tela de entrada. Quem acabou de instalar o app não vê nada (não há "o que mudou").
 
@@ -147,6 +148,8 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
 - `src/renderer/themes.js` – os temas (lista, troca e o que cada um muda de lugar ou de texto); `themes/<id>.css` – o
   visual de cada um, todo sob `html[data-theme="<id>"]` (o Clássico é o próprio `style.css`); `fx.js` e `fx.css` –
   emotes, mãozinha e riscos de cada tema; `fonts/` – as letras dos temas, dentro do app (licenças em `fonts/licencas`).
+  `tema-instala.css` – a animação de cada tema se instalando: `Themes.pick()` usa a transição de tela do Chromium
+  (View Transitions); `Themes.set()` troca na hora (testes e capturas).
   Os `.css` dos temas (menos o `arena.css`) são gerados de moldes com `node design/catalogo-temas/app-css.js <tema>`;
   a pasta `design/` (catálogo, moldes e capturas) fica fora do repositório.
 - `src/renderer/changelog.js` – as novidades de cada versão; `news.js` – a tela que mostra (abre sozinha uma vez por
