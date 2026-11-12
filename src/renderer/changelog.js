@@ -11,6 +11,21 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.63',
+    title: 'Os temas ganharam vida',
+    text: 'Agora cada tema reage ao que acontece na sala: quando alguém entra, começa a transmitir ou manda mensagem. E alguns têm detalhes que se mexem sozinhos. Escolha um tema aqui embaixo e entre numa sala para ver.',
+    themes: true,
+    items: [
+      '**Fliperama:** as estrelas piscam, o bonequinho de quem chega pula e aparece "JOGADOR 2 ENTROU!" no alto; as mensagens surgem letra por letra.',
+      '**Toca-fitas:** as bobinas giram na fita de quem está ao vivo e o ponteiro acompanha o som da tela.',
+      '**Sessão:** as luzes da sala apagam quando alguém começa a transmitir, e as lâmpadas do "Compartilhar tela" correm.',
+      '**Varanda:** as folhas balançam com a brisa, os festões do toldo balançam quando o mouse passa e, à noite, aparecem vaga-lumes.',
+      'Nos outros: o **Neon** pisca o letreiro quando alguém entra, o **Terminal** digita as mensagens, o **Caderno** circula o "ao vivo!", a **Planta** desenha as medidas da tela nova, a **Arena** vira o placar, e a **Galeria** e o **Clássico** fazem tudo de um jeito mais discreto.',
+      'Tudo para sozinho quando você está jogando em tela cheia, no modo leve ou com a janela minimizada. Quem desligou as animações do Windows não vê nada se mexendo.',
+      '**Consertos:** no Varanda (dia e noite), transmitindo no modo Grade ou sozinho, o "Parar" caía em cima do "Trocar tela" e a Câmera e as Estatísticas sumiam. No Clássico, a barra de cima ficava espremida, com os botões quebrando em duas linhas; agora, quando falta espaço, os botões de apoio viram só o ícone.',
+    ],
+  },
+  {
     v: '1.0.62',
     title: 'Cada tema se instala do seu jeito',
     text: 'Agora, quando você troca de tema, ele se instala com uma animação no estilo dele: o toldo da Varanda desce, o Neon acende piscando, as cortinas da Sessão abrem, o Fliperama carrega em blocos… Clique num tema aqui embaixo para ver.',
