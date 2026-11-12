@@ -107,6 +107,10 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
   - *Atraso*: sair da "Imagem lisa" devolve o som ao atraso normal (ficava +0,35 s para sempre); o modo guardado por amigo vale também em conexões novas.
   - *Servidor de vídeo*: uma tela não é mais puxada em dobro depois de a conexão com o amigo ser refeita (gastava o limite do mês em dobro); as estatísticas (S) mostram as telas que vêm por ele.
   - Menores: caneta/rastro voltam a desenhar depois de a tela sair e voltar; a câmera não fica ligada com dois cliques seguidos; a interface que recarrega no meio de uma transmissão manda o auxiliar parar a captura; clipes, fotos e diagnósticos saem com a data e a hora do PC (iam em UTC); traços e mãozinhas de um amigo têm ritmo máximo; cursor no lugar certo e monitor com escala (125%, 150%) na resolução certa na captura do Windows 10; o H.265/AV1 só fica bloqueado para enviar num PC quando a interface cai de verdade transmitindo nele (falta de memória não conta mais); se o auxiliar de captura fechar com a captura do Chromium, o app avisa que o som parou.
+- **Temas (v1.0.60)**: dez visuais novos para o app, além do de sempre (**Clássico**, que continua sendo o padrão): **Arena**, **Varanda** (dia e noite), **Neon**, **Galeria**, **Caderno**, **Planta**, **Terminal**, **Sessão**, **Fliperama** e **Toca-fitas**. Escolha em **Opções → Aparência → Tema** ou no rodapé da tela de entrada: troca na hora, fica salvo e vale só no seu PC (cada amigo usa o que quiser; ninguém vê o tema do outro).
+  - Cada tema tem as próprias cores, letras e arrumação da entrada, da sala e do "Compartilhar". O que cada botão faz não muda; em alguns temas parte dos botões de cada tela fica no "⋯".
+  - **Emotes, mãozinha e riscos por tema**: os seis emotes são os mesmos para todos, e cada um vê no desenho do tema que escolheu. A mãozinha e os riscos da caneta também, inclusive os que aparecem no monitor de quem transmite.
+  - Ainda sem tema: a janelinha da sobreposição, a de escolher área e as cores do gráfico do histórico.
 
 ## Desenvolver
 ```
@@ -122,11 +126,20 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
 - `node scripts/lifecycle-test.js` – parar/sair no meio do início, área da tela, reinícios automáticos, troca
   de codec, clipes seguindo a tela (captura falsa: não usa a placa de vídeo);
 - `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro.
+- `node scripts/theme-shots.js [tema ...]` – fotografa os temas no app de verdade com a janela escondida: uma sala de
+  mentira com três "amigos" (sem vídeo, som nem placa de vídeo), cerca de 20 cenas por tema, em `design/capturas/`
+  (`--size=900x560` muda o tamanho da janela). `node_modules/electron/dist/electron.exe scripts/fx-shots.js [tema ...]`
+  faz o mesmo com a mãozinha, os riscos e os emotes que aparecem no monitor de quem transmite, sem mostrar nada na tela.
 
 - `src/main.js` – processo principal (janela, sala em segundo plano, procura de salas, atualização)
 - `src/room-server.js`, `src/signaling.js` – servidor da sala (processo próprio, sobrevive ao app)
 - `src/helper-host.js` – processo que roda o AudioHelper e fala direto com a interface
 - `src/renderer/` – interface, WebRTC, `native-video.js` (vídeo nativo no WebRTC)
+- `src/renderer/themes.js` – os temas (lista, troca e o que cada um muda de lugar ou de texto); `themes/<id>.css` – o
+  visual de cada um, todo sob `html[data-theme="<id>"]` (o Clássico é o próprio `style.css`); `fx.js` e `fx.css` –
+  emotes, mãozinha e riscos de cada tema; `fonts/` – as letras dos temas, dentro do app (licenças em `fonts/licencas`).
+  Os `.css` dos temas (menos o `arena.css`) são gerados de moldes com `node design/catalogo-temas/app-css.js <tema>`;
+  a pasta `design/` (catálogo, moldes e capturas) fica fora do repositório.
 - `audio-helper/` – `VideoStreamer.cs` (captura + encoder), `HdrToneMapper.cs`, `Program.cs` (áudio por app)
 - `online-server/` – sala online (Cloudflare Worker + Durable Object; mesmo protocolo de `signaling.js`).
   Publicar: `cd online-server && npx wrangler login && npx wrangler deploy`; depois pôr a URL `wss://...`
