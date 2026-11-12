@@ -327,6 +327,19 @@
     </div>
   </div>
 
+  <!-- ============ NOVIDADES (o que mudou em cada versão: news.js; os textos ficam em changelog.js) ============ -->
+  <div id="news-modal" class="modal hidden">
+    <div class="modal-card news-card">
+      <header class="modal-head"><h2>Novidades</h2></header>
+      <!-- "nettest-body" é o miolo de texto de janela que todos os temas já vestem (margens, letra) -->
+      <div id="news-body" class="nettest-body news-body"></div>
+      <footer class="modal-foot">
+        <span class="muted">Aparece uma vez depois de cada atualização. Para rever: "Novidades", no rodapé da tela de entrada.</span>
+        <button id="news-ok" class="primary">Entendi</button>
+      </footer>
+    </div>
+  </div>
+
   <div id="toasts" class="toasts"></div>
 
   <div id="update-bar" class="update-bar hidden">
@@ -336,6 +349,7 @@
   </div>
   <div class="app-version">
     <span id="app-version"></span>
+    <button id="btn-news" class="link-btn" title="O que mudou em cada versão do app">Novidades</button>
     <button id="btn-check-update" class="link-btn">Procurar atualização</button>
     <label class="theme-pick theme-row" title="A cara do app neste PC. Cada amigo escolhe a sua."><span>Tema</span><select id="theme-pick"></select></label>
   </div>
@@ -348,6 +362,8 @@
   <script src="native-video.js"></script>
   <script src="sfu.js"></script>
   <script src="netctl.js"></script>
+  <script src="changelog.js"></script>
+  <script src="news.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

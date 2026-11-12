@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('native', {
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
   saveShot: (buffer, name) => ipcRenderer.invoke('shot:save', buffer, name),
   appVersion: () => ipcRenderer.invoke('app:version'),
+  testing: () => ipcRenderer.invoke('app:testing'),
   recovered: () => ipcRenderer.invoke('app:recovered'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),

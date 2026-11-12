@@ -611,6 +611,8 @@ function setupAutoUpdate() {
 }
 
 ipcMain.handle('app:version', () => app.getVersion());
+// cópia aberta por um script de teste: a tela de novidades não abre sozinha por cima do que o teste confere
+ipcMain.handle('app:testing', () => !!process.env.TELA_TEST_SCRIPT);
 ipcMain.handle('app:autostart', (_e, on) => {
   if (!app.isPackaged) return false; // rodando pelo npm start: não mexe no Windows
   if (typeof on === 'boolean') app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'] });

@@ -690,3 +690,31 @@ html:is([data-theme="classico"], :not([data-theme])) :is(.theme-only, .enh-seg, 
 .theme-pick select option, .opt-theme-row select option { background: #12141b; color: #eceef4; }
 .opt-theme-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 6px; font-size: 12.5px; color: #c3c8d6; cursor: default; margin-top: 0; }
 .opt-theme-row select { font-size: 12px; padding: 3px 8px; border-radius: 8px; max-width: 132px; }
+
+/* =====================================================================================
+   Novidades: o que mudou em cada versão (news.js; os textos ficam em changelog.js).
+   Só usa as cores do tema (--panel, --line, --accent...), então acompanha qualquer tema.
+   ===================================================================================== */
+/* dentro da sala o rodapé é só a versão e a atualização; "Novidades" fica na tela de entrada */
+#room:not(.hidden) ~ .app-version #btn-news { display: none; }
+.news-card { width: min(880px, 94vw); }
+.news-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 20px; }
+.news-entry + .news-entry { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+.news-kicker { margin: 0 0 4px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.news-title { margin: 0 0 8px; font-size: 21px; line-height: 1.2; font-weight: 700; }
+.news-text { margin: 0; max-width: 68ch; font-size: 14px; line-height: 1.5; }
+/* galeria de temas: a miniatura de cada um; clicar troca na hora */
+.news-themes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
+.news-theme { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2);
+  overflow: hidden; cursor: pointer; transition: border-color .15s, transform .15s; }
+.news-theme:hover { border-color: var(--accent); transform: translateY(-1px); }
+.news-theme:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.news-theme img { display: block; width: 100%; aspect-ratio: 8 / 5; object-fit: cover; background: var(--bg); }
+.news-theme .nt-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 10px 8px; border-top: 1px solid var(--line);
+  font-size: 13px; font-weight: 600; white-space: nowrap; }
+.news-theme .nt-label { overflow: hidden; text-overflow: ellipsis; }
+.news-theme .nt-on { display: none; font-style: normal; font-size: 11px; font-weight: 600; color: var(--accent-2); }
+.news-theme.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.news-theme.on .nt-on { display: inline; }
+.news-list { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; padding-left: 20px; font-size: 13.5px; line-height: 1.45; }
+.news-list li::marker { color: var(--accent-2); }
