@@ -1,0 +1,156 @@
+/* Emotes, mãozinha ("dedo") e toque no jeito de cada tema. Os desenhos em si vêm do fx.js; aqui ficam a plaquinha
+   do nome, a ondinha do toque e o jeito de o emote subir.
+   Vale na janela principal (.float-emoji, .hand, .press-ripple, .react-bar) e nas janelas que ficam por cima do
+   monitor de quem transmite (.emote, .hand, #tag, .ripple): as duas marcam o tema em <html data-theme>.
+   No visual clássico nada daqui muda nada. */
+.fx-emo { display: block; width: 1em; height: 1em; margin: 0 auto; overflow: visible; }
+.react-bar button .fx-emo { width: 24px; height: 24px; }
+.float-emoji { --rise: -220px; }
+.emote { --rise: -340px; }
+
+/* ---------- Arena: adesivo de transmissão, plaquinha inclinada, toque em losango ---------- */
+html[data-theme="arena"] .fx-emo { filter: drop-shadow(3px 3px 0 rgba(0, 0, 0, .45)); }
+html[data-theme="arena"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="arena"] :is(.float-emoji, .emote) { animation-name: fx-up-arena; text-shadow: none; filter: none; }
+@keyframes fx-up-arena {
+  0% { transform: translateY(0) scale(.3) rotate(-14deg); opacity: 0; }
+  10% { transform: translateY(-14px) scale(1.25) rotate(4deg); opacity: 1; }
+  18% { transform: translateY(-22px) scale(1) rotate(-3deg); }
+  100% { transform: translateY(var(--rise)) scale(1) rotate(-3deg); opacity: 0; }
+}
+html[data-theme="arena"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 4px auto 0; padding: 2px 9px 1px; border-radius: 0; background: #0e0f12; color: #fff;
+  font: italic 800 12px/1.25 "Barlow Condensed", "Arial Narrow", sans-serif; letter-spacing: .06em; text-transform: uppercase; clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); }
+html[data-theme="arena"] .emote small { font-size: 15px; }
+html[data-theme="arena"] .hand { filter: drop-shadow(3px 3px 0 rgba(0, 0, 0, .5)); }
+html[data-theme="arena"] :is(.hand span, #tag) { padding: 1px 10px; border-radius: 0; background: var(--c); color: #0e0f12; font: italic 800 12px/1.3 "Barlow Condensed", "Arial Narrow", sans-serif;
+  letter-spacing: .06em; text-transform: uppercase; clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); }
+html[data-theme="arena"] #tag { font-size: 15px; }
+html[data-theme="arena"] :is(.press-ripple, .ripple) { border-radius: 0; border-width: 3px; animation-name: fx-ripple-arena; }
+@keyframes fx-ripple-arena { 0% { transform: rotate(45deg) scale(.4); opacity: 1; } 100% { transform: rotate(45deg) scale(3.6); opacity: 0; } }
+
+/* ---------- Varanda (dia e noite): adesivo fofo, nome numa pílula branca, toque em bolinha ---------- */
+html[data-theme^="varanda"] .fx-emo { filter: drop-shadow(0 3px 0 rgba(23, 54, 43, .28)); }
+html[data-theme^="varanda"] .react-bar button .fx-emo { filter: none; }
+html[data-theme^="varanda"] :is(.float-emoji, .emote) { animation-name: fx-up-varanda; text-shadow: none; filter: none; }
+@keyframes fx-up-varanda {
+  0% { transform: translateY(0) scale(.5) rotate(-10deg); opacity: 0; }
+  12% { transform: translateY(-18px) scale(1.15) rotate(8deg); opacity: 1; }
+  35% { transform: translateY(calc(var(--rise) * .3)) rotate(-7deg); }
+  60% { transform: translateY(calc(var(--rise) * .6)) rotate(6deg); }
+  100% { transform: translateY(var(--rise)) rotate(-4deg); opacity: 0; }
+}
+html[data-theme^="varanda"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 4px auto 0; padding: 1px 9px; border-radius: 999px; background: #fff; color: #17362b;
+  font: 700 11.5px/1.5 "Nunito", "Segoe UI", sans-serif; box-shadow: 0 2px 0 rgba(23, 54, 43, .2); }
+html[data-theme^="varanda"] .emote small { font-size: 14px; }
+html[data-theme^="varanda"] .hand { filter: drop-shadow(0 3px 0 rgba(23, 54, 43, .3)); }
+html[data-theme^="varanda"] :is(.hand span, #tag) { padding: 1px 9px 1px 7px; border-radius: 999px; background: #fff; color: #17362b; font: 700 11.5px/1.5 "Nunito", "Segoe UI", sans-serif; box-shadow: 0 2px 0 rgba(23, 54, 43, .2); }
+html[data-theme^="varanda"] :is(.hand span, #tag)::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; background: var(--c); }
+html[data-theme^="varanda"] #tag { font-size: 14px; }
+html[data-theme^="varanda"] :is(.press-ripple, .ripple) { border: none; background: var(--c); animation-name: fx-ripple-varanda; }
+@keyframes fx-ripple-varanda { 0% { transform: scale(.5); opacity: .7; } 100% { transform: scale(4.2); opacity: 0; } }
+
+/* ---------- Neon: tudo em tubo de luz; o emote acende piscando ---------- */
+html[data-theme="neon"] :is(.float-emoji, .emote) { animation-name: fx-up-neon; text-shadow: none; filter: none; }
+@keyframes fx-up-neon {
+  0% { transform: translateY(0) scale(.9); opacity: 0; }
+  4% { opacity: 1; }
+  7% { opacity: .2; }
+  10% { opacity: 1; }
+  13% { opacity: .35; }
+  17% { transform: translateY(-16px) scale(1); opacity: 1; }
+  100% { transform: translateY(var(--rise)) scale(1); opacity: 0; }
+}
+html[data-theme="neon"] :is(.float-emoji, .emote) small { margin-top: 4px; padding: 0; background: none; color: #f4f0ff; font: 400 13px/1.2 "Tilt Neon", "Segoe UI", sans-serif; text-shadow: 0 0 6px #ff3ea5, 0 0 14px #ff3ea5; }
+html[data-theme="neon"] .emote small { font-size: 17px; }
+html[data-theme="neon"] .hand { filter: none; }
+html[data-theme="neon"] :is(.hand span, #tag) { padding: 0 2px; border-radius: 0; background: none; color: color-mix(in srgb, var(--c) 45%, #fff); font: 400 15px/1.2 "Tilt Neon", "Segoe UI", sans-serif;
+  text-shadow: 0 0 6px var(--c), 0 0 14px var(--c); }
+html[data-theme="neon"] #tag { font-size: 18px; }
+html[data-theme="neon"] :is(.press-ripple, .ripple) { border-width: 2px; border-color: color-mix(in srgb, var(--c) 45%, #fff); box-shadow: 0 0 8px var(--c), inset 0 0 6px var(--c); }
+
+/* ---------- Galeria: etiquetas brancas de filete preto, nome em itálico de catálogo ---------- */
+html[data-theme="galeria"] .fx-emo { filter: drop-shadow(0 6px 5px rgba(0, 0, 0, .28)); }
+html[data-theme="galeria"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="galeria"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="galeria"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 1px 8px 2px; border-radius: 0; background: #fff; color: #121212; box-shadow: 0 0 0 1px #121212;
+  font: italic 400 14px/1.2 "Instrument Serif", Georgia, serif; }
+html[data-theme="galeria"] .emote small { font-size: 18px; }
+html[data-theme="galeria"] .hand { filter: drop-shadow(0 4px 4px rgba(0, 0, 0, .3)); }
+html[data-theme="galeria"] :is(.hand span, #tag) { padding: 0 8px 2px; border-radius: 0; background: #fff; color: #121212; box-shadow: 0 0 0 1px #121212; font: italic 400 15px/1.3 "Instrument Serif", Georgia, serif; }
+html[data-theme="galeria"] #tag { font-size: 19px; }
+html[data-theme="galeria"] :is(.press-ripple, .ripple) { border-width: 1.5px; border-color: #121212; box-shadow: 0 0 0 1.5px #fff, inset 0 0 0 1.5px #fff; }
+
+/* ---------- Caderno: bilhetes amarelos, nome a caneta, toque em volta de caneta vermelha ---------- */
+html[data-theme="caderno"] .fx-emo { filter: drop-shadow(2px 3px 0 rgba(0, 0, 0, .16)); }
+html[data-theme="caderno"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="caderno"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="caderno"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 3px auto 0; padding: 0; background: none; color: #fff; font: 700 15px/1.2 "Kalam", "Segoe Print", cursive;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .85), 0 0 6px rgba(0, 0, 0, .6); }
+html[data-theme="caderno"] .emote small { font-size: 19px; }
+html[data-theme="caderno"] .hand { filter: drop-shadow(1px 3px 0 rgba(0, 0, 0, .25)); }
+html[data-theme="caderno"] :is(.hand span, #tag) { padding: 3px 8px 0; border-radius: 0; background: #fff3a1; color: #20379c; box-shadow: 1px 2px 0 rgba(0, 0, 0, .14); font: 700 14px/1.3 "Kalam", "Segoe Print", cursive; transform: rotate(-3deg); }
+html[data-theme="caderno"] #tag { font-size: 17px; }
+html[data-theme="caderno"] :is(.press-ripple, .ripple) { border-width: 2.4px; border-color: #e23b3b; border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px; }
+
+/* ---------- Planta: balões e legendas de desenho técnico ---------- */
+html[data-theme="planta"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="planta"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 1px 7px; border: 1px solid rgba(255, 255, 255, .6); border-radius: 0; background: #18439a; color: #f4f8ff;
+  font: 400 11px/1.3 "Share Tech Mono", Consolas, monospace; text-transform: uppercase; }
+html[data-theme="planta"] .emote small { font-size: 14px; }
+html[data-theme="planta"] .hand { filter: drop-shadow(0 2px 4px rgba(6, 20, 60, .6)); }
+html[data-theme="planta"] :is(.hand span, #tag) { padding: 1px 7px; border: 1px solid rgba(255, 255, 255, .6); border-radius: 0; background: #18439a; color: #f4f8ff; font: 400 11px/1.3 "Share Tech Mono", Consolas, monospace; text-transform: uppercase; }
+html[data-theme="planta"] #tag { font-size: 14px; }
+html[data-theme="planta"] :is(.press-ripple, .ripple) { border: 1.5px dashed #f4f8ff; }
+
+/* ---------- Terminal: etiquetas de texto que sobem aos pulinhos, mira fina, toque quadrado ---------- */
+.fx-emo-terminal { width: 2.18em; text-transform: none; }
+.react-bar button .fx-emo-terminal { width: 44px; height: 20px; }
+html[data-theme="terminal"] :is(.float-emoji, .emote) { animation-name: fx-up-terminal; animation-timing-function: steps(11, end); text-shadow: none; filter: none; }
+html[data-theme="terminal"] .emote { animation-timing-function: steps(17, end); }
+@keyframes fx-up-terminal { 0% { transform: translateY(0); opacity: 0; } 5% { opacity: 1; } 82% { opacity: 1; } 100% { transform: translateY(var(--rise)); opacity: 0; } }
+html[data-theme="terminal"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 3px auto 0; padding: 0 5px; border: 1px solid #17422a; border-radius: 0; background: #050a07; color: #a8ffcb;
+  font: 700 11px/15px "JetBrains Mono", Consolas, monospace; text-transform: lowercase; }
+html[data-theme="terminal"] .emote small { font-size: 14px; line-height: 19px; }
+html[data-theme="terminal"] .hand { filter: none; }
+html[data-theme="terminal"] :is(.hand span, #tag) { padding: 0 5px; border: 1px solid var(--c); border-radius: 0; background: #050a07; color: color-mix(in srgb, var(--c) 55%, #fff); font: 700 11px/15px "JetBrains Mono", Consolas, monospace; text-transform: lowercase; }
+html[data-theme="terminal"] #tag { font-size: 14px; line-height: 19px; }
+html[data-theme="terminal"] :is(.press-ripple, .ripple) { border: 2px solid var(--c); border-radius: 0; animation-timing-function: steps(5, end); }
+
+/* ---------- Sessão: medalhões dourados que sobem devagar como créditos, foco de luz, nome em letra de cartaz ---------- */
+html[data-theme="sessao"] .fx-emo { filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .6)); }
+html[data-theme="sessao"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="sessao"] :is(.float-emoji, .emote) { animation-name: fx-up-sessao; animation-timing-function: linear; text-shadow: none; filter: none; }
+@keyframes fx-up-sessao { 0% { transform: translateY(0); opacity: 0; } 12% { opacity: 1; } 78% { opacity: 1; } 100% { transform: translateY(var(--rise)); opacity: 0; } }
+html[data-theme="sessao"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 2px 8px 1px; border: 1px solid #8f7238; border-radius: 0; background: #100d0a; color: #f3d9a0;
+  font: 600 9px/1.4 "Cinzel", "Times New Roman", serif; letter-spacing: .2em; text-transform: uppercase; }
+html[data-theme="sessao"] .emote small { font-size: 12px; }
+html[data-theme="sessao"] .hand { filter: drop-shadow(0 0 8px rgba(243, 217, 160, .45)); }
+html[data-theme="sessao"] :is(.hand span, #tag) { padding: 2px 8px 1px; border: 1px solid #8f7238; border-radius: 0; background: #100d0a; color: #f3d9a0; font: 600 9px/1.4 "Cinzel", "Times New Roman", serif; letter-spacing: .2em; text-transform: uppercase; }
+html[data-theme="sessao"] #tag { font-size: 12px; }
+html[data-theme="sessao"] :is(.press-ripple, .ripple) { border: 1.5px solid #f3d9a0; box-shadow: 0 0 10px rgba(243, 217, 160, .5), inset 0 0 8px rgba(243, 217, 160, .3); }
+
+/* ---------- Fliperama: desenhos de pixel que sobem aos pulos, luva de pixel, toque quadrado ---------- */
+html[data-theme="fliperama"] .fx-emo { filter: drop-shadow(3px 3px 0 rgba(8, 6, 28, .6)); }
+html[data-theme="fliperama"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="fliperama"] :is(.float-emoji, .emote) { animation-timing-function: steps(8, end); text-shadow: none; filter: none; }
+html[data-theme="fliperama"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 3px 6px; border-radius: 0; background: #08061c; color: #ffd23f;
+  font: 700 11px/1 "Pixelify Sans", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+html[data-theme="fliperama"] .emote small { font-size: 14px; }
+html[data-theme="fliperama"] .hand { filter: drop-shadow(3px 3px 0 rgba(8, 6, 28, .55)); }
+html[data-theme="fliperama"] :is(.hand span, #tag) { padding: 3px 6px; border-radius: 0; background: var(--c); color: #08061c; font: 700 11px/1 "Pixelify Sans", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 0 0 2px #08061c; }
+html[data-theme="fliperama"] #tag { font-size: 14px; }
+html[data-theme="fliperama"] :is(.press-ripple, .ripple) { border: 4px solid var(--c); border-radius: 0; animation-timing-function: steps(4, end); }
+
+/* ---------- Toca-fitas: disquinhos que chegam girando, mão creme, nome numa etiqueta de fita escrita à mão ---------- */
+html[data-theme="tocafitas"] .fx-emo { filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .35)); }
+html[data-theme="tocafitas"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="tocafitas"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="tocafitas"] :is(.float-emoji, .emote) .fx-emo { animation: fx-spin-tocafitas 2.2s linear; }
+@keyframes fx-spin-tocafitas { from { transform: rotate(-200deg); } 55% { transform: rotate(0deg); } to { transform: rotate(0deg); } }
+html[data-theme="tocafitas"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 4px auto 0; padding: 5px 9px 0; border-radius: 3px; background: #fbf5e4; color: #26306e; box-shadow: inset 0 3px 0 #e8702a, 0 0 0 1px #b8a37c;
+  font: 700 15px/1.1 "Caveat", "Segoe Print", cursive; }
+html[data-theme="tocafitas"] .emote small { font-size: 20px; }
+html[data-theme="tocafitas"] .hand { filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .35)); }
+html[data-theme="tocafitas"] :is(.hand span, #tag) { padding: 5px 9px 0; border-radius: 3px; background: #fbf5e4; color: #26306e; box-shadow: inset 0 3px 0 var(--c), 0 0 0 1px #b8a37c; font: 700 15px/1.1 "Caveat", "Segoe Print", cursive; }
+html[data-theme="tocafitas"] #tag { font-size: 20px; }
+html[data-theme="tocafitas"] :is(.press-ripple, .ripple) { border: 3px solid #ffb648; box-shadow: 0 0 0 2px #2b1c13, inset 0 0 0 2px #2b1c13; }

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('native', {
   buildDiagnostics: (text) => ipcRenderer.invoke('diag:build', text),
   autostart: (on) => ipcRenderer.invoke('app:autostart', on),
   startedHidden: () => ipcRenderer.invoke('app:started-hidden'),
+  theme: (t) => ipcRenderer.send('theme:set', t),
   focusWindow: () => ipcRenderer.invoke('window:focus'),
   trayStatus: (s) => ipcRenderer.send('tray:status', s),
   saveClip: (name, buffer) => ipcRenderer.invoke('clip:save', name, buffer),

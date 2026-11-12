@@ -5,7 +5,21 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ws: wss:; media-src 'self' blob: mediastream:">
   <title>Tela Amigos</title>
+  <script src="themes.js"></script>
+  <script src="fx.js"></script>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="themes/arena.css">
+  <link rel="stylesheet" href="themes/varanda.css">
+  <link rel="stylesheet" href="themes/neon.css">
+  <link rel="stylesheet" href="themes/galeria.css">
+  <link rel="stylesheet" href="themes/caderno.css">
+  <link rel="stylesheet" href="themes/planta.css">
+  <link rel="stylesheet" href="themes/terminal.css">
+  <link rel="stylesheet" href="themes/sessao.css">
+  <link rel="stylesheet" href="themes/fliperama.css">
+  <link rel="stylesheet" href="themes/tocafitas.css">
+  <link rel="stylesheet" href="fx.css">
 </head>
 <body>
 
@@ -16,7 +30,7 @@
       <div class="lobby-head">
         <img src="icon.png" alt="" class="lobby-logo">
         <div>
-          <h1>Tela Amigos</h1>
+          <h1>Tela <em>Amigos</em></h1>
           <p class="muted">Compartilhe a tela com os amigos em 60 fps, direto de PC para PC.</p>
         </div>
       </div>
@@ -55,6 +69,8 @@
       </div>
       <p id="lobby-error" class="error"></p>
     </div>
+    <!-- lembrete das teclas (só alguns temas mostram) -->
+    <div id="lobby-keys" class="keys-bar theme-only"><span><kbd>Tab</kbd> próximo campo</span><span><kbd>Enter</kbd> entrar</span></div>
   </section>
 
   <!-- ============ SALA ============ -->
@@ -63,6 +79,7 @@
       <div class="room-info">
         <span class="app-brand"><img src="icon.png" alt="">Tela Amigos</span>
         <button id="btn-copy-ip" class="chip" title="Copiar IP da sala"></button>
+        <span id="live-count" class="live-count"></span>
       </div>
 
       <div class="layout-switch" role="group" aria-label="Layout">
@@ -77,6 +94,7 @@
         <button id="btn-share2" class="ghost hidden" title="Transmite mais uma tela ou janela (30 fps). Aparece no canto da sua tela principal; cada amigo pode trocar ou esconder">+ 2ª tela</button>
         <button id="btn-adjust" class="ghost hidden" title="Mudar qualidade sem parar de compartilhar">Ajustes</button>
         <button id="btn-stop" class="danger hidden">Parar</button>
+        <button id="btn-options" class="ghost theme-only" title="Opções e ferramentas da sala">Opções</button>
         <button id="btn-leave" class="ghost" title="Sai da sala; se você hospeda, a sala continua aberta">Sair</button>
         <button id="btn-close-room" class="ghost danger-text hidden" title="Fecha a sala para todo mundo">Fechar sala</button>
       </div>
@@ -93,8 +111,8 @@
       <div class="adjust-row">
         <label class="field">
           <span>Resolução</span>
-          <select id="adj-res">
-            <option value="native">Nativa do monitor</option>
+          <select id="adj-res" data-seg>
+            <option value="native" data-short="Nativa">Nativa do monitor</option>
             <option value="1440">1440p</option>
             <option value="1080">1080p</option>
             <option value="720">720p</option>
@@ -102,19 +120,19 @@
         </label>
         <label class="field">
           <span>FPS</span>
-          <select id="adj-fps"><option value="60">60</option><option value="30">30</option></select>
+          <select id="adj-fps" data-seg><option value="60">60</option><option value="30">30</option></select>
         </label>
         <label class="field">
           <span>Prioridade</span>
-          <select id="adj-mode">
+          <select id="adj-mode" data-seg>
             <option value="motion">Fluidez</option>
             <option value="detail">Nitidez</option>
           </select>
         </label>
         <label class="field">
           <span>Captura</span>
-          <select id="adj-engine">
-            <option value="native">Nativa (adapta à rede)</option>
+          <select id="adj-engine" data-seg>
+            <option value="native" data-short="Nativa">Nativa (adapta à rede)</option>
             <option value="native-direct">Nativa direta</option>
             <option value="chromium">Chromium</option>
           </select>
@@ -136,14 +154,18 @@
 
     <div class="room-body">
       <aside class="sidebar">
-        <h3>Na sala</h3>
+        <h3><span class="h3-t">Na sala</span><b id="people-count" class="people-count theme-only"></b></h3>
+        <div class="people-head theme-only"><span>#</span><span>Jogador</span><span>FPS</span><span>MS</span></div>
         <ul id="people"></ul>
         <div class="chat">
           <div id="chat-log" class="chat-log"></div>
           <input id="chat-input" maxlength="300" placeholder="Mensagem para a sala (Enter envia)">
+          <button id="chat-send" class="chat-send" title="Enviar (Enter)">Enviar</button>
         </div>
         <details id="side-opts" class="side-opts">
           <summary>Opções</summary>
+          <div class="opt-group theme-row">Aparência</div>
+          <label class="sound-toggle theme-row opt-theme-row" title="A cara do app neste PC. Cada amigo escolhe a sua; não muda nada para os outros."><span>Tema</span><select id="opt-theme"></select></label>
           <div class="opt-group">Geral</div>
           <label class="sound-toggle switch"><span>Sons de aviso</span><input type="checkbox" id="opt-sounds"></label>
           <label class="sound-toggle switch" title="O app abre junto com o Windows, só no ícone da bandeja (perto do relógio)"><span>Abrir com o Windows</span><input type="checkbox" id="opt-autostart"></label>
@@ -180,7 +202,7 @@
         </div>
         <div id="countdown" class="countdown hidden"></div>
         <div id="stage-main" class="stage-main"></div>
-        <div id="stage-strip" class="stage-strip"></div>
+        <div id="stage-strip" class="stage-strip"><div id="my-slot" class="my-slot theme-only"><b>Sua tela</b><span>aparece aqui quando você compartilhar</span></div><div id="stats-pane" class="stats-pane theme-only"><div class="sp-head"><b>Estatísticas</b><span><kbd>S</kbd> esconder</span></div><div id="sp-table" class="sp-table"></div><p id="sp-detail" class="sp-detail"></p><div class="sp-hist"><p id="sp-label" class="sp-label"></p><div id="sp-spark" class="sp-spark"></div><p class="sp-axis"><span>-10 min</span><span>agora</span></p></div></div></div>
         <div id="me-mini" class="me-mini hidden"></div>
         <div id="empty" class="empty">
           <p>Ninguém está compartilhando ainda.</p>
@@ -188,6 +210,10 @@
         </div>
       </main>
     </div>
+    <!-- alguns temas trazem os botões da sala para cá (ver "place" em themes.js) -->
+    <div id="dock" class="dock hidden"></div>
+    <!-- lembrete das teclas (só alguns temas mostram) -->
+    <div id="keys-bar" class="keys-bar theme-only"><span><kbd>G</kbd> grade</span><span><kbd>F</kbd> foco</span><span><kbd>S</kbd> estatísticas</span><span><kbd data-hk="share">Ctrl+Shift+S</kbd> transmitir/parar</span><span><kbd data-hk="mute">Ctrl+Shift+M</kbd> mutar todos</span><span><kbd data-hk="clip">Ctrl+Shift+C</kbd> salvar clipe</span></div>
   </section>
 
   <!-- ============ MODAL TESTE DE CONEXÃO ============ -->
@@ -232,20 +258,22 @@
       </header>
 
       <div id="sources" class="sources"></div>
+      <!-- resumo do que vai ser transmitido (só alguns temas mostram) -->
+      <div id="share-sum" class="share-sum theme-only"></div>
 
       <div class="settings">
         <label class="field field-wide">
           <span>Captura</span>
-          <select id="opt-engine">
-            <option value="native" selected>Nativa 60 fps, se adapta à rede (recomendado)</option>
-            <option value="native-direct">Nativa direta: qualidade máxima, só para rede perfeita</option>
-            <option value="chromium">Chromium (compatibilidade)</option>
+          <select id="opt-engine" data-seg>
+            <option value="native" selected data-short="Nativa, adapta à rede">Nativa 60 fps, se adapta à rede (recomendado)</option>
+            <option value="native-direct" data-short="Nativa direta">Nativa direta: qualidade máxima, só para rede perfeita</option>
+            <option value="chromium" data-short="Chromium">Chromium (compatibilidade)</option>
           </select>
         </label>
         <label class="field">
           <span>Resolução</span>
-          <select id="opt-res">
-            <option value="native">Nativa do monitor</option>
+          <select id="opt-res" data-seg>
+            <option value="native" data-short="Nativa">Nativa do monitor</option>
             <option value="1440">1440p</option>
             <option value="1080" selected>1080p</option>
             <option value="720">720p</option>
@@ -253,40 +281,41 @@
         </label>
         <label class="field">
           <span>FPS</span>
-          <select id="opt-fps">
+          <select id="opt-fps" data-seg>
             <option value="60" selected>60</option>
             <option value="30">30</option>
           </select>
         </label>
         <label class="field">
           <span>Prioridade</span>
-          <select id="opt-mode">
-            <option value="motion" selected>Fluidez (jogos, vídeos)</option>
-            <option value="detail">Nitidez (texto, código)</option>
+          <select id="opt-mode" data-seg>
+            <option value="motion" selected data-short="Fluidez">Fluidez (jogos, vídeos)</option>
+            <option value="detail" data-short="Nitidez">Nitidez (texto, código)</option>
           </select>
         </label>
         <label class="field">
           <span>Codec</span>
-          <select id="opt-codec">
-            <option value="auto" selected title="H.265 se os dois tiverem, senão H.264. Na Nativa direta: AV1 se todos tiverem placa nova">Automático (o melhor que todos suportam)</option>
-            <option value="H265">H.265 / HEVC (melhor qualidade por Mb/s)</option>
-            <option value="H264">H.264 (mais compatível)</option>
+          <select id="opt-codec" data-seg>
+            <option value="auto" selected data-short="Automático" title="H.265 se os dois tiverem, senão H.264. Na Nativa direta: AV1 se todos tiverem placa nova">Automático (o melhor que todos suportam)</option>
+            <option value="H265" data-short="H.265">H.265 / HEVC (melhor qualidade por Mb/s)</option>
+            <option value="H264" data-short="H.264">H.264 (mais compatível)</option>
             <option value="VP9">VP9</option>
             <option value="AV1">AV1</option>
             <option value="VP8">VP8</option>
           </select>
         </label>
         <label class="field field-wide">
-          <span>Qualidade máxima por amigo: <b id="opt-bitrate-label">20 Mbps</b> <span class="muted">(o app mede a sua rede e limita sozinho)</span></span>
+          <span>Qualidade máxima por amigo<span class="colon">:</span> <b id="opt-bitrate-label">20 Mbps</b> <span class="muted">(o app mede a sua rede e limita sozinho)</span></span>
           <input id="opt-bitrate" type="range" min="4" max="80" step="1" value="20">
         </label>
         <label class="field field-wide">
           <span>Áudio</span>
-          <select id="opt-audio">
+          <select id="opt-audio" data-seg>
             <option value="none">Sem áudio</option>
             <option value="all-except" selected>Todo o som do PC, exceto Discord</option>
           </select>
         </label>
+        <button id="share-more" type="button" class="share-more theme-only" title="Mostrar ou esconder captura, codec, prioridade e qualidade máxima"><b>Mais opções</b><span>captura, codec, prioridade e qualidade máxima</span></button>
       </div>
 
       <footer class="modal-foot">
@@ -308,6 +337,7 @@
   <div class="app-version">
     <span id="app-version"></span>
     <button id="btn-check-update" class="link-btn">Procurar atualização</button>
+    <label class="theme-pick theme-row" title="A cara do app neste PC. Cada amigo escolhe a sua."><span>Tema</span><select id="theme-pick"></select></label>
   </div>
 
   <script src="vendor/mp4-muxer.js"></script>

@@ -170,13 +170,60 @@ function connectRendererToHelper() {
   } catch (e) { console.warn('canal com o helper fica para depois da recarga:', e.message); }
 }
 
+// Tema escolhido na interface (ver renderer/themes.js): a barra de título, que é do Windows, acompanha
+// a cor do tema. Fica guardado para a janela já abrir na cor certa da próxima vez.
+const themeFile = () => path.join(app.getPath('userData'), 'tema.json');
+const isColor = (c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c);
+// altura da faixa dos botões da janela: a de sempre, ou a que o tema pedir (o topo de alguns é mais baixo)
+const barHeight = (h) => (Number.isInteger(h) && h >= 28 && h <= 64 ? h : 56);
+function savedTheme() {
+  try {
+    const t = JSON.parse(fs.readFileSync(themeFile(), 'utf8'));
+    if (isColor(t.color) && isColor(t.symbol)) return t;
+  } catch {}
+  return { color: '#0e0f13', symbol: '#c9cdd8' };
+}
+// tema em uso: as janelas por cima do monitor (mãozinha, desenhos, emotes) desenham no jeito dele
+let fxTheme = String(savedTheme().id || 'classico');
+ipcMain.on('theme:set', (_e, t) => {
+  if (!t || !isColor(t.color) || !isColor(t.symbol)) return;
+  fxTheme = String(t.id || 'classico').slice(0, 30);
+  try {
+    if (win && !win.isDestroyed()) {
+      win.setTitleBarOverlay({ color: t.color, symbolColor: t.symbol, height: barHeight(t.height) });
+      win.setBackgroundColor(t.color);
+    }
+  } catch (e) { console.warn('tema da janela:', e.message); }
+  const cur = savedTheme();
+  if (cur.color !== t.color || cur.symbol !== t.symbol || cur.id !== fxTheme || barHeight(cur.height) !== barHeight(t.height)) {
+    try { fs.writeFileSync(themeFile(), JSON.stringify({ id: fxTheme, color: t.color, symbol: t.symbol, height: barHeight(t.height) })); } catch {}
+  }
+});
+
+// Captura da janela pedida pelo script de teste. Com a janela escondida a página só é redesenhada
+// quando alguém pede uma captura, então a primeira depois de uma mudança ainda mostra a tela de antes:
+// repete até vir duas iguais seguidas (ou cinco tentativas) e grava a última.
+async function testShot(file) {
+  let last = null;
+  let img = null;
+  for (let i = 0; i < 5; i++) {
+    img = await win.webContents.capturePage();
+    const bmp = img.toBitmap();
+    if (last && Buffer.compare(last, bmp) === 0) break;
+    last = bmp;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  fs.writeFileSync(file, img.toPNG());
+}
+
 function createWindow() {
+  const theme = savedTheme();
   win = new BrowserWindow({
     width: 1400,
     height: 860,
     minWidth: 900,
     minHeight: 560,
-    backgroundColor: '#0e0f13',
+    backgroundColor: theme.color,
     title: 'Tela Amigos',
     show: !process.env.TELA_TEST_HIDDEN && !STARTED_HIDDEN, // teste sem janela; com o Windows: só na bandeja
     icon: path.join(__dirname, 'renderer', 'icon.png'),
@@ -184,7 +231,7 @@ function createWindow() {
     // barra de título integrada: o topo do app vira a área de arrastar e os botões do Windows
     // (minimizar/maximizar/fechar) ficam no canto, na cor do app
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0e0f13', symbolColor: '#c9cdd8', height: 56 },
+    titleBarOverlay: { color: theme.color, symbolColor: theme.symbol, height: barHeight(theme.height) },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -245,13 +292,16 @@ function createWindow() {
     win.webContents.on('console-message', (e) => {
       console.log(`[page] ${e.message}`);
       const m = /^SHOT (.+)$/.exec(e.message); // o script de teste pede uma captura da janela
-      if (m) win.webContents.capturePage().then((img) => fs.writeFileSync(m[1], img.toPNG()));
+      if (m) testShot(m[1]).catch((err) => console.log(`[page] SHOTS ERRO captura: ${err.message}`));
     });
     if (process.env.TELA_TEST_ONTOP) {
       win.setAlwaysOnTop(true, 'screen-saver');
       if (process.env.TELA_TEST_SIZE) { const [w, h] = process.env.TELA_TEST_SIZE.split('x').map(Number); win.setContentSize(w, h); win.setPosition(0, 0); }
       else win.maximize();
       win.focus();
+    } else if (process.env.TELA_TEST_SIZE) {
+      const [w, h] = process.env.TELA_TEST_SIZE.split('x').map(Number);
+      win.setContentSize(w, h);
     }
     win.webContents.once('did-finish-load', () => {
       win.webContents.executeJavaScript(fs.readFileSync(process.env.TELA_TEST_SCRIPT, 'utf8'));
@@ -763,7 +813,7 @@ ipcMain.on('pointer:show', (_e, p) => {
     } else {
       h.win.setPosition(px, py);
     }
-    sendWhenReady(h.win, 'pointer', p, true);
+    sendWhenReady(h.win, 'pointer', { ...p, theme: fxTheme }, true);
     clearTimeout(h.timer);
     h.timer = setTimeout(() => destroyHand(p.id), 1500);
   } else destroyHand(p.id);
@@ -775,13 +825,13 @@ ipcMain.on('pointer:show', (_e, p) => {
       trailWin = overlayWindow({ ...d.bounds }, 'pointer.html');
       trailDisplay = d.id;
     }
-    sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true }, true);
+    sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true, theme: fxTheme }, true);
     clearTimeout(trailTimer);
     // não fecha antes de os traços da caneta apagarem
     trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; },
       Math.max(3000, trailDeadline - Date.now()));
   } else if (trailWin && !trailWin.isDestroyed()) {
-    sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true, drawing: false }, false);
+    sendWhenReady(trailWin, 'pointer', { ...p, trailOnly: true, drawing: false, theme: fxTheme }, false);
   }
 });
 ipcMain.on('pointer:hide', (_e, id) => destroyHand(id));
@@ -795,7 +845,7 @@ ipcMain.on('react:show', (_e, p) => {
     trailDisplay = d.id;
     trailDeadline = 0;
   }
-  sendWhenReady(trailWin, 'pointer', { react: String(p.emoji).slice(0, 8), name: String(p.name || '').slice(0, 30), color: p.color }, true);
+  sendWhenReady(trailWin, 'pointer', { react: String(p.emoji).slice(0, 8), name: String(p.name || '').slice(0, 30), color: p.color, theme: fxTheme }, true);
   trailDeadline = Math.max(trailDeadline, Date.now() + 3000);
   clearTimeout(trailTimer);
   trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, trailDeadline - Date.now());
@@ -816,7 +866,7 @@ ipcMain.on('ink:show', (_e, p) => {
     trailDisplay = d.id;
     trailDeadline = 0;
   }
-  sendWhenReady(trailWin, 'pointer', { inkSegs: p.segs, color: p.color, life: p.life, id: p.id }, true);
+  sendWhenReady(trailWin, 'pointer', { inkSegs: p.segs, color: p.color, life: p.life, id: p.id, theme: fxTheme }, true);
   trailDeadline = Math.max(trailDeadline, Date.now() + (Number(p.life) || 8000) + 500);
   clearTimeout(trailTimer);
   trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, trailDeadline - Date.now());

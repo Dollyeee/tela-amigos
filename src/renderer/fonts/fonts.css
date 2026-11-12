@@ -1,0 +1,72 @@
+/* Fontes dos temas (licença SIL OFL 1.1; ver a pasta licencas). Só é carregada a fonte que o tema em uso pede; como o arquivo é local, o texto espera por ela em vez de piscar com outra letra. */
+/* Barlow Condensed (Arena) */
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 500; font-display: block; src: url("barlow-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 600; font-display: block; src: url("barlow-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 700; font-display: block; src: url("barlow-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 800; font-display: block; src: url("barlow-condensed-latin-800-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: italic; font-weight: 600; font-display: block; src: url("barlow-condensed-latin-600-italic.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: italic; font-weight: 700; font-display: block; src: url("barlow-condensed-latin-700-italic.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: italic; font-weight: 800; font-display: block; src: url("barlow-condensed-latin-800-italic.woff2") format("woff2"); }
+/* Barlow (Arena) */
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 400; font-display: block; src: url("barlow-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 500; font-display: block; src: url("barlow-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 600; font-display: block; src: url("barlow-latin-600-normal.woff2") format("woff2"); }
+/* Fredoka (Varanda) */
+@font-face { font-family: "Fredoka"; font-style: normal; font-weight: 400; font-display: block; src: url("fredoka-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fredoka"; font-style: normal; font-weight: 500; font-display: block; src: url("fredoka-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fredoka"; font-style: normal; font-weight: 600; font-display: block; src: url("fredoka-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fredoka"; font-style: normal; font-weight: 700; font-display: block; src: url("fredoka-latin-700-normal.woff2") format("woff2"); }
+/* Nunito (Varanda) */
+@font-face { font-family: "Nunito"; font-style: normal; font-weight: 500; font-display: block; src: url("nunito-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Nunito"; font-style: normal; font-weight: 600; font-display: block; src: url("nunito-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Nunito"; font-style: normal; font-weight: 700; font-display: block; src: url("nunito-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Nunito"; font-style: normal; font-weight: 800; font-display: block; src: url("nunito-latin-800-normal.woff2") format("woff2"); }
+/* Tilt Neon (Neon) */
+@font-face { font-family: "Tilt Neon"; font-style: normal; font-weight: 400; font-display: block; src: url("tilt-neon-latin-400-normal.woff2") format("woff2"); }
+/* Outfit (Neon) */
+@font-face { font-family: "Outfit"; font-style: normal; font-weight: 400; font-display: block; src: url("outfit-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Outfit"; font-style: normal; font-weight: 500; font-display: block; src: url("outfit-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Outfit"; font-style: normal; font-weight: 600; font-display: block; src: url("outfit-latin-600-normal.woff2") format("woff2"); }
+/* Instrument Serif (Galeria) */
+@font-face { font-family: "Instrument Serif"; font-style: normal; font-weight: 400; font-display: block; src: url("instrument-serif-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Instrument Serif"; font-style: italic; font-weight: 400; font-display: block; src: url("instrument-serif-latin-400-italic.woff2") format("woff2"); }
+/* Instrument Sans (Galeria) */
+@font-face { font-family: "Instrument Sans"; font-style: normal; font-weight: 400; font-display: block; src: url("instrument-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Instrument Sans"; font-style: normal; font-weight: 500; font-display: block; src: url("instrument-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Instrument Sans"; font-style: normal; font-weight: 600; font-display: block; src: url("instrument-sans-latin-600-normal.woff2") format("woff2"); }
+/* Patrick Hand (Caderno) */
+@font-face { font-family: "Patrick Hand"; font-style: normal; font-weight: 400; font-display: block; src: url("patrick-hand-latin-400-normal.woff2") format("woff2"); }
+/* Kalam (Caderno) */
+@font-face { font-family: "Kalam"; font-style: normal; font-weight: 400; font-display: block; src: url("kalam-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Kalam"; font-style: normal; font-weight: 700; font-display: block; src: url("kalam-latin-700-normal.woff2") format("woff2"); }
+/* Architects Daughter (Planta) */
+@font-face { font-family: "Architects Daughter"; font-style: normal; font-weight: 400; font-display: block; src: url("architects-daughter-latin-400-normal.woff2") format("woff2"); }
+/* Share Tech Mono (Planta) */
+@font-face { font-family: "Share Tech Mono"; font-style: normal; font-weight: 400; font-display: block; src: url("share-tech-mono-latin-400-normal.woff2") format("woff2"); }
+/* JetBrains Mono (Terminal) */
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: block; src: url("jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: block; src: url("jetbrains-mono-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 700; font-display: block; src: url("jetbrains-mono-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 800; font-display: block; src: url("jetbrains-mono-latin-800-normal.woff2") format("woff2"); }
+/* Cinzel (Sessão) */
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 600; font-display: block; src: url("cinzel-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 700; font-display: block; src: url("cinzel-latin-700-normal.woff2") format("woff2"); }
+/* Jost (Sessão) */
+@font-face { font-family: "Jost"; font-style: normal; font-weight: 400; font-display: block; src: url("jost-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Jost"; font-style: normal; font-weight: 500; font-display: block; src: url("jost-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Jost"; font-style: normal; font-weight: 600; font-display: block; src: url("jost-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Jost"; font-style: italic; font-weight: 400; font-display: block; src: url("jost-latin-400-italic.woff2") format("woff2"); }
+/* Press Start 2P (Fliperama) */
+@font-face { font-family: "Press Start 2P"; font-style: normal; font-weight: 400; font-display: block; src: url("press-start-2p-latin-400-normal.woff2") format("woff2"); }
+/* Pixelify Sans (Fliperama) */
+@font-face { font-family: "Pixelify Sans"; font-style: normal; font-weight: 400; font-display: block; src: url("pixelify-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Pixelify Sans"; font-style: normal; font-weight: 500; font-display: block; src: url("pixelify-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Pixelify Sans"; font-style: normal; font-weight: 600; font-display: block; src: url("pixelify-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Pixelify Sans"; font-style: normal; font-weight: 700; font-display: block; src: url("pixelify-sans-latin-700-normal.woff2") format("woff2"); }
+/* Righteous (Toca-fitas) */
+@font-face { font-family: "Righteous"; font-style: normal; font-weight: 400; font-display: block; src: url("righteous-latin-400-normal.woff2") format("woff2"); }
+/* Caveat (Toca-fitas) */
+@font-face { font-family: "Caveat"; font-style: normal; font-weight: 700; font-display: block; src: url("caveat-latin-700-normal.woff2") format("woff2"); }
+/* Rubik (Toca-fitas) */
+@font-face { font-family: "Rubik"; font-style: normal; font-weight: 400; font-display: block; src: url("rubik-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Rubik"; font-style: normal; font-weight: 500; font-display: block; src: url("rubik-latin-500-normal.woff2") format("woff2"); }

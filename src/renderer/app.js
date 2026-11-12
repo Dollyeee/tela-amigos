@@ -287,6 +287,14 @@ const Sfx = (() => {
 async function initLobby() {
   loadSettings();
   $('#name').value = localStorage.getItem('name') || '';
+  const paintMyName = () => {
+    const n = $('#name').value.trim();
+    document.documentElement.style.setProperty('--me-name', `"${n.replace(/[\\"]/g, '\\$&')}"`);
+    document.documentElement.classList.toggle('has-name', !!n);
+  };
+  $('#name').addEventListener('input', paintMyName);
+  paintMyName();
+  window.paintMyName = paintMyName;
   $('#host-ip').value = localStorage.getItem('hostIp') || '';
 
   $('#btn-host').onclick = async () => {
@@ -392,13 +400,25 @@ function renderRooms() {
   const ul = $('#rooms');
   ul.innerHTML = '';
   const seen = new Set();
-  const row = (title, sub, ip, offline, closeLabel) => {
+  const row = (title, sub, ip, offline, closeLabel, names) => {
     const li = document.createElement('li');
     if (offline) li.classList.add('offline');
+    const pile = document.createElement('span');
+    pile.className = 'room-pile theme-only';
+    li.style.setProperty('--h', nameHue((names && names[0]) || title));
+    li.dataset.k = nameHue((names && names[0]) || title) % 4;
+    li.dataset.f = Math.floor(nameHue((names && names[0]) || title) / 45); // e um de 0 a 7
+    for (const n of (names || []).slice(0, 3)) pile.appendChild(avatar(n));
+    li.appendChild(pile);
     const info = document.createElement('div');
     info.className = 'room-info';
     const t = document.createElement('span'); t.className = 'room-title'; t.textContent = title;
-    const s = document.createElement('span'); s.className = 'room-sub'; s.textContent = sub;
+    // quem está na sala e o endereço em pedaços separados (alguns temas põem o endereço na frente); o texto é o de sempre
+    const s = document.createElement('span'); s.className = 'room-sub';
+    const sw = document.createElement('span'); sw.className = 'rs-who'; sw.textContent = sub[0];
+    const ss = document.createElement('span'); ss.className = 'rs-sep'; ss.textContent = ' · ';
+    const sa = document.createElement('span'); sa.className = 'rs-addr'; sa.textContent = sub[1];
+    s.append(sw, ss, sa);
     info.append(t, s);
     const b = document.createElement('button');
     b.className = offline ? 'ghost' : 'primary';
@@ -418,12 +438,12 @@ function renderRooms() {
   for (const r of discovered) {
     seen.add(r.ip);
     const who = r.members ? `${r.members} na sala: ${r.names.join(', ')}` : 'ninguém na sala ainda';
-    row(`Sala de ${r.hostName}`, `${who} · ${r.ip}`, r.ip, false);
+    row(`Sala de ${r.hostName}`, [who, r.ip], r.ip, false, '', r.names && r.names.length ? r.names : [r.hostName]);
   }
   for (const r of recentRooms()) {
     if (seen.has(r.ip)) continue;
-    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, `recente · código ${r.ip}`, r.ip, false, 'Fechar');
-    else row(`Sala de ${r.hostName}`, `recente · não encontrada agora · ${r.ip}`, r.ip, true, 'Remover');
+    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, ['recente', `código ${r.ip}`], r.ip, false, 'Fechar');
+    else row(`Sala de ${r.hostName}`, ['recente · não encontrada agora', r.ip], r.ip, true, 'Remover');
   }
   if (!ul.children.length) {
     const li = document.createElement('li');
@@ -1849,7 +1869,9 @@ async function openShareModal(second = false) {
   $('#opt-mode').value = s.mode;
   $('#opt-codec').value = s.codec;
   $('#opt-bitrate').value = s.bitrate;
-  $('#opt-bitrate-label').textContent = `${s.bitrate} Mbps`;
+  setMbps($('#opt-bitrate-label'), s.bitrate);
+  window.Themes.syncSelects();
+  window.Themes.paintRanges();
   $('#btn-start-share').textContent = state.pickSecond ? 'Transmitir como 2ª tela' : state.share ? 'Trocar' : 'Compartilhar';
   selectedSource = null;
   updateRegionUi();
@@ -1892,6 +1914,16 @@ function renderSources() {
     const text = document.createElement('span');
     text.textContent = src.name;
     label.appendChild(text);
+    if (src.size && src.size.width) { // só alguns temas mostram
+      el.style.setProperty('--sw', src.size.width);
+      el.style.setProperty('--sh', src.size.height);
+      el.style.setProperty('--sw-t', `"${src.size.width}"`);
+      el.style.setProperty('--sh-t', `"${src.size.height}"`);
+      const sz = document.createElement('span');
+      sz.className = 'source-size theme-only';
+      sz.textContent = `${src.size.width} × ${src.size.height}`;
+      label.appendChild(sz);
+    }
     if (src.type === 'window') {
       // janelas: só ícone + nome (sem miniatura = rápido e não pesa na transmissão)
       el.classList.add('window');
@@ -1917,6 +1949,7 @@ function renderSources() {
     el.ondblclick = () => startFromModal();
     box.appendChild(el);
   }
+  paintShareSum();
 }
 
 // área da tela (só telas inteiras, captura nativa): fica guardada na fonte escolhida
@@ -1929,6 +1962,7 @@ function updateRegionUi() {
   if (!state.pickSecond) $('#share-note').textContent = isScreen && src.crop
     ? `Só uma área: ${Math.round(src.crop.w * 100)}% × ${Math.round(src.crop.h * 100)}% da tela`
     : '';
+  paintShareSum();
 }
 
 async function pickRegion() {
@@ -1976,6 +2010,7 @@ async function loadAudioOptions() {
   sel.value = [...sel.options].some((o) => o.value === saved) ? saved : 'all-except';
   sel.onchange = updateAudioNote;
   updateAudioNote();
+  paintShareSum();
 }
 
 // aviso embaixo das opções: capturar uma saída onde o próprio app toca = amigos ouvem eco
@@ -2734,11 +2769,13 @@ function openAdjust() {
   if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
   const s = state.share ? state.share.settings : state.settings;
   $('#adj-bitrate').value = s.bitrate;
-  $('#adj-bitrate-label').textContent = `${s.bitrate} Mbps`;
+  setMbps($('#adj-bitrate-label'), s.bitrate);
   $('#adj-res').value = s.res;
   $('#adj-fps').value = String(s.fps);
   $('#adj-mode').value = s.mode;
   $('#adj-engine').value = s.engine || 'native';
+  window.Themes.syncSelects();
+  window.Themes.paintRanges();
   panel.classList.remove('hidden');
   renderBudgetInfo();
   refreshMixer();
@@ -2853,13 +2890,25 @@ function addChat(name, text, system = false) {
   const log = $('#chat-log');
   const div = document.createElement('div');
   div.className = `chat-msg${system ? ' system' : ''}`;
+  div.dataset.t = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); // a hora, para os temas que mostram
   if (!system) {
+    if (name === state.myName) div.classList.add('me');
+    div.style.setProperty('--h', nameHue(name));
+    div.dataset.k = nameHue(name) % 4;
+    div.dataset.f = Math.floor(nameHue(name) / 45); // e um de 0 a 7
+    const who = name === state.myName ? null : [...state.peers.values()].find((p) => p.name === name);
+    div.dataset.n = name === state.myName ? '1' : ((who && who.personEl && who.personEl.dataset.n) || '');
+    div.style.setProperty('--n-t', `"${div.dataset.n}"`);
+    const av = avatar(name);
+    av.classList.add('chat-av', 'theme-only');
+    const body = document.createElement('span');
+    body.className = 'chat-body';
     const b = document.createElement('b');
     b.style.color = `hsl(${nameHue(name)}, 70%, 65%)`;
     b.textContent = name;
-    div.appendChild(b);
-  }
-  div.appendChild(document.createTextNode(text));
+    body.append(b, document.createTextNode(text));
+    div.append(av, body);
+  } else div.appendChild(document.createTextNode(text));
   log.appendChild(div);
   while (log.children.length > 200) log.firstChild.remove();
   log.scrollTop = log.scrollHeight;
@@ -2880,11 +2929,12 @@ function showReaction(target, emoji, from) {
   const e = document.createElement('div');
   e.className = 'float-emoji';
   e.style.left = `${15 + Math.random() * 70}%`;
-  e.textContent = emoji;
+  const art = window.ThemeFx.emote(window.Themes.current, emoji); // desenho do tema; sem ele, o emoji de sempre
+  if (art) e.innerHTML = art; else e.textContent = emoji;
   const s = document.createElement('small');
   s.textContent = from;
   e.appendChild(s);
-  tile.el.appendChild(e);
+  tile.screen.appendChild(e);
   setTimeout(() => e.remove(), 2300);
 }
 
@@ -2906,14 +2956,14 @@ function trailLayer(tile) {
   if (tile.trail && tile.trail.isConnected) return tile.trail;
   const c = document.createElement('canvas');
   c.className = 'trail-layer';
-  tile.el.appendChild(c);
+  tile.screen.appendChild(c);
   tile.trail = c;
   tile.trailLines = [];
   const draw = () => {
     // a tela saiu da página com um traço ainda vivo (o amigo parou de transmitir, tela oculta...):
     // sem liberar a marca aqui, quando ela voltava a caneta e o rastro nunca mais desenhavam nela
     if (!c.isConnected) { tile.trailAnimating = false; return; }
-    const r = tile.el.getBoundingClientRect();
+    const r = tile.screen.getBoundingClientRect();
     if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) { c.width = Math.round(r.width); c.height = Math.round(r.height); }
     const g = c.getContext('2d');
     g.clearRect(0, 0, c.width, c.height);
@@ -2921,7 +2971,10 @@ function trailLayer(tile) {
     // rastro some em 2,5 s; caneta fica INK_LIFE e só esmaece no final
     tile.trailLines = tile.trailLines.filter((s) => now - s.t < (s.life || 2500));
     const b = videoBox(tile);
-    for (const s of tile.trailLines) {
+    // o tema pode ter o seu jeito de riscar (ver fx.js); sem isso, o risco de sempre
+    const themed = window.ThemeFx.drawLines(g, window.Themes.current, tile.trailLines, now,
+      { x: b.left - r.left, y: b.top - r.top, w: b.width, h: b.height }, { pen: 4, trail: 5 });
+    for (const s of themed ? [] : tile.trailLines) {
       const age = now - s.t;
       g.globalAlpha = s.life ? Math.max(0, Math.min(1, (s.life - age) / 1200)) : Math.max(0, 1 - age / 2500);
       g.strokeStyle = s.color;
@@ -3065,11 +3118,13 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
     if (!l) {
       l = document.createElement('div');
       l.className = 'hand';
-      l.innerHTML = HAND_SVG;
+      const art = window.ThemeFx.hand(window.Themes.current, 34); // a mãozinha do tema; a ponta do dedo continua no ponto
+      l.innerHTML = art ? art.html : HAND_SVG;
+      if (art) { l.style.margin = `${-art.tip[1]}px 0 0 ${-art.tip[0]}px`; l.style.transformOrigin = `${art.tip[0]}px ${art.tip[1]}px`; }
       const tag = document.createElement('span');
       tag.textContent = name;
       l.appendChild(tag);
-      tile.el.appendChild(l);
+      tile.screen.appendChild(l);
       tile.lasers[fromId] = l;
     }
     l.style.setProperty('--c', color);
@@ -3081,7 +3136,7 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
     }
     l.lastX = drawing ? x : null;
     l.lastY = drawing ? y : null;
-    const b = videoBox(tile), er = tile.el.getBoundingClientRect();
+    const b = videoBox(tile), er = tile.screen.getBoundingClientRect();
     l.style.left = `${b.left - er.left + x * b.width}px`;
     l.style.top = `${b.top - er.top + y * b.height}px`;
     clearTimeout(l.timer);
@@ -3105,13 +3160,13 @@ function showPress(target, fromId, name, x, y) {
   if (tile && tile.el.isConnected && !tile.swapped) {
     const l = tile.lasers && tile.lasers[fromId];
     if (l) { l.classList.remove('pressing'); void l.offsetWidth; l.classList.add('pressing'); }
-    const b = videoBox(tile), er = tile.el.getBoundingClientRect();
+    const b = videoBox(tile), er = tile.screen.getBoundingClientRect();
     const r = document.createElement('div');
     r.className = 'press-ripple';
     r.style.setProperty('--c', color);
     r.style.left = `${b.left - er.left + x * b.width}px`;
     r.style.top = `${b.top - er.top + y * b.height}px`;
-    tile.el.appendChild(r);
+    tile.screen.appendChild(r);
     setTimeout(() => r.remove(), 700);
   }
   if (sendToMyDesktop(target, fromId)) {
@@ -3128,13 +3183,20 @@ function hideLaser(target, fromId) {
   if (target === state.myId) window.native.pointerHide(fromId);
 }
 
+// o emote de um botão no desenho do tema em uso (ou o emoji de sempre)
+function paintEmote(b) {
+  const art = window.ThemeFx.emote(window.Themes.current, b.dataset.emoji);
+  if (art) b.innerHTML = art; else b.textContent = b.dataset.emoji;
+}
+
 // liga reações e laser numa tela (de um amigo ou a sua)
 function attachInteractions(tile, id) {
   const bar = document.createElement('div');
   bar.className = 'react-bar';
   for (const emoji of ['😂', '🔥', '👍', '😮', '💀', '❤️']) {
     const b = document.createElement('button');
-    b.textContent = emoji;
+    b.dataset.emoji = emoji;
+    paintEmote(b);
     b.title = 'Reagir';
     b.onclick = (e) => {
       e.stopPropagation();
@@ -3543,7 +3605,7 @@ async function healthSender(sh) {
 async function healthViewer() {
   for (const peer of state.peers.values()) {
     if (!peer.sharing || !peer.tile || state.hidden.has(peer.id)) continue;
-    let v = null, rtt = null;
+    let v = null, rtt = null, vRep = null, vCodec = '';
     // a tela principal dele (mesmo se aqui ela estiver no canto, trocada com a 2ª)
     const mainTrack = peer.remoteStream.getVideoTracks()[0];
     const mainId = mainTrack ? mainTrack.id : null;
@@ -3552,9 +3614,11 @@ async function healthViewer() {
       if (peer.sfuIn && peer.sfuIn.videoRecv) reports.push(await peer.sfuIn.videoRecv.getStats());
       for (const rep of reports) rep.forEach((r) => {
         if (r.type !== 'inbound-rtp' || r.kind !== 'video') return;
-        if (mainId && r.trackIdentifier) { if (r.trackIdentifier === mainId) v = r; return; }
-        if (!v || (r.bytesReceived || 0) > (v.bytesReceived || 0)) v = r;
+        if (mainId && r.trackIdentifier) { if (r.trackIdentifier === mainId) { v = r; vRep = rep; } return; }
+        if (!v || (r.bytesReceived || 0) > (v.bytesReceived || 0)) { v = r; vRep = rep; }
       });
+      const vc = v && v.codecId && vRep ? vRep.get(v.codecId) : null;
+      if (vc && vc.mimeType) vCodec = vc.mimeType.split('/')[1] || '';
       (await peer.pc.getStats()).forEach((r) => {
         if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
       });
@@ -3640,9 +3704,13 @@ async function healthViewer() {
       t.qdot.className = `qdot ${level}`;
       t.qbadge.className = `qbadge ${level}`;
       t.qbadge.title = `Qualidade: ${reason}`;
-      t.qtext.textContent = `${Math.round(fps)} fps · ${rtt != null ? Math.round(rtt * 1000) : '?'} ms` + (short ? ` · ${short}` : '');
+      const ms = rtt != null ? Math.round(rtt * 1000) : null;
+      setQText(t.qtext, Math.round(fps), ms, short, v.frameHeight || 0, kbpsIn / 1000, codecLabel(vCodec));
+      peer.q = { fps: Math.round(fps), ms, level, res: v.frameHeight || 0, mbps: kbpsIn / 1000 };
+      paintPersonQuality(peer);
     }
   }
+  paintStatsPane();
 }
 setInterval(() => { healthLoop().catch(() => {}); }, 2000);
 
@@ -3724,6 +3792,7 @@ function applyPlayoutBuffer() {
     if (peer.tile && peer.tile.latBtn) {
       peer.tile.latBtn.classList.toggle('active', mode !== 'auto');
       peer.tile.latBtn.title = `Atraso: ${LATENCY_MODES[mode]} (clique para trocar)`;
+      peer.tile.latBtn.dataset.v = { auto: 'auto', low: 'mínimo', smooth: 'liso' }[mode] || mode; // em poucas letras, para os temas que escrevem os botões
     }
   }
 }
@@ -3918,7 +3987,17 @@ async function stopShare() {
 function enterRoom() {
   $('#lobby').classList.add('hidden');
   $('#room').classList.remove('hidden');
-  $('#btn-copy-ip').textContent = isOnlineCode(state.hostIp) ? `Sala online · ${state.hostIp}` : `Sala · ${state.hostIp}`;
+  window.Themes.screen('room');
+  // o endereço vai num pedaço à parte (alguns temas destacam só ele); o texto é o mesmo de sempre
+  const chip = $('#btn-copy-ip'), chipText = document.createElement('span'), chipK = document.createElement('span'), chipV = document.createElement('span');
+  chipK.className = 'chip-k';
+  chipK.textContent = isOnlineCode(state.hostIp) ? 'Sala online · ' : 'Sala · ';
+  chipV.className = 'chip-v';
+  chipV.textContent = state.hostIp;
+  chipText.append(chipK, chipV);
+  chip.textContent = '';
+  chip.appendChild(chipText);
+  chip.dataset.kind = isOnlineCode(state.hostIp) ? 'online' : 'radmin';
   $('#btn-copy-ip').title = isOnlineCode(state.hostIp) ? 'Copiar o código da sala para mandar aos amigos' : 'Copiar o IP da sala';
   $('#btn-close-room').classList.toggle('hidden', !state.isHost);
   render();
@@ -3975,6 +4054,7 @@ async function leaveRoom() {
   meTile = null;
   $('#room').classList.add('hidden');
   $('#lobby').classList.remove('hidden');
+  window.Themes.screen('lobby');
   $('#btn-join').disabled = $('#btn-host').disabled = false;
   refreshMyRoom();
 }
@@ -4043,7 +4123,19 @@ function makeTile(id) {
   const actions = document.createElement('div');
   actions.className = 'tile-actions';
 
-  const tile = { el, video, label, stats: document.createElement('div') };
+  // área da imagem: o vídeo e o que acompanha a imagem (bolhas, mãozinhas, desenhos, emotes). No visual
+  // clássico é a tela inteira; um tema pode pôr moldura nela ou tirar o nome e os botões de cima da imagem
+  const screen = document.createElement('div');
+  screen.className = 'tile-screen';
+  const paintSize = () => {
+    if (!video.videoWidth) return;
+    el.style.setProperty('--vw-t', `"${video.videoWidth}"`);
+    el.style.setProperty('--vh-t', `"${video.videoHeight}"`);
+    el.style.setProperty('--vs-t', `"${video.videoWidth}x${video.videoHeight}"`);
+  };
+  video.addEventListener('loadedmetadata', paintSize);
+  video.addEventListener('resize', paintSize);
+  const tile = { el, video, label, screen, stats: document.createElement('div') };
   tile.stats.className = 'tile-stats';
   // bolha da câmera (estilo streamer), aparece quando a pessoa transmite tela + câmera
   const ownerName = isMe ? state.myName : ((state.peers.get(id) || {}).name || id);
@@ -4104,8 +4196,10 @@ function makeTile(id) {
       muteBtn.innerHTML = muted ? ICONS.mute : ICONS.vol;
       pct.textContent = muted ? 'mudo' : `${Math.round(volume * 100)}%`;
       volWrap.classList.toggle('boost', !muted && volume > 1);
+      volWrap.classList.toggle('muted', muted); // para os temas que desenham o volume de outro jeito quando está mudo
       vol.value = volume;
       vol.title = 'Volume (até 300%; acima de 100% é reforço)';
+      window.Themes.paintRange(vol);
     };
     tile.getVolume = () => volume;
     tile.setVolume = (v) => {
@@ -4186,7 +4280,13 @@ function makeTile(id) {
   actions.append(more);
   actions.append(iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)));
   bar.append(grip, label, actions);
-  el.append(video, tile.s2.box, tile.camBox, tile.stats, bar);
+  screen.append(video, tile.s2.box, tile.camBox);
+  el.append(screen, tile.stats, bar);
+  // enfeite que só alguns temas mostram (ver themes/*.css)
+  const liveTag = document.createElement('span');
+  liveTag.className = 'tile-live theme-only';
+  liveTag.textContent = 'ao vivo';
+  el.appendChild(liveTag);
   attachInteractions(tile, id);
   attachZoom(tile);
 
@@ -4222,6 +4322,7 @@ function makeTile(id) {
 
   video.addEventListener('enterpictureinpicture', () => { state.pipId = id; render(); });
   video.addEventListener('leavepictureinpicture', () => { if (state.pipId === id) state.pipId = null; render(); });
+  window.Themes.tileSetup(tile); // o tema escolhido pode querer o selo de qualidade ao lado do nome
   return tile;
 }
 
@@ -4265,7 +4366,7 @@ function attachZoom(tile) {
     if (!e.ctrlKey) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    const r = el.getBoundingClientRect(), z = tile.zoom;
+    const r = tile.screen.getBoundingClientRect(), z = tile.zoom;
     const px = e.clientX - r.left, py = e.clientY - r.top;
     const s2 = Math.max(1, Math.min(6, z.s * (e.deltaY < 0 ? 1.25 : 0.8)));
     z.x = px - ((px - z.x) * s2) / z.s;
@@ -4301,9 +4402,22 @@ function setTileLabel(tile, name, text) {
   const key = `${name}|${text}`;
   if (tile.labelKey === key) return;
   tile.labelKey = key;
+  tile.el.style.setProperty('--h', nameHue(name)); // matiz de quem transmite, para os temas que pintam a tela na cor da pessoa
+  tile.el.dataset.k = nameHue(name) % 4;        // e um número de 0 a 3 por pessoa, para os temas variarem um desenho
+  tile.el.dataset.f = Math.floor(nameHue(name) / 45); // e um de 0 a 7
   tile.label.innerHTML = '';
   const t = document.createElement('span');
-  t.textContent = text;
+  const cut = text.indexOf(' — ');
+  if (cut > 0) {
+    const who = document.createElement('span');
+    who.className = 'tn-who';
+    who.textContent = text.slice(0, cut);
+    const what = document.createElement('span');
+    what.className = 'tn-what';
+    what.textContent = text.slice(cut);
+    what.dataset.what = text.slice(cut + 3); // sem o travessão, para os temas que escrevem de outro jeito
+    t.append(who, what);
+  } else t.textContent = text;
   const live = document.createElement('span');
   live.className = 'live-dot';
   live.title = 'ao vivo';
@@ -4427,7 +4541,7 @@ function clampCam(tile, p, b) {
 }
 function placeBubble(tile, bub) {
   if (!tile || !bub || bub.box.classList.contains('hidden') || !tile.el.isConnected) return;
-  const b = videoBox(tile), er = tile.el.getBoundingClientRect();
+  const b = videoBox(tile), er = tile.screen.getBoundingClientRect();
   if (!b.width) return;
   const p = clampCam(tile, bubblePos(bub), b);
   const w = b.width * p.w;
@@ -4614,10 +4728,13 @@ function fitGrid(n) {
   const W = r.width || 1, H = r.height || 1;
   const cnt = Math.max(1, n);
   const cols = bestColumns(cnt, W, H), rows = Math.ceil(cnt / cols);
-  const gap = parseFloat(getComputedStyle(main).columnGap) || 0;
-  const w = Math.floor(Math.max(120, Math.min((W - gap * (cols - 1)) / cols, ((H - gap * (rows - 1)) / rows) * 16 / 9)));
+  const cs = getComputedStyle(main);
+  const gap = parseFloat(cs.columnGap) || 0;
+  const gapY = parseFloat(cs.rowGap) || gap; // alguns temas separam mais as linhas do que as colunas
+  const [fx, fy] = window.Themes.tileFrame(); // quanto o tema soma à largura e à altura da imagem
+  const w = Math.floor(Math.max(120, Math.min((W - gap * (cols - 1)) / cols, ((H - gapY * (rows - 1)) / rows - fy) * 16 / 9 + fx)));
   main.style.gridTemplateColumns = `repeat(${cols}, ${w}px)`;
-  main.style.gridAutoRows = `${Math.floor(w * 9 / 16)}px`;
+  main.style.gridAutoRows = `${Math.floor((w - fx) * 9 / 16 + fy)}px`;
   main.style.justifyContent = 'center';
 }
 let gridRO = null;
@@ -4729,6 +4846,9 @@ function render() {
     }
   }
   renderPeople();
+  paintStatsPane();
+  const liveN = [...state.peers.values()].filter((p) => p.sharing).length + (state.share ? 1 : 0);
+  $('#live-count').textContent = liveN ? `${liveN} ${liveN === 1 ? 'tela' : 'telas'} ao vivo` : '';
 
   // status no ícone da bandeja (só manda quando muda)
   const tray = { room: state.hostIp || '', people: [...state.peers.values()].map((p) => ({ name: p.name, live: !!p.sharing })), sharing: !!state.share };
@@ -4749,21 +4869,76 @@ function avatar(name) {
   return el;
 }
 
+// selo de qualidade: os números vão em <span class="n"> para os temas poderem destacá-los
+// res: altura da imagem que está chegando (ex.: 1080), mbps e codec: só alguns temas mostram
+function setQText(el, fps, ms, short, res, mbps, codec) {
+  const part = (cls, ...kids) => { const sp = document.createElement('span'); sp.className = cls; sp.append(...kids); return sp; };
+  el.textContent = '';
+  el.append(part('q-fps', part('n', String(fps)), ' fps'), part('q-sep', ' · '), part('q-ms', part('n', ms != null ? String(ms) : '?'), ' ms'));
+  if (res) el.append(part('q-res', part('q-sep', ' · '), `${res}p`));
+  if (mbps > 0) el.append(part('q-mbps', part('q-sep', ' · '), `${mbps.toFixed(1).replace('.', ',')} Mb/s`));
+  if (codec) el.append(part('q-codec', part('q-sep', ' · '), codec));
+  if (short) el.append(part('q-why', ` · ${short}`));
+  el.dataset.why = short || ''; // a causa sozinha, para os temas que a mostram como etiqueta
+}
+const codecLabel = (c) => ({ H265: 'H.265', H264: 'H.264' }[String(c || '').toUpperCase()] || String(c || ''));
+// "20 Mbps" com o número marcado (alguns temas mostram o número grande)
+function setMbps(el, v) {
+  const n = document.createElement('span');
+  n.className = 'n';
+  n.textContent = v;
+  el.textContent = '';
+  el.append(n, ' Mbps');
+}
+// fps e ping de quem transmite, na lista de pessoas (só alguns temas mostram)
+function paintPersonQuality(peer) {
+  const li = peer.personEl;
+  if (!li || !li.isConnected) return;
+  const q = peer.sharing ? peer.q : null;
+  li.dataset.q = q ? q.level : '';
+  li.querySelector('.p-fps').textContent = q ? q.fps : '--';
+  li.querySelector('.p-ms').textContent = q && q.ms != null ? q.ms : '--';
+}
+
 function renderPeople() {
   const ul = $('#people');
   ul.innerHTML = '';
-  const row = (name, status, extra, avatarName) => {
+  const row = (name, status, extra, avatarName, peer) => {
     const li = document.createElement('li');
     const av = avatar(avatarName || name);
+    li.style.setProperty('--c', av.style.background); // a cor da pessoa, para os temas
+    li.style.setProperty('--h', nameHue(avatarName || name));
+    li.dataset.k = nameHue(avatarName || name) % 4;
+    li.dataset.f = Math.floor(nameHue(avatarName || name) / 45); // e um de 0 a 7
+    li.dataset.n = ul.children.length + 1;
+    li.style.setProperty('--n-t', `"${li.dataset.n}"`);
     const st = document.createElement('span');
     st.className = `status ${status}`;
     av.appendChild(st);
     const n = document.createElement('span');
     n.className = 'person-name';
     n.textContent = name;
-    li.append(av, n);
+    if (!peer) { // "(você)" separado do nome: alguns temas mostram como etiqueta
+      const you = document.createElement('span');
+      you.className = 'you';
+      you.textContent = ' (você)';
+      n.appendChild(you);
+      li.dataset.me = '1';
+    }
+    const q = document.createElement('span');
+    q.className = 'p-q theme-only';
+    const f = document.createElement('span');
+    f.className = 'p-fps';
+    f.textContent = '--';
+    const m = document.createElement('span');
+    m.className = 'p-ms';
+    m.textContent = '--';
+    q.append(f, m);
+    li.append(av, n, q);
     if (extra) li.appendChild(extra);
     ul.appendChild(li);
+    if (peer) { peer.personEl = li; paintPersonQuality(peer); }
+    return li;
   };
   const tag = (text, cls = '') => {
     const s = document.createElement('span');
@@ -4779,7 +4954,11 @@ function renderPeople() {
     b.onclick = () => showTile('me');
     meExtra.appendChild(b);
   }
-  row(`${state.myName} (você)`, 'connected', meExtra, state.myName);
+  const meLi = row(state.myName, 'connected', meExtra, state.myName, null);
+  if (state.share) meLi.dataset.live = '1';
+  // de quem é a tela em destaque no modo Foco (alguns temas escrevem isso na lista)
+  const mainId = state.layout === 'focus' && $('#stage').classList.contains('focus') ? state.focusId : null;
+  if (mainId === 'me') meLi.dataset.main = '1';
 
   for (const p of state.peers.values()) {
     const extra = document.createElement('span');
@@ -4799,8 +4978,140 @@ function renderPeople() {
     db.title = `Pedir o diagnóstico de ${p.name} (chega na sua Área de Trabalho)`;
     db.onclick = () => requestDiag(p);
     extra.appendChild(db);
-    row(p.name, status, extra);
+    const li = row(p.name, status, extra, undefined, p);
+    if (p.sharing) li.dataset.live = '1';
+    if (mainId === p.id) li.dataset.main = '1';
   }
+  const numberTile = (t, n) => { if (t) { t.el.dataset.n = n; t.el.style.setProperty('--n-t', `"${n}"`); } };
+  numberTile(meTile, '1');
+  for (const p of state.peers.values()) if (p.personEl) numberTile(p.tile, p.personEl.dataset.n);
+  const count = $('#people-count');
+  count.textContent = '';
+  const cn = document.createElement('span');
+  cn.className = 'n';
+  cn.textContent = ul.children.length;
+  const ct = document.createElement('span');
+  ct.className = 't';
+  ct.textContent = ' na sala';
+  count.append(cn, ct);
+}
+
+// ------------------------------------------------------------------ quadro de estatísticas (só alguns temas mostram)
+// Uma linha por tela ao vivo (resolução, fps, Mb/s e ping), o fps dos últimos 10 min de uma delas em barrinhas e,
+// embaixo, os outros números dela (os mesmos do texto de estatísticas de cada tela). A tela mostrada é a que está
+// em foco; clicar numa linha escolhe outra (clicar de novo volta a seguir o foco).
+function paintStatsPane() {
+  const box = $('#stats-pane');
+  if (!box || !state.showStats || !box.offsetParent) return; // o tema em uso não mostra o quadro
+  const rows = [];
+  if (state.share) {
+    const n = state.share.direct ? state.nativeStats : null;
+    const o = state.myOut || {};
+    rows.push({ id: 'me', name: 'você', level: '', res: n ? n.height : o.h, fps: n ? n.fps : Math.round(o.fps || 0), mbps: n ? n.kbps / 1000 : (o.bytes || 0) / 1e6, ms: null, tile: meTile });
+  }
+  for (const p of state.peers.values()) {
+    if (!p.sharing || state.hidden.has(p.id)) continue;
+    const q = p.q || {};
+    rows.push({ id: p.id, name: p.name, level: q.level || '', res: q.res, fps: q.fps, mbps: q.mbps, ms: q.ms, tile: p.tile, hist: state.hist.get(p.name) });
+  }
+  const sel = rows.find((r) => r.id === state.statsSel) || rows.find((r) => state.layout === 'focus' && r.id === state.focusId)
+    || rows.find((r) => r.id !== 'me') || rows[0] || null;
+  const cell = (text, cls) => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s; };
+  const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? '--' : String(v));
+  const table = $('#sp-table');
+  table.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'sp-row sp-headrow';
+  head.append(cell('tela'), cell('res'), cell('fps'), cell('Mb/s'), cell('ping'));
+  table.appendChild(head);
+  for (const r of rows) {
+    const d = document.createElement('div');
+    d.className = `sp-row${r === sel ? ' sel' : ''}`;
+    d.dataset.q = r.level;
+    d.title = 'Clique para ver o histórico e os outros números desta tela';
+    d.append(cell(r.name, 'sp-name'), cell(r.res ? `${r.res}p` : '--'), cell(num(r.fps)), cell(r.mbps > 0 ? r.mbps.toFixed(1).replace('.', ',') : '--'), cell(num(r.ms)));
+    d.onclick = () => { state.statsSel = state.statsSel === r.id ? null : r.id; paintStatsPane(); };
+    table.appendChild(d);
+  }
+  if (!rows.length) table.appendChild(cell('ninguém transmitindo', 'sp-none'));
+  // fps dos últimos 10 min em 36 barrinhas: o menor fps de cada pedaço, na cor do pior momento dele
+  const spark = $('#sp-spark');
+  spark.textContent = '';
+  const h = (sel && sel.hist) || [];
+  $('#sp-label').textContent = !sel ? '' : sel.id === 'me' ? 'você · o histórico é só das telas dos amigos' : `${sel.name} · fps · 10 min`;
+  if (h.length) {
+    const N = 36, end = h[h.length - 1].t, t0 = end - 600000, top = Math.max(30, ...h.map((p) => p.fps));
+    const rank = { good: 0, warn: 1, bad: 2 };
+    const parts = Array.from({ length: N }, () => null);
+    for (const p of h) {
+      if (p.t <= t0) continue;
+      const i = Math.min(N - 1, Math.floor(((p.t - t0) / 600000) * N));
+      const b = parts[i] || (parts[i] = { fps: p.fps, level: p.level });
+      b.fps = Math.min(b.fps, p.fps);
+      if ((rank[p.level] || 0) > (rank[b.level] || 0)) b.level = p.level;
+    }
+    for (const b of parts) {
+      const bar = document.createElement('i');
+      if (b) { bar.style.height = `${Math.max(2, Math.round((b.fps / top) * 100))}%`; bar.className = b.level || 'good'; }
+      spark.appendChild(bar);
+    }
+  }
+  // os outros números da tela escolhida (os que a tabela já mostra ficam de fora)
+  const txt = sel && sel.tile ? sel.tile.stats.textContent : '';
+  const cut = sel && sel.id !== 'me' ? txt.indexOf('buffer ') : -1;
+  $('#sp-detail').textContent = cut > 0 ? txt.slice(cut) : txt;
+}
+
+// ------------------------------------------------------------------ resumo "vai ao ar" (só alguns temas mostram)
+// O que os amigos vão receber com a fonte e as opções escolhidas na janela de compartilhar.
+function paintShareSum() {
+  const box = $('#share-sum');
+  if (!box || !box.offsetParent) return; // o tema em uso não mostra o resumo
+  const src = selectedSource;
+  const optText = (id) => { const o = $(id).selectedOptions[0]; return o ? (o.dataset.short || o.textContent) : ''; };
+  // tamanho que sai: a fonte (ou a área escolhida dela) cabendo na resolução pedida, sem aumentar
+  const lim = RES[$('#opt-res').value];
+  let size;
+  if (src && src.size && src.size.width) {
+    const w = src.size.width * (src.crop ? src.crop.w : 1), h = src.size.height * (src.crop ? src.crop.h : 1);
+    const k = lim ? Math.min(1, lim[0] / w, lim[1] / h) : 1;
+    size = `${Math.round((w * k) / 2) * 2}x${Math.round((h * k) / 2) * 2}`;
+  } else size = lim ? `até ${lim[0]}x${lim[1]}` : 'tamanho da janela';
+  // codec: o que o "Automático" deve escolher com quem está na sala agora
+  const peers = [...state.peers.values()].filter((p) => p.h265 !== undefined);
+  const direct = $('#opt-engine').value === 'native-direct';
+  let codec = optText('#opt-codec'), codecNote = '';
+  if (direct || $('#opt-codec').value === 'auto') {
+    const mine = window.Sdp.hasH265() && !window.Sdp.sendBad('H265');
+    const without = peers.filter((p) => !p.h265).map((p) => p.name);
+    if (!mine) { codec = 'H.264'; codecNote = 'este PC não envia H.265'; }
+    else if (!without.length) { codec = 'H.265'; codecNote = peers.length ? 'todos têm' : ''; }
+    else if (direct) { codec = 'H.264'; codecNote = `${without.join(', ')} sem H.265`; }
+    else { codec = 'H.265'; codecNote = `H.264 para ${without.join(', ')}`; }
+    if (direct && mine && !without.length && !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && !window.Sdp.sendBad('AV1') && window.Sdp.hasAV1Hw() && peers.length && peers.every((p) => p.av1)) {
+      codec = 'AV1'; codecNote = 'todos têm';
+    }
+  }
+  const row = (k, v, note) => {
+    const p = document.createElement('p');
+    const a = document.createElement('span'); a.className = 'k'; a.textContent = k;
+    const b = document.createElement('span'); b.className = 'v'; b.textContent = v;
+    if (note) { const em = document.createElement('em'); em.textContent = ` (${note})`; b.appendChild(em); }
+    p.append(a, b);
+    return p;
+  };
+  const head = document.createElement('b');
+  head.className = 'ss-head';
+  head.textContent = 'Vai ao ar';
+  box.textContent = '';
+  box.append(
+    head,
+    row('fonte', src ? src.name : 'escolha ao lado'),
+    row('sai em', `${size} · ${$('#opt-fps').value} fps`),
+    row('codec', codec, codecNote),
+    row('som', $('#opt-audio').value === 'all-except' ? 'PC inteiro, sem Discord' : optText('#opt-audio') || 'sem áudio'),
+    row('área', !src ? '--' : src.type !== 'screen' ? 'só a janela' : src.crop ? `${Math.round(src.crop.w * 100)}% × ${Math.round(src.crop.h * 100)}% da tela` : 'tela inteira'),
+  );
 }
 
 // ------------------------------------------------------------------ 2ª tela
@@ -4921,6 +5232,7 @@ function updateResButton(peer) {
   const m = resMode(peer);
   t.resBtn.classList.toggle('active', m !== 'auto' || !!peer.autoResCap);
   t.resBtn.title = `Resolução que você recebe: ${RES_MODES[m]}${m === 'auto' && peer.autoResCap ? ` (agora ${peer.autoResCap}p: seu PC estava ocupado)` : ''}`;
+  t.resBtn.dataset.v = m === 'auto' ? (peer.autoResCap ? `${peer.autoResCap}p` : 'auto') : m === 'orig' ? 'orig.' : `${m}p`;
 }
 function setResMode(id, mode) {
   const peer = state.peers.get(id);
@@ -4961,8 +5273,8 @@ function openMoreMenu(actions, btn) {
   const m = document.createElement('div');
   m.className = 'menu-pop';
   m.dataset.for = 'more';
-  // o menu mostra o que a largura da tela escondeu da barra
-  for (const b of actions.querySelectorAll('.icon-btn.opt, .icon-btn.opt2')) {
+  // o menu mostra o que a largura da tela (ou o tema) escondeu da barra
+  for (const b of actions.querySelectorAll('.icon-btn:not(.more-btn)')) {
     if (b.classList.contains('hidden') || b.style.display === 'none' || getComputedStyle(b).display !== 'none') continue;
     const it = document.createElement('button');
     it.className = 'menu-icon' + (b.classList.contains('active') ? ' on' : '');
@@ -5267,6 +5579,7 @@ async function collectStats() {
     }
     peer.statsPrev = { t: now, inBytes: inV ? inV.bytesReceived : null, outBytes: outV ? outV.bytesSent : null, ...(peer.jb || {}) };
   }
+  state.myOut = out;
   const routes = [...state.peers.values()].filter((p) => p.route).map((p) => `\nrota ${p.name}: ${p.route}`).join('');
   if (meTile && state.share && state.share.direct) {
     const n = state.nativeStats;
@@ -5290,6 +5603,7 @@ async function collectStats() {
         `encoder ${out.enc || '?'}${out.hw === true ? ' (placa de vídeo)' : out.hw === false ? ' (CPU)' : ''}` + routes
       : 'Ninguém recebendo sua tela no momento');
   }
+  paintStatsPane();
 }
 setInterval(updateStats, 1000);
 
@@ -5306,6 +5620,36 @@ function initRoomUi() {
   $('#btn-adjust').onclick = openAdjust;
   $('#btn-camera').onclick = toggleCamera;
   $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+  $('#chat-send').onclick = sendChat;
+  $('#share-more').onclick = () => $('#share-modal .settings').classList.toggle('more-open');
+  $('#share-modal .settings').addEventListener('change', () => paintShareSum()); // resumo "vai ao ar" (só alguns temas mostram)
+  // quantas opções existem e os atalhos que ficaram valendo, para os temas que escrevem isso na tela
+  $('#btn-options').dataset.n = document.querySelectorAll('#side-opts .sound-toggle.switch').length;
+  window.native.getHotkeys().then((k) => {
+    for (const el of document.querySelectorAll('#keys-bar kbd[data-hk]')) {
+      const key = k[el.dataset.hk];
+      if (key) el.textContent = key; else el.parentNode.classList.add('hidden'); // outro programa ficou com o atalho
+    }
+  }).catch(() => {});
+  // temas em que as opções abrem num painel (o botão "Opções" só existe neles)
+  $('#btn-options').onclick = () => {
+    if ($('#room').classList.toggle('opts-open')) $('#side-opts').open = true;
+  };
+  document.addEventListener('mousedown', (e) => {
+    if ($('#room').classList.contains('opts-open') && !e.target.closest('#side-opts, .side-links, #btn-options')) $('#room').classList.remove('opts-open');
+  });
+  // trocou o tema: cada tela se arruma do jeito do tema novo e a sala é redesenhada
+  window.Themes.onChange(() => {
+    for (const t of [meTile, ...[...state.peers.values()].map((p) => p.tile)]) {
+      window.Themes.tileSetup(t);
+      if (t && t.el) t.el.querySelectorAll('.react-bar button[data-emoji]').forEach(paintEmote);
+    }
+    $('#room').classList.remove('opts-open');
+    $('#side-opts').open = localStorage.getItem('sideOpts') === '1'; // o painel do tema anterior pode ter deixado a lista aberta
+    if (!$('#room').classList.contains('hidden')) render();
+    paintShareSum();
+    $('#chat-log').scrollTop = $('#chat-log').scrollHeight; // o chat muda de tamanho com o tema: continua no fim
+  });
   $('#opt-clipsys').checked = localStorage.getItem('clipSys') !== '0';
   $('#opt-clipsys').onchange = () => localStorage.setItem('clipSys', $('#opt-clipsys').checked ? '1' : '0');
   $('#opt-laserdesk').checked = localStorage.getItem('laserDesk') !== '0';
@@ -5329,7 +5673,9 @@ function initRoomUi() {
   $('#opt-autojoin').checked = localStorage.getItem('autoJoin') === '1';
   $('#opt-autojoin').onchange = () => localStorage.setItem('autoJoin', $('#opt-autojoin').checked ? '1' : '0');
   $('#side-opts').open = localStorage.getItem('sideOpts') === '1';
-  $('#side-opts').ontoggle = () => localStorage.setItem('sideOpts', $('#side-opts').open ? '1' : '0');
+  $('#side-opts').ontoggle = () => {
+    if (!$('#room').classList.contains('opts-open')) localStorage.setItem('sideOpts', $('#side-opts').open ? '1' : '0');
+  };
   // falha ao gravar no disco (disco cheio...): para a gravação em vez de fingir que salvou
   window.native.onRecError(({ handle, message }) => {
     const id = window.Clips.recByHandle(handle);
@@ -5402,13 +5748,13 @@ function initRoomUi() {
     localStorage.setItem('sounds', $('#opt-sounds').checked ? '1' : '0');
     if ($('#opt-sounds').checked) Sfx.play('join');
   };
-  $('#adj-bitrate').oninput = () => { $('#adj-bitrate-label').textContent = `${$('#adj-bitrate').value} Mbps`; };
+  $('#adj-bitrate').oninput = () => setMbps($('#adj-bitrate-label'), $('#adj-bitrate').value);
   $('#adj-bitrate').onchange = () => applyLiveBitrate(Number($('#adj-bitrate').value));
   $('#adj-apply').onclick = applyAdjust;
   $('#modal-close').onclick = () => $('#share-modal').classList.add('hidden');
   $('#share-modal').addEventListener('mousedown', (e) => { if (e.target.id === 'share-modal') $('#share-modal').classList.add('hidden'); });
   $('#btn-start-share').onclick = startFromModal;
-  $('#opt-bitrate').oninput = () => { $('#opt-bitrate-label').textContent = `${$('#opt-bitrate').value} Mbps`; };
+  $('#opt-bitrate').oninput = () => setMbps($('#opt-bitrate-label'), $('#opt-bitrate').value);
   document.querySelectorAll('.tabs .seg').forEach((b) => {
     b.onclick = () => {
       sourceTab = b.dataset.tab;
@@ -5432,6 +5778,7 @@ function initRoomUi() {
     if (e.key === 'Escape') {
       if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
       if (!$('#adjust-panel').classList.contains('hidden')) { $('#adjust-panel').classList.add('hidden'); return; }
+      if ($('#room').classList.contains('opts-open')) { $('#room').classList.remove('opts-open'); return; }
       if (!$('#hist-modal').classList.contains('hidden')) { closeHistory(); return; }
       if (document.querySelector('.menu-pop')) { closeMenus(); return; }
       // caneta ligada em alguma tela: Esc desliga

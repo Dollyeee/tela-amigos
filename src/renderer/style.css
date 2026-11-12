@@ -668,3 +668,25 @@ input::placeholder { color: #5d6376; }
 .sound-toggle.switch input:checked::after { transform: translateX(14px); background: #fff; }
 .sound-toggle.switch input:focus { box-shadow: 0 0 0 3px rgba(123, 108, 255, .25); }
 .sound-toggle.switch:hover input:not(:checked) { background: #363c50; }
+
+/* =====================================================================================
+   Temas. Este arquivo é o visual "Clássico"; cada tema novo é uma folha em themes/<id>.css
+   que só vale com <html data-theme="<id>"> (ver themes.js). Aqui ficam só as peças que os
+   temas usam e que o Clássico não mostra, e a lista de escolha do tema.
+   ===================================================================================== */
+/* área da imagem de cada tela (vídeo, bolhas, mãozinhas, desenhos, emotes): aqui é a tela inteira */
+.tile-screen { position: absolute; inset: 0; overflow: hidden; }
+/* nome + texto de cada mensagem do chat: alguns temas fazem disso um balão; aqui não cria caixa */
+.chat-body { display: contents; }
+/* a segunda palavra do nome do app é marcada para um tema poder grifar; aqui é letra normal */
+.lobby-card h1 em { font-style: normal; }
+.theme-only, .enh-seg, .enh-step, .chat-send, .live-count, .q-res, .q-mbps, .q-codec { display: none; }
+/* no Clássico elas não aparecem nunca, mesmo onde uma regra mais específica daqui daria "display" a elas */
+html:is([data-theme="classico"], :not([data-theme])) :is(.theme-only, .enh-seg, .enh-step, .chat-send, .live-count, .q-res, .q-mbps, .q-codec) { display: none !important; }
+/* dentro da sala o tema se escolhe em Opções; no rodapé só na tela de entrada */
+#room:not(.hidden) ~ .app-version .theme-pick { display: none; }
+.theme-pick { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; }
+.theme-pick select { font-size: 11px; padding: 1px 4px; border-radius: 6px; color: var(--muted); background: transparent; border-color: var(--line); }
+.theme-pick select option, .opt-theme-row select option { background: #12141b; color: #eceef4; }
+.opt-theme-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 6px; font-size: 12.5px; color: #c3c8d6; cursor: default; margin-top: 0; }
+.opt-theme-row select { font-size: 12px; padding: 3px 8px; border-radius: 8px; max-width: 132px; }
