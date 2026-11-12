@@ -10,6 +10,7 @@
 //                     sala montada no primeiro tema), mostra o que ele devolver e termina
 //   --cenas=a,b       só estas cenas (o fim do nome do arquivo, ex.: --cenas=2-sala-foco,1c-novidades)
 //   --so-entrada      para depois das cenas da tela de entrada (não entra na sala)
+//   --tempo=<min>     tempo máximo da cópia de teste (padrão: 2 min + 1 min por tema)
 // Saída: design/capturas/<tema>-<n>-<cena>.png (janela de 1280 x 800).
 // Rodar depois de mexer em src/renderer/themes/*.css, no themes.js ou no style.css.
 const { spawn } = require('child_process');
@@ -304,6 +305,15 @@ async function page(CFG) {
       await shot(`${t}-10-transmitindo`);
       state.meMini = true; render(); quality();
       await shot(`${t}-11-previa-no-canto`);
+      // transmitindo no modo Grade, e sozinho (só a sua tela à vista: aí a sala também se arruma como Grade). Os botões
+      // da sala mudam de arrumação nesses casos (o "Parar" chegou a cair em cima do "Trocar tela" no Varanda)
+      state.meMini = false;
+      state.layout = 'grid'; render(); quality();
+      await shot(`${t}-10b-transmitindo-grade`);
+      for (const p of state.peers.values()) p.sharing = false;
+      state.layout = 'focus'; render(); quality();
+      await shot(`${t}-10c-transmitindo-sozinho`);
+      for (const p of state.peers.values()) p.sharing = true;
       state.meMini = mini0;
       state.share = null;
       state.order = state.order.filter((id) => id !== 'me');
@@ -390,7 +400,9 @@ async function page(CFG) {
       console.log('  ' + m[1]);
     }
   });
-  const t = setTimeout(() => { console.log("TEMPO ESGOTADO"); child.kill(); }, 120000 + 60000 * (THEMES.length || 12)); // só a cópia de teste
+  // só a cópia de teste; --tempo=<minutos> para medições longas (ex.: as prévias quadro a quadro)
+  const limite = Number(opt('tempo')) > 0 ? Number(opt('tempo')) * 60000 : 120000 + 60000 * (THEMES.length || 12);
+  const t = setTimeout(() => { console.log("TEMPO ESGOTADO"); child.kill(); }, limite);
   await new Promise((r) => child.on('exit', r));
   clearTimeout(t);
   try { server.close(); } catch {}

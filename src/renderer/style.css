@@ -555,6 +555,28 @@ input::placeholder { color: #5d6376; }
 #btn-leave { color: #c9cdd9; }
 #btn-leave:hover { color: #ff9aa6; background: rgba(239, 79, 95, .1); border-color: rgba(239, 79, 95, .35); }
 #btn-share { padding: 8px 16px; }
+/* barra de cima cheia (transmitindo, e mais ainda hospedando): nada quebra em duas linhas. Quando não cabe tudo, os
+   botões de apoio viram só o ícone (o nome fica na dica) e, na janela estreita, o nome do app e o "Sala ·" saem.
+   Antes, numa janela de 1280 px, "Trocar tela", "+ 2ª tela" e "Fechar sala" quebravam em duas e três linhas.
+   Só no Clássico: os outros temas arrumam esses botões do jeito deles */
+html:is([data-theme="classico"], :not([data-theme])) .topbar :is(button, .chip, .app-brand) { white-space: nowrap; }
+html:is([data-theme="classico"], :not([data-theme])) .topbar .chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+html:is([data-theme="classico"], :not([data-theme])) .topbar .chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1480px) {
+  html:is([data-theme="classico"], :not([data-theme])) #room:has(#btn-stop:not(.hidden)) .top-actions :is(#btn-stats, #btn-camera, #btn-share2, #btn-adjust, #btn-leave) { justify-content: center; width: 36px; height: 34px; padding: 0; font-size: 0; }
+  html:is([data-theme="classico"], :not([data-theme])) #room:has(#btn-stop:not(.hidden)) .top-actions :is(#btn-stats, #btn-camera, #btn-share2, #btn-adjust, #btn-leave)::before { margin: 0; }
+}
+@media (max-width: 1180px) {
+  html:is([data-theme="classico"], :not([data-theme])) .top-actions :is(#btn-stats, #btn-camera, #btn-share2, #btn-adjust, #btn-leave) { justify-content: center; width: 36px; height: 34px; padding: 0; font-size: 0; }
+  html:is([data-theme="classico"], :not([data-theme])) .top-actions :is(#btn-stats, #btn-camera, #btn-share2, #btn-adjust, #btn-leave)::before { margin: 0; }
+  html:is([data-theme="classico"], :not([data-theme])) .app-brand { gap: 0; font-size: 0; }
+}
+@media (max-width: 1000px) {
+  html:is([data-theme="classico"], :not([data-theme])) .topbar { gap: 10px; }
+  html:is([data-theme="classico"], :not([data-theme])) .topbar .chip-k { display: none; }
+  html:is([data-theme="classico"], :not([data-theme])) #room:has(#btn-stop:not(.hidden)) #btn-share { justify-content: center; width: 40px; height: 36px; padding: 0; font-size: 0; }
+  html:is([data-theme="classico"], :not([data-theme])) #room:has(#btn-stop:not(.hidden)) #btn-share::before { margin: 0; }
+}
 
 /* ---------- barra lateral ---------- */
 .sidebar { width: 248px; padding: 16px 12px 12px; gap: 10px; background: var(--panel); border-right-color: var(--line-soft); }

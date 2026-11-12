@@ -2267,6 +2267,7 @@ async function startShareInner(overrides) {
   if (!state.order.includes('me')) state.order.unshift('me');
   $('#share-modal').classList.add('hidden');
   $('#btn-share').textContent = 'Trocar tela';
+  $('#btn-share').title = 'Trocar a tela que você está transmitindo'; // (alguns temas mostram só o ícone)
   state.lastSource = src; // Ctrl+Shift+S volta a transmitir esta tela
   window.Helper.gameWatch(true).catch(() => {}); // esconder a prévia quando estiver jogando
   $('#btn-stop').classList.remove('hidden');
@@ -3980,6 +3981,7 @@ async function stopShare() {
     sendState(peer.id);
   }
   $('#btn-share').textContent = 'Compartilhar tela';
+  $('#btn-share').title = '';
   // a detecção de jogo continua enquanto estiver na sala (ajusta a reprodução das telas dos amigos)
   if (state.leaving) { window.Helper.gameWatch(false).catch(() => {}); state.gaming = false; applyPlayoutBuffer(); }
   state.lightMode = false;

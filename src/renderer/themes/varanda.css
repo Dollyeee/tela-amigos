@@ -293,7 +293,9 @@ html[data-theme="varanda-noite"] {
   .top-actions button { height: 44px; justify-content: center; white-space: nowrap; }
   #btn-share { grid-row: 1; grid-column: 1 / -1; height: 52px; padding: 0 20px; font-size: 18px; }
   #btn-share::before { width: 20px; height: 20px; }
-  #room:has(#btn-stop:not(.hidden)) #btn-share { grid-column: 1 / 6; }
+  /* (só fora do arranjo de Grade: lá cada botão tem a sua coluna. Esta regra pesa mais que as do Grade e, quando valia lá
+     também, o "Trocar tela" cobria a Câmera e as Estatísticas e o "Parar" caía em cima dele) */
+  #room:has(#btn-stop:not(.hidden)) .stage:not(.grid) #btn-share { grid-column: 1 / 6; }
   #btn-stop { grid-row: 1; grid-column: 6; height: 52px; padding: 0 18px; font-size: 16px; }
   #btn-camera, #btn-stats, #btn-share2, #btn-adjust { grid-row: 2; width: 44px; padding: 0; border-radius: 50%; background: var(--panel-2); color: var(--text); font-size: 0; }
   :is(#btn-camera, #btn-stats, #btn-share2, #btn-adjust):hover { background: var(--panel-3); color: var(--text); }
