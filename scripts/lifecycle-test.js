@@ -158,6 +158,62 @@ async function pageA() {
     await until(() => peer() && peer().pc.connectionState === 'connected' && peer().h265 !== undefined, 30000, 'conectar ao amigo');
     log('conectado');
 
+    // ---------------------------------------------------------------- 0c) Vida dos temas (vida.js): as marcas no uso
+    // Uma pessoa de mentira (o servidor da sala ignora recados para ela) entra, entra no ar, manda mensagem e sai, pelos
+    // mesmos caminhos das mensagens de verdade. Sem som e sem notificação do Windows ("fulano começou a compartilhar",
+    // que aparece com a janela sem foco): os dois ficam desligados durante este trecho.
+    {
+      const V = window.Vida, root = document.documentElement;
+      const sfx = Sfx.play, Notif = window.Notification;
+      Sfx.play = () => {};
+      window.Notification = function () { return {}; };
+      await sleep(2600); // passa o tempo de "acabou de entrar na sala" (quem já estava não ganha festa)
+      const liOf = (id) => { const p = state.peers.get(id); return p && p.personEl; };
+      check('vida: numa cópia de teste fica tudo parado', !root.classList.contains('vivo') && !root.classList.contains('foco'));
+      onSignal({ type: 'peer-joined', id: '7771', name: 'Vida Teste' });
+      check('vida: parada, quem entra não ganha marca', !liOf('7771').dataset.ev && !$('#room').dataset.ev && !$('#anuncio').dataset.ev);
+      onSignal({ type: 'peer-left', id: '7771' });
+      // a regra (a janela desta cópia está escondida: confere a regra e se ela lê o estado do app)
+      const base = { testing: false, hidden: false, motion: false, gaming: false, light: false };
+      check('vida: a regra anima no uso normal e para com jogo, modo leve, janela escondida e sem animações do Windows',
+        V.regra(base) && !V.regra({ ...base, gaming: true }) && !V.regra({ ...base, light: true }) && !V.regra({ ...base, hidden: true }) && !V.regra({ ...base, motion: true }) && !V.regra({ ...base, testing: true }));
+      const g0 = state.gaming, l0 = state.lightMode;
+      state.gaming = true; state.lightMode = false;
+      const a1 = V.agora();
+      state.gaming = false; state.lightMode = true;
+      const a2 = V.agora();
+      state.gaming = g0; state.lightMode = l0;
+      check('vida: a regra enxerga o jogo em tela cheia e o modo leve do app', a1.gaming === true && a1.light === false && a2.gaming === false && a2.light === true && a1.testing === true);
+      V.force(true);
+      check('vida: ligada, as marcas de animar e de janela em uso aparecem', root.classList.contains('vivo') && root.classList.contains('foco'));
+      const n0 = $('#people').children.length;
+      onSignal({ type: 'peer-joined', id: '7772', name: 'Vida Teste' });
+      const li = liOf('7772');
+      check('vida: quem entra chega marcado na lista, com o número dele no aviso', !!li && li.dataset.ev === 'entrou' && $('#room').dataset.ev === 'entrou'
+        && $('#anuncio').dataset.ev === 'entrou' && $('#anuncio').dataset.n === li.dataset.n && $('#anuncio').dataset.nome === 'Vida Teste', li && li.dataset.n);
+      check('vida: a contagem de pessoas ganha a marca de "mais um"', $('#people').children.length === n0 + 1 && $('#people-count').dataset.ev === 'mais');
+      render(); // a lista é refeita: a marca continua, com o tempo andando
+      const li2 = liOf('7772');
+      check('vida: a lista refeita mantém a marca e o tempo dela', li2 !== li && li2.dataset.ev === 'entrou' && parseFloat(li2.style.getPropertyValue('--ev-t')) <= 0, li2.style.getPropertyValue('--ev-t'));
+      onRelay('7772', { kind: 'state', sharing: true, audio: false, sourceName: 'Jogo' });
+      const t7 = state.peers.get('7772').tile;
+      check('vida: quem entra no ar ganha a marca na lista e na tela', liOf('7772').dataset.ev === 'aovivo' && !!t7 && t7.el.dataset.ev === 'aovivo' && $('#room').dataset.ev === 'aovivo');
+      addChat('Vida Teste', 'oi, cheguei');
+      const msg = $('#chat-log').lastElementChild;
+      check('vida: mensagem nova chega marcada, com o tamanho para "digitar"', msg.dataset.ev === 'novo' && msg.style.getPropertyValue('--len') === String('Vida Teste oi, cheguei'.length));
+      await sleep(V.EV_MS + 300);
+      check('vida: alguns segundos depois as marcas somem sozinhas', !liOf('7772').dataset.ev && !t7.el.dataset.ev && !$('#room').dataset.ev && !$('#anuncio').dataset.ev && !msg.dataset.ev && !$('#people-count').dataset.ev);
+      const nLeft = liOf('7772').dataset.n;
+      onSignal({ type: 'peer-left', id: '7772' });
+      check('vida: quem sai aparece no aviso e a contagem ganha a marca de "menos um"', $('#anuncio').dataset.ev === 'saiu' && $('#anuncio').dataset.n === nLeft && $('#people-count').dataset.ev === 'menos');
+      V.force(false);
+      check('vida: parar no meio limpa tudo na hora (nada fica marcado para recomeçar depois)', !root.classList.contains('vivo') && !document.querySelector('[data-ev]'));
+      V.force(null);
+      $('#chat-log').lastElementChild.remove();
+      Sfx.play = sfx;
+      window.Notification = Notif;
+    }
+
     const src = { id: 'screen:9999:0', name: 'Tela de teste', type: 'screen', displayId: '0', size: { width: 1280, height: 720 } };
     $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option>'; $('#opt-audio').value = 'none'; // nunca captura som
     const setOpts = (engine, res, fps) => { $('#opt-engine').value = engine; $('#opt-res').value = res; $('#opt-fps').value = String(fps); $('#opt-mode').value = 'motion'; $('#opt-codec').value = 'auto'; $('#opt-bitrate').value = 9; };

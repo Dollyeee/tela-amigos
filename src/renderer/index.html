@@ -21,11 +21,13 @@
   <link rel="stylesheet" href="themes/tocafitas.css">
   <link rel="stylesheet" href="fx.css">
   <link rel="stylesheet" href="tema-instala.css">
+  <link rel="stylesheet" href="tema-vida.css">
 </head>
 <body>
 
   <!-- ============ LOBBY ============ -->
   <section id="lobby" class="screen">
+    <div class="vida" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <div class="window-drag"></div>
     <div class="lobby-card">
       <div class="lobby-head">
@@ -76,6 +78,9 @@
 
   <!-- ============ SALA ============ -->
   <section id="room" class="screen hidden">
+    <!-- vida dos temas (vida.js / tema-vida.css): detalhes que se mexem, por baixo de tudo, e o aviso de quem chegou -->
+    <div class="vida" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div id="anuncio" class="anuncio" aria-hidden="true"></div>
     <header class="topbar">
       <div class="room-info">
         <span class="app-brand"><img src="icon.png" alt="">Tela Amigos</span>
@@ -378,6 +383,7 @@
   <script src="netctl.js"></script>
   <script src="changelog.js"></script>
   <script src="news.js"></script>
+  <script src="vida.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

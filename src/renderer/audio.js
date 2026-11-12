@@ -261,6 +261,18 @@ window.TileAudio = (() => {
       }
     }
 
+    // o som que sai agora, de 0 (silêncio) a 1, para os temas que desenham um medidor (já com o volume escolhido e o
+    // nivelador); null quando está mudo ou sem som
+    meter() {
+      const n = this.nodes;
+      if (!n || this.muted || this.volume <= 0) return null;
+      n.analyser.getFloatTimeDomainData(n.buf);
+      let sum = 0;
+      for (let i = 0; i < n.buf.length; i++) sum += n.buf[i] * n.buf[i];
+      const db = 10 * Math.log10(sum / n.buf.length + 1e-12) + 20 * Math.log10(this.volume * this.boost);
+      return Math.max(0, Math.min(1, (db + 50) / 44));
+    }
+
     teardown() {
       if (!this.nodes) return;
       try { this.nodes.src.disconnect(); } catch {}

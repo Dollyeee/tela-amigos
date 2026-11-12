@@ -635,13 +635,15 @@ function onSignal(msg) {
       // um número que eu já conheço entrando "de novo" é outra conexão (ex.: a sala reiniciou e
       // recomeçou a numeração): a conexão antiga com esse número não serve mais
       if (state.peers.has(msg.id)) removePeer(msg.id);
+      window.Vida.mark(msg.id, 'entrou'); // antes de criar: a pessoa já aparece na lista chegando
       createPeer(msg.id, msg.name);
       toast(`${msg.name} entrou na sala`);
       Sfx.play('join');
+      { const p = state.peers.get(msg.id); window.Vida.sala('entrou', p && p.personEl ? p.personEl.dataset.n : '', msg.name); }
       break;
     case 'peer-left': {
       const p = state.peers.get(msg.id);
-      if (p) { toast(`${p.name} saiu`); Sfx.play('leave'); }
+      if (p) { toast(`${p.name} saiu`); Sfx.play('leave'); window.Vida.sala('saiu', p.personEl ? p.personEl.dataset.n : '', p.name); }
       removePeer(msg.id);
       break;
     }
@@ -747,6 +749,7 @@ function onRelay(from, data) {
         if (data.sharing && !was) {
           toast(`${peer.name} começou a compartilhar`);
           Sfx.play('share');
+          window.Vida.mark(peer.id, 'aovivo');
           // app em segundo plano (ex.: jogando): notificação do Windows
           if (!document.hasFocus()) {
             try {
@@ -757,6 +760,7 @@ function onRelay(from, data) {
           if (!state.order.includes(peer.id)) state.order.push(peer.id);
         }
         render();
+        if (data.sharing && !was) window.Vida.sala('aovivo', peer.personEl ? peer.personEl.dataset.n : '', peer.name);
       }
       break;
     case 'want':
@@ -2274,7 +2278,9 @@ async function startShareInner(overrides) {
     applySendParams(peer); // ajusta codec/renegocia se precisar
     sendState(peer.id);
   }
+  if (!old) window.Vida.mark('me', 'aovivo'); // entrou no ar agora (trocar de tela não conta)
   render();
+  if (!old) window.Vida.sala('aovivo', '1', state.myName);
   sfuSync();
   // alguém que não decodifica este codec disse isso enquanto a captura abria (aí ainda não havia
   // transmissão para trocar, e ele ficava sem imagem): confere agora
@@ -2909,6 +2915,7 @@ function addChat(name, text, system = false) {
     body.append(b, document.createTextNode(text));
     div.append(av, body);
   } else div.appendChild(document.createTextNode(text));
+  window.Vida.chat(div, String(system ? text : `${name} ${text}`).length);
   log.appendChild(div);
   while (log.children.length > 200) log.firstChild.remove();
   log.scrollTop = log.scrollHeight;
@@ -3985,6 +3992,7 @@ async function stopShare() {
 
 // ------------------------------------------------------------------ sala / UI
 function enterRoom() {
+  window.Vida.entrei(); // quem já estava na sala aparece sem a animação de "chegou"
   $('#lobby').classList.add('hidden');
   $('#room').classList.remove('hidden');
   window.Themes.screen('room');
@@ -4816,6 +4824,7 @@ function render() {
     t.el.classList.toggle('focused', focusMode && id === focus);
     t.el.classList.toggle('in-pip', state.pipId === id);
     if (t.video.paused) t.video.play().catch(() => {});
+    window.Vida.paint(t.el, id, true); // tela que acabou de entrar no ar: o tema anima a chegada
   }
 
   document.querySelectorAll('.layout-switch .seg').forEach((b) => b.classList.toggle('active', b.dataset.layout === state.layout));
@@ -4938,6 +4947,7 @@ function renderPeople() {
     if (extra) li.appendChild(extra);
     ul.appendChild(li);
     if (peer) { peer.personEl = li; paintPersonQuality(peer); }
+    window.Vida.paint(li, peer ? peer.id : 'me'); // acabou de entrar / de entrar no ar: o tema anima
     return li;
   };
   const tag = (text, cls = '') => {
@@ -4994,6 +5004,7 @@ function renderPeople() {
   ct.className = 't';
   ct.textContent = ' na sala';
   count.append(cn, ct);
+  window.Vida.paint(count, 'conta');
 }
 
 // ------------------------------------------------------------------ quadro de estatísticas (só alguns temas mostram)
@@ -5862,3 +5873,9 @@ initLobby();
 initRoomUi();
 initUpdates();
 window.News.init(); // novidades da versão: abre sozinha uma vez depois de cada atualização
+// o tema se mexe no uso (vida.js): para com jogo em tela cheia e no modo leve; o medidor de som lê as telas dos amigos
+window.Vida.init({
+  gaming: () => !!state.gaming,
+  light: () => !!state.lightMode,
+  tiles: () => [...state.peers.values()].map((p) => p.tile).filter(Boolean),
+});
