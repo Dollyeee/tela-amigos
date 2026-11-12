@@ -86,7 +86,25 @@ const scriptA = common + `
     setInterval(() => { if (readyCheck && !readyCheck.ready.has(String(state.myId))) { markReady(); log('respondi pronto'); } }, 300);
     // "Nativa direta" em H.265: quadros HEVC (WebCodecs, placa) injetados pelo mesmo caminho do helper
     async function startSyntheticDirect() {
-      const ni = await window.NativeVideo.start({ inject: true, synthetic: true, codec: 'hevc', width: 1280, height: 720 });
+      let lightKey = true;
+      const ni = await window.NativeVideo.start({ inject: true, synthetic: true, codec: 'hevc', width: 1280, height: 720,
+        light: { fps: 30 }, onKeyLight: () => { lightKey = true; } });
+      // versão leve (2ª qualidade): 640x360 do mesmo desenho, num segundo encoder, pelo caminho da camada 1
+      const cl = document.createElement('canvas'); cl.width = 640; cl.height = 360;
+      const gl = cl.getContext('2d');
+      const encL = new VideoEncoder({
+        output: (chunk) => {
+          const pkt = new Uint8Array(9 + chunk.byteLength);
+          pkt[0] = chunk.type === 'key' ? 1 : 0;
+          new DataView(pkt.buffer).setBigInt64(1, BigInt(chunk.timestamp), true);
+          chunk.copyTo(pkt.subarray(9));
+          ni.pushLight(pkt);
+        },
+        error: (e) => log('ERRO encoder da versão leve ' + e.message),
+      });
+      encL.configure({ codec: 'hvc1.1.6.L120.90', width: 640, height: 360, bitrate: 1.2e6, framerate: 30,
+        hardwareAcceleration: 'prefer-hardware', latencyMode: 'realtime', hevc: { format: 'annexb' } });
+      let fnL = 0;
       const enc = new VideoEncoder({
         output: (chunk) => {
           const pkt = new Uint8Array(9 + chunk.byteLength);
@@ -102,12 +120,18 @@ const scriptA = common + `
       let fn = 0;
       const t0 = performance.now();
       window.hevcIv = setInterval(() => {
-        const vf = new VideoFrame(c, { timestamp: Math.round((performance.now() - t0) * 1000) });
+        const ts = Math.round((performance.now() - t0) * 1000);
+        const vf = new VideoFrame(c, { timestamp: ts });
         enc.encode(vf, { keyFrame: fn++ % 30 === 0 });
         vf.close();
+        gl.drawImage(c, 0, 0, 640, 360);
+        const vl = new VideoFrame(cl, { timestamp: ts });
+        encL.encode(vl, { keyFrame: lightKey || ++fnL % 60 === 0 }); lightKey = false;
+        vl.close();
       }, 1000 / 30);
       state.share.video = ni.track; state.share.preview = ni.preview; state.share.stream = new MediaStream([ni.track]);
-      Object.assign(state.share, { native: true, direct: true, codec: 'hevc', width: 1280, height: 720 });
+      Object.assign(state.share, { native: true, direct: true, codec: 'hevc', width: 1280, height: 720,
+        videoLight: ni.light ? ni.lightTrack : null, lightKbps: ni.light ? 1300 : 0 });
       for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
     }
     // "Nativa direta" em AV1: quadros AV1 (WebCodecs) com o alinhamento de keyframes do app
@@ -134,7 +158,7 @@ const scriptA = common + `
         vf.close();
       }, 1000 / 30);
       state.share.video = ni.track; state.share.preview = ni.preview; state.share.stream = new MediaStream([ni.track]);
-      Object.assign(state.share, { native: true, direct: true, codec: 'av1', width: 1280, height: 720 });
+      Object.assign(state.share, { native: true, direct: true, codec: 'av1', width: 1280, height: 720, videoLight: null, lightKbps: 0 });
       for (const p of state.peers.values()) { applySendParams(p); sendState(p.id); }
     }
     const av1Iv = setInterval(async () => {
@@ -360,6 +384,22 @@ const scriptB = common + `
       throw new Error('direta H.265 não chegou certo: ' + JSON.stringify({ codec: dcodec, w: d1.frameWidth, h: d1.frameHeight, quadros3s: got }));
     }
     log('direta H.265 ok: ' + d1.frameWidth + 'x' + d1.frameHeight + ', ' + got + ' quadros em 3 s, ' + dcodec);
+    // versão leve (2ª qualidade da direta): vendo a tela do A em miniatura, chega a leve (640x360); de volta, a cheia
+    sendRelay(peer().id, { kind: 'want', level: 'thumb', maxH: 0 });
+    await until(async () => { const x = await inV(); return !!x && x.frameWidth === 640 && x.frameHeight === 360; }, 15000, 'receber a versão leve (640x360)');
+    const l0 = await inV();
+    await sleep(3000);
+    const l1 = await inV();
+    const gotL = l1.framesDecoded - l0.framesDecoded;
+    if (gotL < 40 || l1.frameWidth !== 640) throw new Error('versão leve não chegou certo: ' + JSON.stringify({ w: l1.frameWidth, h: l1.frameHeight, quadros3s: gotL }));
+    log('versão leve ok: ' + l1.frameWidth + 'x' + l1.frameHeight + ', ' + gotL + ' quadros em 3 s');
+    sendRelay(peer().id, { kind: 'want', level: 'full', maxH: 0 });
+    await until(async () => { const x = await inV(); return !!x && x.frameWidth === 1280; }, 15000, 'voltar para a cheia (1280x720)');
+    const f0 = await inV();
+    await sleep(2000);
+    const f1 = await inV();
+    if (f1.framesDecoded - f0.framesDecoded < 25) throw new Error('a cheia não voltou a andar: ' + (f1.framesDecoded - f0.framesDecoded) + ' quadros em 2 s');
+    log('de volta para a cheia ok');
     // "Nativa direta" em AV1 (nosso keyframe só vai em lugar de keyframe do Chromium)
     sendRelay(null, { kind: 'chat', text: 'smoke-av1-pedido' });
     await until(() => /smoke-av1-ligada/.test($('#chat-log').textContent), 15000, 'A ligar a direta em AV1');

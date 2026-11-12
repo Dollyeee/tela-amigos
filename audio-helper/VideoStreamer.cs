@@ -158,12 +158,20 @@ sealed unsafe class VideoStreamer : IDisposable
     public string Codec => codec;
     string CodecLabel => av1 ? "AV1" : hevc ? "H.265" : "H.264";
 
-    public VideoStreamer(int fps, int bitrateKbps, string codec = "h264")
+    public VideoStreamer(int fps, int bitrateKbps, string codec = "h264", bool light = false)
     {
         this.fps = fps;
         this.bitrateKbps = bitrateKbps;
         this.codec = codec == "hevc" || codec == "av1" ? codec : "h264";
+        this.light = light;
     }
+
+    // Versão leve (a 2ª qualidade da "Nativa direta", para miniaturas e amigos de rede fraca): uma segunda captura e um
+    // segundo encoder, menores. Os quadros saem como pacote 5 (o principal é o 3); avisos e estatísticas ficam por
+    // conta da principal, e uma falha aqui não derruba a transmissão (vira "video-light-error").
+    readonly bool light;
+    byte PacketType => light ? (byte)5 : (byte)3;
+    void Say(object msg) { if (!light) Program.SendJson(msg); }
     Action? droppedHandler;
 
     // ================================================================ início
@@ -188,8 +196,8 @@ sealed unsafe class VideoStreamer : IDisposable
                 StartWith(encIndex, adapter, target, maxW, maxH);
                 // só agora (o diagnóstico cria instâncias temporárias que não podem roubar o aviso)
                 droppedHandler = () => { dropUntilKey = true; forceKey = true; };
-                Program.OnVideoDropped = droppedHandler;
-                if (errors.Count > 0) Program.SendJson(new { type = "warn", message = $"Captura nativa funcionou na tentativa {errors.Count + 1}: {adapter.Desc}" });
+                if (light) Program.OnVideoDroppedLight = droppedHandler; else Program.OnVideoDropped = droppedHandler;
+                if (errors.Count > 0) Say(new { type = "warn", message = $"Captura nativa funcionou na tentativa {errors.Count + 1}: {adapter.Desc}" });
                 return;
             }
             catch (Exception ex)
@@ -423,13 +431,13 @@ sealed unsafe class VideoStreamer : IDisposable
                 float white = HdrInfo.SdrWhiteScale(monName);
                 toneMapper = new HdrToneMapper(device, context, white);
                 hdr = true;
-                Program.SendJson(new { type = "video-hdr", sdrWhiteNits = Math.Round(white * 80) });
+                Say(new { type = "video-hdr", sdrWhiteNits = Math.Round(white * 80) });
             }
         }
         catch (Exception ex)
         {
             toneMapper?.Dispose(); toneMapper = null; hdr = false;
-            Program.SendJson(new { type = "warn", message = $"HDR detectado mas a conversão falhou ({ex.Message}); capturando em 8 bits." });
+            Say(new { type = "warn", message = $"HDR detectado mas a conversão falhou ({ex.Message}); capturando em 8 bits." });
         }
 
         // Windows 10: o WGC desenha uma borda amarela ao redor do que é transmitido e não há como
@@ -449,7 +457,7 @@ sealed unsafe class VideoStreamer : IDisposable
             {
                 ReleaseDd();
                 useDd = false;
-                Program.SendJson(new { type = "warn", message = $"Captura sem borda (DXGI) falhou ({ex.Message}); usando a captura do Windows." });
+                Say(new { type = "warn", message = $"Captura sem borda (DXGI) falhou ({ex.Message}); usando a captura do Windows." });
             }
         }
         StartWgc(hwnd, hmon);
@@ -540,7 +548,7 @@ sealed unsafe class VideoStreamer : IDisposable
                 // ar tudo o que está em volta dela. O app tenta então a captura do Chromium, só da janela.
                 if (!CoversMonitor(hwnd, hmon)) throw new Exception($"o Windows não deixou capturar esta janela ({ex.Message})");
                 item = CreateItem(window: IntPtr.Zero, monitor: hmon);
-                Program.SendJson(new { type = "video-warn", message = "Não deu para capturar só a janela (tela cheia exclusiva?): transmitindo o monitor inteiro em que ela está." });
+                Say(new { type = "video-warn", message = "Não deu para capturar só a janela (tela cheia exclusiva?): transmitindo o monitor inteiro em que ela está." });
             }
         }
         else
@@ -750,7 +758,7 @@ sealed unsafe class VideoStreamer : IDisposable
     GraphicsCaptureItem? closedItem;
     void OnItemClosed(GraphicsCaptureItem sender, object _)
     {
-        if (running && ReferenceEquals(sender, closedItem)) Program.SendJson(new { type = "video-ended" });
+        if (running && ReferenceEquals(sender, closedItem)) Say(new { type = "video-ended" });
     }
 
     void OnFrameArrived(Direct3D11CaptureFramePool pool, object _)
@@ -1076,7 +1084,7 @@ sealed unsafe class VideoStreamer : IDisposable
         int hr = setValue(codecApi, &api, &v);
         // (o encoder da NVIDIA recusa "0 quadros B" porque já não usa nenhum no modo de baixa latência:
         //  não é problema e o aviso só enchia o registro a cada início de transmissão)
-        if (hr < 0 && !quiet && api != CODECAPI_BPictureCount) Program.SendJson(new { type = "warn", message = $"Encoder não aceitou {api}: 0x{hr:X8}" });
+        if (hr < 0 && !quiet && api != CODECAPI_BPictureCount) Say(new { type = "warn", message = $"Encoder não aceitou {api}: 0x{hr:X8}" });
         return hr;
     }
 
@@ -1115,7 +1123,7 @@ sealed unsafe class VideoStreamer : IDisposable
     {
         if (!running || Interlocked.Exchange(ref failed, 1) == 1) return;
         running = false;
-        Program.SendJson(new { type = "video-error", message });
+        Program.SendJson(light ? new { type = "video-light-error", message } : new { type = "video-error", message });
     }
 
     int outputErrors;
@@ -1137,7 +1145,7 @@ sealed unsafe class VideoStreamer : IDisposable
             try { odb.Sample?.Dispose(); } catch { }
             if (Interlocked.Decrement(ref inFlight) < 0) Interlocked.Exchange(ref inFlight, 0);
             if (++outputErrors >= 30) { Fail($"encoder falhando (0x{res.Code:X8})"); return; }
-            Program.SendJson(new { type = "warn", message = $"ProcessOutput 0x{res.Code:X8}" });
+            Say(new { type = "warn", message = $"ProcessOutput 0x{res.Code:X8}" });
             return;
         }
         outputErrors = 0;
@@ -1177,7 +1185,7 @@ sealed unsafe class VideoStreamer : IDisposable
                 data[td..].CopyTo(packet.AsSpan(off));
             }
             else data.CopyTo(packet.AsSpan(off));
-            Program.Send(3, packet);
+            Program.Send(PacketType, packet);
 
             Interlocked.Increment(ref statFrames);
             Interlocked.Add(ref statBytes, total);
@@ -1265,13 +1273,13 @@ sealed unsafe class VideoStreamer : IDisposable
                     if (!warnedNoFrames && Interlocked.Read(ref capturedFrames) == 0 && clock.ElapsedTicks - start > Stopwatch.Frequency * 4)
                     {
                         warnedNoFrames = true;
-                        Program.SendJson(new { type = "video-warn", message = "Nenhuma imagem capturada ainda. A janela está minimizada?" });
+                        Say(new { type = "video-warn", message = "Nenhuma imagem capturada ainda. A janela está minimizada?" });
                     }
                     // janela transmitida pela duplicação fechou (no WGC o próprio item avisa)
                     if (ddHwnd != IntPtr.Zero && !windowGone && !IsWindow(ddHwnd))
                     {
                         windowGone = true;
-                        Program.SendJson(new { type = "video-ended" });
+                        Say(new { type = "video-ended" });
                     }
                 }
 
@@ -1403,6 +1411,7 @@ sealed unsafe class VideoStreamer : IDisposable
 
     void SendStats(double seconds)
     {
+        if (light) return; // as estatísticas são as da versão principal
         long frames = Interlocked.Exchange(ref statFrames, 0);
         long bytes = Interlocked.Exchange(ref statBytes, 0);
         long captured = Interlocked.Exchange(ref statCaptured, 0);
@@ -1433,6 +1442,7 @@ sealed unsafe class VideoStreamer : IDisposable
     {
         running = false;
         if (droppedHandler != null && Program.OnVideoDropped == droppedHandler) Program.OnVideoDropped = null;
+        if (droppedHandler != null && Program.OnVideoDroppedLight == droppedHandler) Program.OnVideoDroppedLight = null;
         CurrentStep = "parar o encoder";
         bool tickDone = tickThread == null || tickThread.Join(3000);
         // (cada chamada no seu try: com o encoder em erro, um aviso recusado pulava o Shutdown, que é

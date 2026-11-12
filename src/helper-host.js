@@ -68,6 +68,7 @@ function parse(chunk) {
     if (type === 2) post({ t: 'pcm', d: payload });
     else if (type === 3) post({ t: 'video', d: payload });
     else if (type === 4) post({ t: 'sys', d: payload }); // áudio do PC inteiro (para os clipes)
+    else if (type === 5) post({ t: 'video-light', d: payload }); // versão leve da tela (2ª qualidade da direta)
     else if (type === 1) {
       try {
         const msg = JSON.parse(Buffer.from(payload).toString('utf8'));

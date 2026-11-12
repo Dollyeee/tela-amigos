@@ -9,7 +9,9 @@
 //    assim que apareceu o defeito corrigido na v1.0.58: um quadro-chave da trilha vazia fazia o
 //    Chromium jogar fora o quadro da placa que estava saindo, sem perda de pacote aparente;
 //  - a trilha vazia quase não gera quadros-chave sozinha (se voltar a gerar vários por segundo, uma
-//    versão nova do Chromium mudou alguma coisa: ver native-video.js).
+//    versão nova do Chromium mudou alguma coisa: ver native-video.js);
+//  - no fim, a versão leve (2ª qualidade, o segundo encoder do helper): B passa a ver a tela de A em miniatura e
+//    tem de receber a leve (até 540 linhas, ~30 quadros/s); depois volta para a cheia.
 // Rodar depois de trocar a versão do Electron ou de mexer no native-video.js / no helper.
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -68,6 +70,7 @@ const scriptA = common + `
     if (!state.share.direct) throw new Error('não ficou na nativa direta (nativo=' + state.share.native + ')');
     if (state.share.audio) throw new Error('o teste ligou o áudio');
     log('transmitindo: ' + state.share.width + 'x' + state.share.height + ' ' + state.share.codec + ' · ' + state.share.encoder + ' · piso de QP ' + (state.share.minQp || 'sem') + ' · começo ' + state.nativeKbps + ' kb/s');
+    log('versão leve: ' + (state.share.videoLight ? 'ligada ' + state.share.lightKbps + ' kb/s' : 'desligada (' + (window.NativeVideo.dbg.lightErr || '?') + ')'));
     const peer = () => [...state.peers.values()][0];
     const pid = peer().id;
     let po = null, stop = false, lastW = null;
@@ -145,6 +148,17 @@ const scriptB = common + `
     for (let i = 0; i < dp.ring.length; i += 400) log('Q ' + dp.ring.slice(i, i + 400).join(','));
     log('RESUMO-B ' + JSON.stringify({ secs: SECS, w: prev.frameWidth, h: prev.frameHeight, mime: prev.mime, fps: +(dd('framesDecoded') / SECS).toFixed(1), rec: dd('framesReceived'), kbps: Math.round(dd('bytesReceived') * 8 / SECS / 1000),
       keys: dd('keyFramesDecoded'), pli: dd('pliCount'), nack: dd('nackCount'), lost: dd('packetsLost'), freezes: dd('freezeCount'), frozen: +((prev.totalFreezesDuration || 0) - (first.totalFreezesDuration || 0)).toFixed(2), holes, worst, buffer: dd('jitterBufferEmittedCount') ? Math.round(dd('jitterBufferDelay') / dd('jitterBufferEmittedCount') * 1000) : null }));
+    // versão leve: vendo a tela de A em miniatura, chega a leve do segundo encoder do helper; depois, a cheia de volta
+    sendRelay(peer().id, { kind: 'want', level: 'thumb', maxH: 0 });
+    try {
+      let l1 = null;
+      await until(async () => { const s = await st(); if (s && s.frameHeight > 0 && s.frameHeight <= 540) { l1 = s; return true; } return false; }, 15000, 'receber a versão leve');
+      await sleep(3000);
+      const l2 = await st();
+      log('LEVE ' + JSON.stringify({ w: l2.frameWidth, h: l2.frameHeight, fps: +((l2.framesDecoded - l1.framesDecoded) / 3).toFixed(1) }));
+    } catch (e) { log('LEVE falhou: ' + e.message); }
+    sendRelay(peer().id, { kind: 'want', level: 'full', maxH: 0 });
+    await until(async () => { const s = await st(); return s && s.frameHeight > 540; }, 15000, 'voltar para a cheia').then(() => log('CHEIA de volta')).catch((e) => log('CHEIA falhou: ' + e.message));
     sendRelay(null, { kind: 'chat', text: 'fim-b' });
     log('B OK');
   } catch (e) { log('FALHOU B: ' + e.message); try { sendRelay(null, { kind: 'chat', text: 'fim-b' }); } catch {} }
@@ -226,6 +240,16 @@ function run(name, script) {
     }
     if (gone.length) fails.push(`${gone.length} quadro(s) saíram e não chegaram montados`);
   } else if (CODEC !== 'AV1') fails.push('sem registro quadro a quadro para cruzar');
+
+  // a versão leve (o segundo encoder do helper)
+  const leve = json(b.lines, 'LEVE');
+  if (a.lines.some((l) => /^versão leve: desligada/.test(l))) fails.push('a versão leve não abriu (' + a.lines.find((l) => /^versão leve:/.test(l)) + ')');
+  else if (!leve) fails.push('a versão leve não chegou a quem via em miniatura' + (b.lines.find((l) => /^LEVE falhou/.test(l)) ? ` (${b.lines.find((l) => /^LEVE falhou/.test(l))})` : ''));
+  else {
+    console.log(`versão leve: ${leve.w}x${leve.h}, ${leve.fps} quadros/s`);
+    if (leve.h > 540 || leve.fps < 25) fails.push(`versão leve errada: ${leve.w}x${leve.h} a ${leve.fps} quadros/s`);
+  }
+  if (!b.lines.includes('CHEIA de volta')) fails.push('não voltou para a cheia depois da miniatura');
 
   console.log(fails.length ? `\nTESTE DA NATIVA DIRETA FALHOU: ${fails.join('; ')}` : '\nTESTE DA NATIVA DIRETA PASSOU');
   process.exit(fails.length ? 1 : 0);

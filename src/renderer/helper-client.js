@@ -5,7 +5,7 @@ window.Helper = (() => {
   let nextId = 1;
   const pending = new Map(); // id -> { expect, resolve, timer }
   const queue = [];          // comandos enviados antes do canal existir
-  let onPcm = null, onVideo = null, onSys = null;
+  let onPcm = null, onVideo = null, onSys = null, onVideoLight = null;
   let lastKey = -1e9, keyTimer = null;
   const eventListeners = [];
 
@@ -35,6 +35,7 @@ window.Helper = (() => {
     const m = e.data;
     if (m.t === 'pcm') { if (onPcm) onPcm(m.d); return; }
     if (m.t === 'video') { if (onVideo) onVideo(m.d); return; }
+    if (m.t === 'video-light') { if (onVideoLight) onVideoLight(m.d); return; }
     if (m.t === 'sys') { if (onSys) onSys(m.d); return; }
     if (m.t !== 'event') return;
     const msg = m.msg;
@@ -80,25 +81,28 @@ window.Helper = (() => {
       if (opts.crop) target.crop = opts.crop; // só uma área da tela (frações 0..1)
       return request({
         cmd: 'video-start', target, fps: opts.fps, kbps: opts.kbps, maxWidth: opts.maxWidth, maxHeight: opts.maxHeight,
-        codec: opts.codec || 'h264',
+        codec: opts.codec || 'h264', light: opts.light || undefined,
       }, 'video-started', 15000);
     },
     videoStop: () => request({ cmd: 'video-stop' }, 'video-stopped'),
     // keyframe vai para todos os amigos (um encoder só) e é grande: pedidos juntos viram um só,
     // no máximo um a cada 0,7 s (vários amigos pedindo ao mesmo tempo não viram uma enxurrada)
-    videoKey: () => {
+    videoKey: (light) => {
+      // a versão leve tem o seu encoder: o keyframe dela é pequeno e só vai para quem está nela
+      if (light) { send({ cmd: 'video-key', light: true }); return; }
       const wait = lastKey + 700 - performance.now();
       if (wait <= 0) { lastKey = performance.now(); send({ cmd: 'video-key' }); return; }
       if (!keyTimer) keyTimer = setTimeout(() => { keyTimer = null; lastKey = performance.now(); send({ cmd: 'video-key' }); }, wait);
     },
     diag: () => request({ cmd: 'video-diag' }, 'video-diag', 8000),
     gameWatch: (on) => request({ cmd: 'game-watch', on }, 'game-watch'),
-    videoBitrate: (kbps) => send({ cmd: 'video-bitrate', kbps }),
+    videoBitrate: (kbps, light) => send({ cmd: 'video-bitrate', kbps, light: light ? true : undefined }),
     sysStart: () => request({ cmd: 'sysaudio-start' }, 'sysaudio-started'),
     sysStop: () => request({ cmd: 'sysaudio-stop' }, 'sysaudio-stopped'),
     onSys: (cb) => { onSys = cb; },
     onPcm: (cb) => { onPcm = cb; },
     onVideo: (cb) => { onVideo = cb; },
+    onVideoLight: (cb) => { onVideoLight = cb; },
     onEvent: (cb) => { eventListeners.push(cb); },
   };
 })();

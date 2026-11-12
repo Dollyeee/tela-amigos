@@ -3,11 +3,15 @@
 // alimentamos o sender com uma trilha "vazia" (64x64) no mesmo ritmo e, num
 // RTCRtpScriptTransform, trocamos o conteúdo de cada quadro pelo nosso H.264.
 // Quem assiste recebe H.264 normal; nada muda do lado de lá.
+//
+// Duas camadas (desde a 1.0.64): a 0 é a tela cheia; a 1 é a versão leve (960x540, 30 fps) que o helper codifica num
+// segundo encoder, para quem vê a tela em miniatura ou tem a rede fraca. Cada amigo está numa camada (setLayer) e cada
+// camada tem a sua trilha vazia: o quadro-chave de uma (inclusive o "lugar de keyframe" do AV1) não mexe na outra.
 window.NativeVideo = (() => {
   const WORKER = `
   // native=false: deixa os quadros do Chromium passarem como estão (captura Chromium / sem compartilhar)
-  const peers = new Map(); // id -> { q, waitingKey, active, native, sentAny }
-  let lastKeyReq = 0, keyTimer = null;
+  const peers = new Map(); // id -> { q, waitingKey, active, native, sentAny, layer }
+  const lastKeyReq = [0, 0], keyTimer = [null, null]; // por camada
   // H.265: o encoder HEVC de hardware do Chromium TRAVA se um quadro codificado for descartado
   // aqui (para de devolver buffers). Então, sem quadro nosso, devolve o quadro com dados vazios
   // (nada vai para a rede). No H.264 (encoder de software para o 64x64) descartar é o normal.
@@ -27,7 +31,7 @@ window.NativeVideo = (() => {
   // quadro nosso não ficar esperando (ver askExtra).
   // (No AV1 o nosso keyframe precisa do lugar de keyframe; lá o corte só pega quadros anteriores ao
   //  nosso keyframe, que não fazem falta.)
-  let lagMs = 12.5;   // um quadro nosso que esperou mais que isso na fila perdeu a "carona" dele
+  let lagMs = [12.5, 25];   // por camada: um quadro nosso que esperou mais que isso na fila perdeu a "carona" dele
   let lastExtra = 0;
   // Pede ao app um quadro vazio a mais: tem quadro nosso na fila sem quadro vazio para levá-lo (lugar
   // de quadro-chave pulado, ou um quadro vazio descartado pelo Chromium). Sem isso o atraso de um
@@ -37,7 +41,7 @@ window.NativeVideo = (() => {
     if (now - lastExtra < 5) return;
     lastExtra = now;
     p.ex = (p.ex || 0) + 1;
-    postMessage({ type: 'extra' });
+    postMessage({ type: 'extra', layer: p.layer });
   }
   let trace = null; // diagnóstico (testes): registro de cada quadro que passou pelo transform
   function note(frame, size, key) {
@@ -47,11 +51,11 @@ window.NativeVideo = (() => {
     if (trace.length > 8000) trace.shift();
   }
   function skip(frame, ctl) { if (hevc || av1) { frame.data = new ArrayBuffer(0); ctl.enqueue(frame); } }
-  // no máximo 1 pedido a cada 500 ms; pedidos dentro da janela são adiados (não perdidos)
-  function reqKey() {
-    const wait = 500 - (Date.now() - lastKeyReq);
-    if (wait <= 0) { lastKeyReq = Date.now(); postMessage({ type: 'key' }); return; }
-    if (!keyTimer) keyTimer = setTimeout(() => { keyTimer = null; reqKey(); }, wait);
+  // no máximo 1 pedido a cada 500 ms por camada; pedidos dentro da janela são adiados (não perdidos)
+  function reqKey(layer = 0) {
+    const wait = 500 - (Date.now() - lastKeyReq[layer]);
+    if (wait <= 0) { lastKeyReq[layer] = Date.now(); postMessage({ type: 'key', layer }); return; }
+    if (!keyTimer[layer]) keyTimer[layer] = setTimeout(() => { keyTimer[layer] = null; reqKey(layer); }, wait);
   }
   // Um amigo com rede ruim fica para trás repetidamente. O keyframe vai para TODOS (um encoder só)
   // e é grande: pedir um a cada queda dele trava a rede de todo mundo. Quedas seguidas do mesmo
@@ -63,27 +67,29 @@ window.NativeVideo = (() => {
     p.backoff = !noBackoff && p.lastFlush && now - p.lastFlush < 10000 ? Math.min(8000, Math.max(1000, (p.backoff || 0) * 2)) : 0;
     p.lastFlush = now;
     p.keyAt = now + p.backoff;
-    if (!p.backoff) reqKey();
+    if (!p.backoff) reqKey(p.layer);
   }
   // enquanto alguém estiver esperando o primeiro keyframe, insiste a cada segundo
   // (o encoder quase não gera keyframes sozinho; um pedido perdido deixaria a tela preta)
   setInterval(() => {
-    for (const p of peers.values()) if (p.active && p.waitingKey && Date.now() >= (p.keyAt || 0)) { reqKey(); break; }
+    const asked = [false, false];
+    for (const p of peers.values()) if (p.active && p.waitingKey && Date.now() >= (p.keyAt || 0) && !asked[p.layer]) { asked[p.layer] = true; reqKey(p.layer); }
     // diagnóstico: quantos quadros foram enviados/pulados/descartados por amigo
     const s = {};
-    for (const [id, p] of peers) { s[id] = { all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, kd: p.kd || 0, ex: p.ex || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey, backoff: p.backoff || 0 }; p.all = p.sent = p.empty = p.flush = p.kd = p.ex = 0; }
+    for (const [id, p] of peers) { s[id] = { layer: p.layer, all: p.all || 0, sent: p.sent || 0, empty: p.empty || 0, flush: p.flush || 0, kd: p.kd || 0, ex: p.ex || 0, q: p.q.length, native: p.native, active: p.active, wk: p.waitingKey, backoff: p.backoff || 0 }; p.all = p.sent = p.empty = p.flush = p.kd = p.ex = 0; }
     postMessage({ type: 'stats', peers: s });
   }, 1000);
 
   function get(id) {
     let p = peers.get(id);
-    if (!p) { p = { q: [], waitingKey: true, active: false, native: false, sentAny: false }; peers.set(id, p); }
+    if (!p) { p = { q: [], waitingKey: true, active: false, native: false, sentAny: false, layer: 0 }; peers.set(id, p); }
     return p;
   }
   onmessage = (e) => {
     const m = e.data;
     if (m.type === 'frame') {
-      const list = [...peers.values()].filter((p) => p.active);
+      const layer = m.layer || 0;
+      const list = [...peers.values()].filter((p) => p.active && p.layer === layer);
       list.forEach((p, i) => {
         if (p.waitingKey) { if (!m.key) return; p.waitingKey = false; }
         p.q.push({ key: m.key, at: performance.now(), data: i === list.length - 1 ? m.data : m.data.slice(0) });
@@ -93,13 +99,18 @@ window.NativeVideo = (() => {
     } else if (m.type === 'mode') {
       const p = get(m.id);
       const active = m.native && m.active;
-      if (active && !p.active) { p.q.length = 0; p.waitingKey = true; p.sentAny = false; reqKey(); }
+      if (active && !p.active) { p.q.length = 0; p.waitingKey = true; p.sentAny = false; reqKey(p.layer); }
       p.native = m.native;
       p.active = active;
+    } else if (m.type === 'layer') {
+      // trocou de camada: a fila da outra não serve; espera um keyframe da nova
+      const p = get(m.id);
+      const layer = m.layer === 1 ? 1 : 0;
+      if (p.layer !== layer) { p.layer = layer; p.q.length = 0; p.waitingKey = true; p.sentAny = false; if (p.active) reqKey(layer); }
     } else if (m.type === 'codec') {
       hevc = m.codec === 'hevc';
       av1 = m.codec === 'av1';
-      lagMs = 750 / (m.fps > 0 ? m.fps : 60);
+      lagMs = [750 / (m.fps > 0 ? m.fps : 60), 750 / (m.fpsLight > 0 ? m.fpsLight : 30)];
     } else if (m.type === 'reset') {
       for (const p of peers.values()) { p.q.length = 0; p.waitingKey = true; }
     } else if (m.type === 'remove') {
@@ -116,10 +127,10 @@ window.NativeVideo = (() => {
     let item = p.q[0];
     if (item && item.key && !keySlot) {
       item = null; // nosso keyframe espera um lugar de keyframe
-      if (!slotAsk || Date.now() - slotAsk > 500) { slotAsk = Date.now(); postMessage({ type: 'keyslot' }); }
+      if (!slotAsk || Date.now() - slotAsk > 500) { slotAsk = Date.now(); postMessage({ type: 'keyslot', layer: p.layer }); }
     } else if (keySlot && !(item && item.key)) {
       // o Chromium fez um keyframe (pedido de quem assiste): o nosso vem logo em seguida
-      p.q.length = 0; p.waitingKey = true; item = null; reqKey();
+      p.q.length = 0; p.waitingKey = true; item = null; reqKey(p.layer);
     }
     // fila crescendo sem keyframe na frente (o envio ficou para trás): recomeça num keyframe.
     // (mesmo limite da entrada: os quadros que chegam enquanto o keyframe espera o lugar dele
@@ -128,7 +139,7 @@ window.NativeVideo = (() => {
     if (item && p.q.length > 12 && !item.key) { flushPeer(p, true); item = null; }
     if (!item) { p.empty = (p.empty || 0) + 1; skip(frame, ctl); return; }
     p.q.shift();
-    if (p.q.length && !p.q[0].key && performance.now() - item.at > lagMs) askExtra(p);
+    if (p.q.length && !p.q[0].key && performance.now() - item.at > lagMs[p.layer]) askExtra(p);
     frame.data = item.data;
     p.sentAny = true;
     p.sent = (p.sent || 0) + 1;
@@ -151,7 +162,7 @@ window.NativeVideo = (() => {
         const item = p.q.shift();
         if (!item) { p.empty = (p.empty || 0) + 1; note(frame, -1, 0); skip(frame, ctl); return; } // ainda sem quadro nosso: não envia nada
         // este quadro esperou demais e ainda tem outro atrás dele: faltou um quadro vazio
-        if (p.q.length && performance.now() - item.at > lagMs) askExtra(p);
+        if (p.q.length && performance.now() - item.at > lagMs[p.layer]) askExtra(p);
         note(frame, item.data.byteLength, item.key);
         frame.data = item.data;
         p.sentAny = true;
@@ -163,25 +174,25 @@ window.NativeVideo = (() => {
 
   const dbg = { dummy: 0, writeErr: null }; // diagnóstico (quadros vazios entregues ao WebRTC)
   let worker = null;
-  let generator = null, writer = null;
   let previewGen = null, previewWriter = null;
   let decoder = null, decoderReady = false, previewOn = true, inject = false;
   let running = false;
-  let lastTs = -1;
-  let frameNo = 0;
   let codec = 'h264'; // 'h264', 'hevc' ou 'av1' (o que o helper está gerando)
-  let altSize = false;  // AV1: alterna o tamanho da trilha vazia para o Chromium gerar um keyframe
   let pushKey = null;   // teste sintético: pedido de keyframe vai para o gerador do teste
+  let pushKeyLight = null; // (o mesmo, da versão leve)
+  let lightOn = false;  // a versão leve está saindo do helper
   let traceCb = null;
-  let lastDummyAt = 0, extraTimer = null, period = 1000 / 60;
-  let dummyW = 0, dummyH = 0;
+  // cada camada: a trilha vazia (o gerador e quem escreve nele) e o ritmo dela
+  //   altSize: AV1, alterna o tamanho da trilha vazia para o Chromium gerar um keyframe
+  const lane = () => ({ generator: null, writer: null, lastTs: -1, frameNo: 0, altSize: false, lastDummyAt: 0, extraTimer: null,
+    period: 1000 / 60, dummyW: 0, dummyH: 0, dummy: null });
+  const lanes = [lane(), lane()];
   // quadro "vazio" que o Chromium codifica e nós trocamos pelo nosso. No H.265 precisa ser maior:
   // os encoders HEVC de hardware recusam 64x64 (e o Chromium não tem HEVC por software)
   let DW = 64, DH = 64;
-  let dummy = null;
   function makeDummy() {
     [DW, DH] = codec === 'hevc' ? [256, 144] : [64, 64];
-    dummy = new Uint8Array((96 * 96 * 3) / 2 + DW * DH * 2); // cabe também o tamanho alternativo
+    for (const l of lanes) { l.dummy = new Uint8Array((96 * 96 * 3) / 2 + DW * DH * 2); l.dummyW = l.dummyH = 0; } // cabe também o tamanho alternativo
   }
   makeDummy();
 
@@ -190,10 +201,10 @@ window.NativeVideo = (() => {
     const url = URL.createObjectURL(new Blob([WORKER], { type: 'text/javascript' }));
     worker = new Worker(url);
     worker.onmessage = (e) => {
-      if (e.data.type === 'key') { if (pushKey) pushKey(); else window.Helper.videoKey(); }
-      else if (e.data.type === 'keyslot') altSize = !altSize; // AV1: próximo quadro vazio muda de tamanho
+      if (e.data.type === 'key') key(e.data.layer);
+      else if (e.data.type === 'keyslot') { const l = lanes[e.data.layer === 1 ? 1 : 0]; l.altSize = !l.altSize; } // AV1: próximo quadro vazio da camada muda de tamanho
       else if (e.data.type === 'stats') window.NativeVideo.lastStats = e.data.peers;
-      else if (e.data.type === 'extra') extraDummy();
+      else if (e.data.type === 'extra') extraDummy(lanes[e.data.layer === 1 ? 1 : 0]);
       else if (e.data.type === 'trace' && traceCb) { const cb = traceCb; traceCb = null; cb(e.data.ring); }
     };
     return worker;
@@ -258,104 +269,134 @@ window.NativeVideo = (() => {
 
     if (!inject) return; // modo adaptativo: o WebRTC recodifica a trilha decodificada
 
-    worker.postMessage({ type: 'frame', key, data }, [data]);
+    worker.postMessage({ type: 'frame', layer: 0, key, data }, [data]);
 
     // quadro vazio no mesmo ritmo: cada um "carrega" um quadro nosso
-    if (ts <= lastTs) return;
-    writeDummy(ts);
+    if (ts <= lanes[0].lastTs) return;
+    writeDummy(lanes[0], ts);
+  }
+
+  // versão leve: só vai para quem está na camada 1 (não tem prévia local), na trilha vazia dela
+  function onLightFrame(buf) {
+    if (!running || !inject || !lightOn) return;
+    const key = (buf[0] & 1) === 1;
+    const ts = Number(new DataView(buf.buffer, buf.byteOffset + 1, 8).getBigInt64(0, true));
+    const data = buf.buffer.slice(buf.byteOffset + 9, buf.byteOffset + buf.byteLength);
+    worker.postMessage({ type: 'frame', layer: 1, key, data }, [data]);
+    if (ts <= lanes[1].lastTs) return;
+    writeDummy(lanes[1], ts);
   }
 
   // Quadro vazio: cinza parado, só um cantinho de 8x8 muda a cada quadro. Antes a imagem inteira
   // mudava a cada quadro e o encoder de software do Chromium via "troca de cena" o tempo todo:
   // gerava um quadro-chave a cada 17 quadros (~3,5 por segundo) e cada um deles podia cortar o
   // quadro nosso que estava saindo (ver o comentário no worker).
-  function writeDummy(ts) {
-    lastTs = ts;
-    lastDummyAt = performance.now();
-    frameNo++;
-    const w = altSize ? DW + 16 : DW, h = altSize ? DH + 16 : DH;
-    if (w !== dummyW || h !== dummyH) { dummy.fill(128, 0, (w * h * 3) / 2); dummyW = w; dummyH = h; }
-    const v = (frameNo * 37) & 255;
-    for (let y = 0; y < 8; y++) dummy.fill(v, y * w, y * w + 8);
-    const vf = new VideoFrame(dummy.subarray(0, (w * h * 3) / 2), { format: 'I420', codedWidth: w, codedHeight: h, timestamp: ts });
+  function writeDummy(l, ts) {
+    if (!l.writer) return;
+    l.lastTs = ts;
+    l.lastDummyAt = performance.now();
+    l.frameNo++;
+    const w = l.altSize ? DW + 16 : DW, h = l.altSize ? DH + 16 : DH;
+    if (w !== l.dummyW || h !== l.dummyH) { l.dummy.fill(128, 0, (w * h * 3) / 2); l.dummyW = w; l.dummyH = h; }
+    const v = (l.frameNo * 37) & 255;
+    for (let y = 0; y < 8; y++) l.dummy.fill(v, y * w, y * w + 8);
+    const vf = new VideoFrame(l.dummy.subarray(0, (w * h * 3) / 2), { format: 'I420', codedWidth: w, codedHeight: h, timestamp: ts });
     dbg.dummy++;
-    writer.write(vf).catch((e) => { dbg.writeErr = String(e && e.message || e); vf.close(); });
+    l.writer.write(vf).catch((e) => { dbg.writeErr = String(e && e.message || e); vf.close(); });
   }
 
   // O worker ficou com um quadro nosso sem quadro vazio para levá-lo: manda um a mais, no meio do
   // intervalo (o Chromium descarta quadros colados um no outro; e se o próximo quadro normal já
   // está para chegar, ele mesmo leva e o worker pede de novo se ainda sobrar).
-  function extraDummy() {
-    if (!running || !inject || !writer || lastTs < 0) return;
-    const since = performance.now() - lastDummyAt;
-    if (since < 3) { if (!extraTimer) extraTimer = setTimeout(() => { extraTimer = null; extraDummy(); }, 3 - since); return; }
-    if (since > period - 3) return;
+  function extraDummy(l) {
+    if (!running || !inject || !l.writer || l.lastTs < 0) return;
+    const since = performance.now() - l.lastDummyAt;
+    if (since < 3) { if (!l.extraTimer) l.extraTimer = setTimeout(() => { l.extraTimer = null; extraDummy(l); }, 3 - since); return; }
+    if (since > l.period - 3) return;
     dbg.extra = (dbg.extra || 0) + 1;
-    writeDummy(lastTs + Math.round(since * 1000));
+    writeDummy(l, l.lastTs + Math.round(since * 1000));
   }
 
   // opts.inject = true: envio direto do H.264 nativo (só rede perfeita)
   // opts.inject = false: o WebRTC recodifica a trilha decodificada (adaptativo, padrão)
   // opts.codec: 'hevc' (H.265) ou 'h264'. opts.synthetic: teste automático, os quadros vêm de
   // push() em vez do helper (mesmo formato: [key][timestamp 8 bytes][Annex-B])
+  // opts.light: { maxWidth, maxHeight, fps, kbps } pede também a versão leve (só no envio direto); a resposta diz se ela
+  // saiu (light, lightTrack: a trilha vazia da camada 1). No teste sintético os quadros dela vêm de pushLight()
   async function start(opts) {
     await stop();
     ensureWorker();
     worker.postMessage({ type: 'reset' });
     inject = !!opts.inject;
     codec = opts.codec === 'hevc' || opts.codec === 'av1' ? opts.codec : 'h264';
-    period = 1000 / (Number(opts.fps) > 0 ? Number(opts.fps) : 60);
-    worker.postMessage({ type: 'codec', codec, fps: 1000 / period });
-    altSize = false;
+    const fps = Number(opts.fps) > 0 ? Number(opts.fps) : 60;
+    const wantLight = inject && !!opts.light;
+    const fpsLight = wantLight && Number(opts.light.fps) > 0 ? Number(opts.light.fps) : 30;
+    lanes[0].period = 1000 / fps;
+    lanes[1].period = 1000 / fpsLight;
+    worker.postMessage({ type: 'codec', codec, fps, fpsLight });
     pushKey = opts.synthetic && opts.onKey ? opts.onKey : null;
+    pushKeyLight = opts.synthetic && opts.onKeyLight ? opts.onKeyLight : null;
     makeDummy();
-    generator = null;
-    writer = null;
-    if (inject) {
-      generator = new MediaStreamTrackGenerator({ kind: 'video' });
-      generator.contentHint = 'motion';
-      writer = generator.writable.getWriter();
+    for (const [i, l] of lanes.entries()) {
+      Object.assign(l, { generator: null, writer: null, lastTs: -1, frameNo: 0, altSize: false, lastDummyAt: 0 });
+      if (inject && (i === 0 || wantLight)) {
+        l.generator = new MediaStreamTrackGenerator({ kind: 'video' });
+        l.generator.contentHint = 'motion';
+        l.writer = l.generator.writable.getWriter();
+      }
     }
+    lightOn = wantLight;
     previewGen = new MediaStreamTrackGenerator({ kind: 'video' });
     previewWriter = previewGen.writable.getWriter();
     makePreviewDecoder();
-    lastTs = -1;
-    dummyW = dummyH = 0;
     running = true;
+    const light = () => (lightOn ? { light: true, lightTrack: lanes[1].generator } : { light: false, lightTrack: null });
     if (opts.synthetic) {
-      return { track: inject ? generator : previewGen, preview: new MediaStream([previewGen]), width: opts.width, height: opts.height,
-        encoder: 'teste', codec, push: (u8) => onFrame(u8) };
+      return { track: inject ? lanes[0].generator : previewGen, preview: new MediaStream([previewGen]), width: opts.width, height: opts.height,
+        encoder: 'teste', codec, push: (u8) => onFrame(u8), pushLight: (u8) => onLightFrame(u8), ...light() };
     }
     window.Helper.onVideo((ab) => onFrame(new Uint8Array(ab)));
+    window.Helper.onVideoLight((ab) => onLightFrame(new Uint8Array(ab)));
     const { inject: _i, ...helperOpts } = opts;
+    if (!wantLight) delete helperOpts.light;
     const res = await window.Helper.videoStart(helperOpts);
     if (res.type !== 'video-started') {
       await stop();
       throw new Error(res.message || 'falha ao iniciar a captura nativa');
     }
+    // a placa não abriu o segundo encoder (ou o helper é antigo): segue só com a camada cheia
+    if (wantLight && !res.light) {
+      lightOn = false;
+      dbg.lightErr = res.lightError || 'sem resposta';
+      try { lanes[1].writer.close(); } catch {}
+      try { lanes[1].generator.stop(); } catch {}
+      lanes[1].writer = lanes[1].generator = null;
+    }
     if (!inject) previewGen.contentHint = 'motion';
     return {
-      track: inject ? generator : previewGen,
+      track: inject ? lanes[0].generator : previewGen,
       preview: new MediaStream([previewGen]),
       width: res.width, height: res.height, encoder: res.encoder, codec: res.codec || 'h264', minQp: res.minQp || 0,
+      lightWidth: res.lightWidth || 0, lightHeight: res.lightHeight || 0, ...light(),
     };
   }
 
   async function stop() {
     const was = running;
     running = false;
-    clearTimeout(extraTimer); extraTimer = null;
+    lightOn = false;
     // Em variáveis próprias, antes de esperar o helper: um start() novo pode criar as trilhas dele
     // enquanto esta parada ainda espera (parar e transmitir de novo em seguida). Antes, ao voltar da
     // espera, esta parada fechava as trilhas do start novo: "captura nativa falhou" sem motivo.
-    const w = writer, pw = previewWriter, g = generator, pg = previewGen, d = decoder;
-    writer = previewWriter = generator = previewGen = decoder = null;
+    const old = lanes.map((l) => { clearTimeout(l.extraTimer); const o = { w: l.writer, g: l.generator }; l.extraTimer = l.writer = l.generator = null; return o; });
+    const pw = previewWriter, pg = previewGen, d = decoder;
+    previewWriter = previewGen = decoder = null;
     decoderReady = false;
     if (worker) worker.postMessage({ type: 'reset' });
     if (was) { try { await window.Helper.videoStop(); } catch {} }
-    try { w && w.close(); } catch {}
+    for (const o of old) { try { o.w && o.w.close(); } catch {} try { o.g && o.g.stop(); } catch {} }
     try { pw && pw.close(); } catch {}
-    try { g && g.stop(); } catch {}
     try { pg && pg.stop(); } catch {}
     try { d && d.state !== 'closed' && d.close(); } catch {}
   }
@@ -371,15 +412,21 @@ window.NativeVideo = (() => {
     if (worker) worker.postMessage({ type: 'mode', id: peerId, native, active });
   }
   function remove(peerId) { if (worker) worker.postMessage({ type: 'remove', id: peerId }); }
+  // camada de quem recebe: 0 = cheia, 1 = leve (só existe com hasLight())
+  function setLayer(peerId, layer) { ensureWorker().postMessage({ type: 'layer', id: peerId, layer: layer === 1 ? 1 : 0 }); }
+  const hasLight = () => running && inject && lightOn;
   function setPreview(on) {
     if (on && !previewOn) { decoderReady = false; window.Helper.videoKey(); }
     previewOn = on;
   }
 
-  // pedido de keyframe (no teste automático vai para o gerador do teste)
-  function key() { if (pushKey) pushKey(); else window.Helper.videoKey(); }
+  // pedido de keyframe (no teste automático vai para o gerador do teste); layer 1: o da versão leve
+  function key(layer) {
+    if (layer === 1) { if (!lightOn) return; if (pushKeyLight) pushKeyLight(); else window.Helper.videoKey(true); return; }
+    if (pushKey) pushKey(); else window.Helper.videoKey();
+  }
   // diagnóstico (testes): liga o registro quadro a quadro do transform e devolve o que foi registrado
   function trace(on) { ensureWorker().postMessage({ type: 'trace', on }); }
   function traceDump() { return new Promise((r) => { traceCb = r; ensureWorker().postMessage({ type: 'trace', dump: true }); }); }
-  return { start, stop, attach, setMode, remove, setPreview, key, isRunning: () => running, dbg, trace, traceDump };
+  return { start, stop, attach, setMode, remove, setLayer, hasLight, setPreview, key, isRunning: () => running, dbg, trace, traceDump };
 })();

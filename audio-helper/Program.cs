@@ -7,8 +7,11 @@
 //             {"id":3,"cmd":"start","mode":"app","pid":456,"selfPid":123} (só um app e seus filhos)
 //             {"id":4,"cmd":"stop"}
 //             {"id":5,"cmd":"video-start", ...} / video-stop / video-key / video-bitrate
+//             (video-start com "light":{maxWidth,maxHeight,fps,kbps} abre também a versão leve; video-key e
+//              video-bitrate com "light":true valem para ela)
 //   stdout -> pacotes [tipo:1 byte][tamanho:uint32 LE][dados]
-//             1 = JSON, 2 = PCM s16le estéreo 48 kHz, 3 = quadro H.264 ([flags][int64 µs][Annex B])
+//             1 = JSON, 2 = PCM s16le estéreo 48 kHz, 3 = quadro H.264 ([flags][int64 µs][Annex B]),
+//             4 = PCM do PC inteiro (clipes), 5 = quadro da versão leve (mesmo formato do 3)
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -23,6 +26,7 @@ static class Program
     public const int Channels = 2;
     static Mixer? mixer;
     static volatile VideoStreamer? video; // só a thread "video-cmd" cria/encerra
+    static volatile VideoStreamer? videoLight; // a versão leve da mesma tela (2ª qualidade), quando pedida
     static GameWatcher? gameWatcher;
     static Mixer? clipMixer; // áudio do PC inteiro (menos este app) para os clipes
 
@@ -32,6 +36,7 @@ static class Program
 
     /// Chamado quando um quadro de vídeo teve que ser descartado (app não está lendo rápido o bastante).
     public static Action? OnVideoDropped;
+    public static Action? OnVideoDroppedLight;
 
     static void StartWriter()
     {
@@ -58,7 +63,7 @@ static class Program
         BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(1), (uint)data.Length);
         data.CopyTo(p.AsSpan(5));
         if (type == 1) { outQueue.Add(p); return; }       // mensagens nunca são descartadas
-        if (!outQueue.TryAdd(p) && type == 3) OnVideoDropped?.Invoke();
+        if (!outQueue.TryAdd(p)) { if (type == 3) OnVideoDropped?.Invoke(); else if (type == 5) OnVideoDroppedLight?.Invoke(); }
     }
 
     public static void SendJson(object obj) => Send(1, JsonSerializer.SerializeToUtf8Bytes(obj));
@@ -197,10 +202,18 @@ static class Program
                         string vcodec = root.TryGetProperty("codec", out var vc) ? vc.GetString() ?? "h264" : "h264";
                         int vfps = root.GetProperty("fps").GetInt32(), vkbps = root.GetProperty("kbps").GetInt32();
                         int vmaxW = root.GetProperty("maxWidth").GetInt32(), vmaxH = root.GetProperty("maxHeight").GetInt32();
+                        // versão leve (opcional): menor e a menos quadros por segundo, para miniaturas e redes fracas
+                        bool wantLight = root.TryGetProperty("light", out var lo) && lo.ValueKind == JsonValueKind.Object;
+                        int lW = wantLight && lo.TryGetProperty("maxWidth", out var a1) ? a1.GetInt32() : 960;
+                        int lH = wantLight && lo.TryGetProperty("maxHeight", out var a2) ? a2.GetInt32() : 540;
+                        int lFps = wantLight && lo.TryGetProperty("fps", out var a3) ? a3.GetInt32() : 30;
+                        int lKbps = wantLight && lo.TryGetProperty("kbps", out var a4) ? a4.GetInt32() : 1800;
                         int gen = Interlocked.Increment(ref videoGen);
                         var vid = id;
                         VideoCmd(id, "iniciar a captura", () =>
                         {
+                            videoLight?.Dispose();
+                            videoLight = null;
                             video?.Dispose();
                             video = null;
                             var v = new VideoStreamer(vfps, vkbps, vcodec);
@@ -208,8 +221,19 @@ static class Program
                             catch { v.Dispose(); throw; }
                             // demorou e o app já desistiu (pediu outra coisa): não deixa capturando sozinho
                             if (Volatile.Read(ref videoGen) != gen) { v.Dispose(); throw new Exception("início cancelado"); }
+                            // a versão leve é um extra: se a placa não abrir um segundo encoder, segue só com a principal
+                            VideoStreamer? lv = null;
+                            string? lightErr = null;
+                            if (wantLight && (lW < v.Width || lH < v.Height))
+                            {
+                                try { lv = new VideoStreamer(lFps, lKbps, vcodec, light: true); lv.Start(target, lW, lH); }
+                                catch (Exception lex) { lv?.Dispose(); lv = null; lightErr = lex.Message; }
+                            }
+                            if (Volatile.Read(ref videoGen) != gen) { lv?.Dispose(); v.Dispose(); throw new Exception("início cancelado"); }
                             video = v;
-                            SendJson(new { id = vid, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec, minQp = v.MinQp });
+                            videoLight = lv;
+                            SendJson(new { id = vid, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec, minQp = v.MinQp,
+                                light = lv != null, lightWidth = lv?.Width ?? 0, lightHeight = lv?.Height ?? 0, lightError = lightErr });
                         });
                         break;
                     }
@@ -219,6 +243,8 @@ static class Program
                         var vid = id;
                         VideoCmd(id, "parar a captura", () =>
                         {
+                            videoLight?.Dispose();
+                            videoLight = null;
                             video?.Dispose();
                             video = null;
                             SendJson(new { id = vid, type = "video-stopped" });
@@ -248,8 +274,11 @@ static class Program
                         break;
                     }
                     case "video-key":
-                        VideoCmd(null, "pedir quadro-chave", () => video?.RequestKeyFrame(), quiet: true);
+                    {
+                        bool lk = root.TryGetProperty("light", out var lkp) && lkp.ValueKind == JsonValueKind.True;
+                        VideoCmd(null, "pedir quadro-chave", () => (lk ? videoLight : video)?.RequestKeyFrame(), quiet: true);
                         break;
+                    }
                     case "boost":
                     {
                         var pids = new List<int>();
@@ -276,7 +305,8 @@ static class Program
                     case "video-bitrate":
                     {
                         int kb = root.GetProperty("kbps").GetInt32();
-                        VideoCmd(null, "mudar o bitrate", () => video?.SetBitrate(kb), quiet: true);
+                        bool lb = root.TryGetProperty("light", out var lbp) && lbp.ValueKind == JsonValueKind.True;
+                        VideoCmd(null, "mudar o bitrate", () => (lb ? videoLight : video)?.SetBitrate(kb), quiet: true);
                         break;
                     }
                 }
@@ -293,7 +323,7 @@ static class Program
         using var videoDone = new ManualResetEventSlim(false);
         if (VideoBusySecs() < VideoStuckSecs)
         {
-            videoQueue.Add(("fechar", () => { try { video?.Dispose(); video = null; } finally { videoDone.Set(); } }));
+            videoQueue.Add(("fechar", () => { try { videoLight?.Dispose(); videoLight = null; video?.Dispose(); video = null; } finally { videoDone.Set(); } }));
             videoDone.Wait(5000);
         }
     }
