@@ -1,0 +1,141 @@
+/* O tema nas janelas pequenas e no gráfico do histórico: a sobreposição (overlay.html: a janelinha com a tela de um
+   amigo por cima do jogo), a de escolher a área da tela (region.html) e as cores do gráfico de qualidade (index.html).
+   Cada página marca o tema em <html data-theme>; aqui ficam só as cores e as letras de cada um (as páginas usam
+   var(--j-...) e o gráfico lê var(--hist-...)). Sem tema marcado, vale o Clássico. */
+
+/* ---------- Clássico ---------- */
+:root {
+  --j-font: 12px "Segoe UI", sans-serif; --j-name: 600 12px "Segoe UI", sans-serif; --j-case: none; --j-ls: 0;
+  --j-bar: linear-gradient(rgba(0, 0, 0, .75), transparent); --j-fg: #fff;
+  --j-btn: rgba(255, 255, 255, .15); --j-btn-fg: #fff; --j-btn-line: transparent; --j-btn-hover: rgba(255, 255, 255, .3); --j-btn-hover-fg: #fff; --j-radius: 6px;
+  --j-cam: rgba(255, 255, 255, .85); --j-cam-radius: 8px;
+  --j-panel: rgba(20, 22, 34, .92); --j-panel-fg: #fff; --j-panel-line: transparent; --j-panel-radius: 10px; --j-panel-shadow: 0 6px 24px rgba(0, 0, 0, .4);
+  --j-primary: #6c7cff; --j-primary-fg: #fff; --j-sel: #6c7cff; --j-sel-style: solid; --j-sel-fg: #fff; --j-dim: rgba(8, 10, 20, .45);
+  --hist-line: #3987e5; --hist-good: #0ca30c; --hist-warn: #fab219; --hist-bad: #d03b3b; --hist-grid: rgba(255, 255, 255, .07);
+  --hist-axis: #8a90a2; --hist-text: #e8eaf0; --hist-guide: rgba(232, 234, 240, .5); --hist-ring: #16181f; --hist-font: 11px system-ui, sans-serif; --hist-glow: 0;
+}
+
+/* ---------- Arena: transmissão de esporte (vermelho, condensada, em itálico, cantos retos) ---------- */
+html[data-theme="arena"] {
+  --j-font: 600 13px "Barlow Condensed", "Arial Narrow", sans-serif; --j-name: italic 800 16px "Barlow Condensed", "Arial Narrow", sans-serif; --j-case: uppercase; --j-ls: .06em;
+  --j-bar: linear-gradient(90deg, #ff3347 0 6px, rgba(14, 15, 18, .92) 6px); --j-fg: #f3f4f6;
+  --j-btn: #23262d; --j-btn-fg: #f3f4f6; --j-btn-hover: #ff3347; --j-radius: 0;
+  --j-cam: #ff3347; --j-cam-radius: 0;
+  --j-panel: #17191e; --j-panel-line: #2c3039; --j-panel-radius: 0; --j-panel-shadow: inset 4px 0 0 #ff3347, 0 10px 30px rgba(0, 0, 0, .5);
+  --j-primary: #ff3347; --j-sel: #ff3347; --j-dim: rgba(14, 15, 18, .55);
+  --hist-line: #f3f4f6; --hist-good: #3ddc97; --hist-warn: #ffb020; --hist-bad: #ff3347; --hist-grid: rgba(243, 244, 246, .07);
+  --hist-axis: #8e94a3; --hist-text: #f3f4f6; --hist-ring: #17191e; --hist-font: 600 12px "Barlow Condensed", "Arial Narrow", sans-serif;
+}
+
+/* ---------- Varanda (dia e noite): pílulas, arredondada ---------- */
+html:is([data-theme="varanda"], [data-theme="varanda-noite"]) {
+  --j-font: 700 12.5px "Nunito", "Segoe UI", sans-serif; --j-name: 600 15px "Fredoka", "Segoe UI", sans-serif;
+  --j-bar: transparent; --j-fg: #17362b; --j-name-bg: #fff; --j-name-pad: 2px 12px; --j-name-radius: 999px;
+  --j-btn: rgba(255, 255, 255, .94); --j-btn-fg: #17362b; --j-btn-hover: #ffd166; --j-btn-hover-fg: #17362b; --j-radius: 999px;
+  --j-cam: #fff; --j-cam-radius: 14px;
+  --j-panel: #fbfdf9; --j-panel-fg: #17362b; --j-panel-radius: 26px; --j-panel-shadow: 0 5px 0 #c2dbc9, 0 14px 30px rgba(23, 54, 43, .25);
+  --j-primary: #ff6a55; --j-sel: #ff6a55; --j-dim: rgba(23, 54, 43, .35);
+  --hist-line: #17362b; --hist-good: #2f9e6e; --hist-warn: #f2a516; --hist-bad: #dc4a35; --hist-grid: rgba(23, 54, 43, .1);
+  --hist-axis: #56766a; --hist-text: #17362b; --hist-guide: rgba(23, 54, 43, .45); --hist-ring: #fbfdf9; --hist-font: 700 11.5px "Nunito", "Segoe UI", sans-serif;
+}
+html[data-theme="varanda-noite"] {
+  --j-panel: #183428; --j-panel-fg: #e9f5ec; --j-panel-shadow: 0 5px 0 #091812, 0 14px 30px rgba(0, 0, 0, .4); --j-dim: rgba(4, 14, 10, .5);
+  --hist-line: #e9f5ec; --hist-good: #4fc28d; --hist-warn: #f2a516; --hist-bad: #ff8a78; --hist-grid: rgba(233, 245, 236, .09);
+  --hist-axis: #9fc0ae; --hist-text: #e9f5ec; --hist-guide: rgba(233, 245, 236, .45); --hist-ring: #183428;
+}
+
+/* ---------- Neon: contornos acesos ---------- */
+html[data-theme="neon"] {
+  --j-font: 600 12px "Outfit", "Segoe UI", sans-serif; --j-name: 400 17px "Tilt Neon", "Segoe UI", sans-serif;
+  --j-bar: linear-gradient(rgba(11, 10, 19, .85), transparent); --j-fg: #ffd9ee; --j-name-shadow: 0 0 8px #ff3ea5, 0 0 18px #ff3ea5;
+  --j-btn: transparent; --j-btn-fg: #c8fbff; --j-btn-line: #29e7ee; --j-btn-hover: rgba(41, 231, 238, .18); --j-btn-hover-fg: #fff; --j-radius: 999px;
+  --j-cam: #ff3ea5; --j-cam-radius: 10px;
+  --j-panel: rgba(19, 17, 31, .94); --j-panel-fg: #f4f0ff; --j-panel-line: #ff3ea5; --j-panel-radius: 16px; --j-panel-shadow: 0 0 12px rgba(255, 62, 165, .55), 0 0 30px rgba(255, 62, 165, .25);
+  --j-primary: #ff3ea5; --j-sel: #ff3ea5; --j-dim: rgba(11, 10, 19, .55);
+  --hist-line: #29e7ee; --hist-good: #5dfc8a; --hist-warn: #ffe14a; --hist-bad: #ff5a5a; --hist-grid: rgba(244, 240, 255, .07);
+  --hist-axis: #9a94b8; --hist-text: #f4f0ff; --hist-ring: #13111f; --hist-font: 600 11px "Outfit", "Segoe UI", sans-serif; --hist-glow: 8;
+}
+
+/* ---------- Galeria: branco, letras finas em caixa alta, a bolinha vermelha ---------- */
+html[data-theme="galeria"] {
+  --j-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif; --j-name: italic 400 18px "Instrument Serif", Georgia, serif; --j-case: uppercase; --j-ls: .16em;
+  --j-bar: rgba(255, 255, 255, .92); --j-fg: #121212;
+  --j-btn: transparent; --j-btn-fg: #121212; --j-btn-hover: #121212; --j-btn-hover-fg: #fff; --j-radius: 0;
+  --j-cam: #fff; --j-cam-radius: 0;
+  --j-panel: #fff; --j-panel-fg: #121212; --j-panel-radius: 0; --j-panel-shadow: 0 10px 40px rgba(0, 0, 0, .25);
+  --j-primary: #121212; --j-sel: #d42a20; --j-dim: rgba(255, 255, 255, .45);
+  --hist-line: #121212; --hist-good: #2f8f5b; --hist-warn: #b7791f; --hist-bad: #d42a20; --hist-grid: #eeede8;
+  --hist-axis: #8b8a84; --hist-text: #121212; --hist-guide: rgba(18, 18, 18, .35); --hist-ring: #fff; --hist-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif;
+}
+
+/* ---------- Caderno: folha pautada, caneta azul, marca-texto ---------- */
+html[data-theme="caderno"] {
+  --j-font: 16px "Patrick Hand", "Segoe Print", cursive; --j-name: 700 19px "Kalam", "Segoe Print", cursive;
+  --j-bar: #fdfcf6; --j-fg: #20379c;
+  --j-btn: transparent; --j-btn-fg: #20379c; --j-btn-hover: #ffe57a; --j-btn-hover-fg: #20379c; --j-radius: 3px;
+  --j-cam: #fff; --j-cam-radius: 2px;
+  --j-panel: #fdfcf6; --j-panel-fg: #3d3d3d; --j-panel-radius: 2px; --j-panel-shadow: 0 2px 0 #d8d3c2, 0 12px 30px rgba(0, 0, 0, .22);
+  --j-primary: #ffe57a; --j-primary-fg: #20379c; --j-sel: #20379c; --j-sel-style: dashed; --j-dim: rgba(253, 252, 246, .35);
+  --hist-line: #20379c; --hist-good: #2c8a4b; --hist-warn: #b7791f; --hist-bad: #e23b3b; --hist-grid: #e6e1cf;
+  --hist-axis: #6b7286; --hist-text: #3d3d3d; --hist-guide: rgba(32, 55, 156, .35); --hist-ring: #fdfcf6; --hist-font: 15px "Patrick Hand", "Segoe Print", cursive;
+}
+
+/* ---------- Planta: azul de planta, traço branco, cotas ---------- */
+html[data-theme="planta"] {
+  --j-font: 12px "Share Tech Mono", Consolas, monospace; --j-name: 400 15px "Architects Daughter", "Segoe Print", cursive; --j-case: uppercase; --j-ls: .08em;
+  --j-bar: rgba(29, 79, 176, .9); --j-fg: #f4f8ff;
+  --j-btn: transparent; --j-btn-fg: #f4f8ff; --j-btn-line: rgba(255, 255, 255, .6); --j-btn-hover: rgba(255, 255, 255, .14); --j-radius: 0;
+  --j-cam: #f4f8ff; --j-cam-radius: 0;
+  --j-panel: #18439a; --j-panel-fg: #f4f8ff; --j-panel-line: rgba(255, 255, 255, .6); --j-panel-radius: 0; --j-panel-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  --j-primary: #ffe066; --j-primary-fg: #1d4fb0; --j-sel: #f4f8ff; --j-sel-fg: #1d4fb0; --j-sel-style: dashed; --j-dim: rgba(29, 79, 176, .45);
+  --hist-line: #f4f8ff; --hist-good: #9df0c0; --hist-warn: #ffe066; --hist-bad: #ffa093; --hist-grid: rgba(244, 248, 255, .15);
+  --hist-axis: #a9c2f0; --hist-text: #f4f8ff; --hist-guide: rgba(244, 248, 255, .5); --hist-ring: #1d4fb0; --hist-font: 12px "Share Tech Mono", Consolas, monospace;
+}
+
+/* ---------- Terminal: verde de fósforo, vídeo invertido ---------- */
+html[data-theme="terminal"] {
+  --j-font: 12px "JetBrains Mono", Consolas, monospace; --j-name: 800 12.5px "JetBrains Mono", Consolas, monospace; --j-case: none;
+  --j-bar: #050a07; --j-fg: #a8ffcb;
+  --j-btn: transparent; --j-btn-fg: #3fdc86; --j-btn-line: #17422a; --j-btn-hover: #3fdc86; --j-btn-hover-fg: #050a07; --j-radius: 0;
+  --j-cam: #3fdc86; --j-cam-radius: 0;
+  --j-panel: #060d09; --j-panel-fg: #3fdc86; --j-panel-line: #17422a; --j-panel-radius: 0; --j-panel-shadow: none;
+  --j-primary: #3fdc86; --j-primary-fg: #050a07; --j-sel: #3fdc86; --j-sel-fg: #050a07; --j-dim: rgba(5, 10, 7, .6);
+  --hist-line: #3fdc86; --hist-good: #3fdc86; --hist-warn: #ffc04a; --hist-bad: #ff6258; --hist-grid: rgba(63, 220, 134, .12);
+  --hist-axis: #218a54; --hist-text: #a8ffcb; --hist-guide: rgba(168, 255, 203, .5); --hist-ring: #060d09; --hist-font: 11px "JetBrains Mono", Consolas, monospace;
+}
+
+/* ---------- Sessão: cinema, dourado de letreiro ---------- */
+html[data-theme="sessao"] {
+  --j-font: 600 10.5px "Cinzel", "Times New Roman", serif; --j-name: 600 14px "Cinzel", "Times New Roman", serif; --j-case: uppercase; --j-ls: .2em;
+  --j-bar: linear-gradient(rgba(8, 7, 6, .92), rgba(8, 7, 6, .4)); --j-fg: #f3d9a0;
+  --j-btn: transparent; --j-btn-fg: #b7ab94; --j-btn-hover: rgba(216, 180, 104, .14); --j-btn-hover-fg: #f3d9a0; --j-radius: 0;
+  --j-cam: #d8b468; --j-cam-radius: 0;
+  --j-panel: #15120d; --j-panel-fg: #efe6d6; --j-panel-line: #3b301d; --j-panel-radius: 0; --j-panel-shadow: 0 0 0 4px #080706, 0 0 0 5px #3b301d, 0 12px 30px rgba(0, 0, 0, .6);
+  --j-primary: linear-gradient(#efd494, #c79d49); --j-primary-fg: #1a1206; --j-sel: #d8b468; --j-sel-fg: #1a1206; --j-dim: rgba(8, 7, 6, .6);
+  --hist-line: #d8b468; --hist-good: #5fc48a; --hist-warn: #e9b04a; --hist-bad: #e5484d; --hist-grid: rgba(216, 180, 104, .12);
+  --hist-axis: #9d927e; --hist-text: #efe6d6; --hist-guide: rgba(243, 217, 160, .45); --hist-ring: #15120d; --hist-font: 11.5px "Jost", "Segoe UI", sans-serif;
+}
+
+/* ---------- Fliperama: 16 bits, caixas de borda grossa ---------- */
+html[data-theme="fliperama"] {
+  --j-font: 400 8px/1.5 "Press Start 2P", Consolas, monospace; --j-name: 400 15px "Pixelify Sans", Consolas, monospace; --j-case: none;
+  --j-bar: #1d1a55; --j-fg: #ffd23f;
+  --j-btn: #2c2878; --j-btn-fg: #f7f5ff; --j-btn-hover: #ffd23f; --j-btn-hover-fg: #15123a; --j-radius: 0;
+  --j-cam: #f7f5ff; --j-cam-radius: 0;
+  --j-panel: #1d1a55; --j-panel-fg: #f7f5ff; --j-panel-radius: 0; --j-panel-shadow: 0 -4px 0 #f7f5ff, 0 4px 0 #f7f5ff, -4px 0 0 #f7f5ff, 4px 0 0 #f7f5ff, 0 0 0 8px #15123a;
+  --j-primary: #ff3d5e; --j-sel: #ffd23f; --j-sel-fg: #15123a; --j-sel-style: dashed; --j-dim: rgba(21, 18, 58, .55);
+  --hist-line: #35e0e0; --hist-good: #5be36a; --hist-warn: #ffd23f; --hist-bad: #ff3d5e; --hist-grid: rgba(170, 165, 230, .15);
+  --hist-axis: #aaa5e6; --hist-text: #f7f5ff; --hist-guide: rgba(247, 245, 255, .5); --hist-ring: #1d1a55; --hist-font: 400 8px "Press Start 2P", Consolas, monospace;
+}
+
+/* ---------- Toca-fitas: frente do deck creme, teclas, etiqueta escrita à mão ---------- */
+html[data-theme="tocafitas"] {
+  --j-font: 400 11px "Righteous", "Segoe UI", sans-serif; --j-name: 700 21px "Caveat", "Segoe Print", cursive; --j-case: uppercase; --j-ls: .06em;
+  --j-bar: linear-gradient(#f4e8cf, #e9d9b8); --j-fg: #26306e;
+  --j-btn: #f8f0dc; --j-btn-fg: #2b1c13; --j-btn-line: #b8a37c; --j-btn-hover: #e8702a; --j-btn-hover-fg: #fff; --j-radius: 4px;
+  --j-cam: #efe1c4; --j-cam-radius: 6px;
+  --j-panel: linear-gradient(#f4e8cf, #e9d9b8); --j-panel-fg: #2b1c13; --j-panel-radius: 8px; --j-panel-shadow: inset 0 0 0 1px #b8a37c, 0 5px 0 #7d6951, 0 14px 30px rgba(0, 0, 0, .4);
+  --j-primary: #e8702a; --j-sel: #e8702a; --j-dim: rgba(43, 28, 19, .5);
+  --hist-line: #26306e; --hist-good: #2c8c82; --hist-warn: #e2a52b; --hist-bad: #d93a2b; --hist-grid: rgba(43, 28, 19, .12);
+  --hist-axis: #7d6951; --hist-text: #2b1c13; --hist-guide: rgba(43, 28, 19, .4); --hist-ring: #efe1c4; --hist-font: 11px "Share Tech Mono", Consolas, monospace;
+}

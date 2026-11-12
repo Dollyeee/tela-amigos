@@ -4,21 +4,32 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
   <title>Tela Amigos - escolher área</title>
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <!-- as cores e as letras do tema escolhido no app (o processo principal manda o tema no endereço: ?tema=) -->
+  <link rel="stylesheet" href="tema-janelas.css">
+  <script>document.documentElement.dataset.theme = new URLSearchParams(location.search).get('tema') || 'classico';</script>
   <style>
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; cursor: crosshair; user-select: none;
       font: 14px "Segoe UI", sans-serif; color: #fff; background: rgba(0, 0, 0, .01); }
     /* fundo escurecido, exceto a área escolhida (sombra gigante em volta do retângulo) */
-    #dim { position: fixed; inset: 0; background: rgba(8, 10, 20, .45); }
-    #sel { position: fixed; display: none; outline: 2px solid #6c7cff; box-shadow: 0 0 0 9999px rgba(8, 10, 20, .45); }
+    #dim { position: fixed; inset: 0; background: var(--j-dim); }
+    #sel { position: fixed; display: none; outline: 2px var(--j-sel-style) var(--j-sel); box-shadow: 0 0 0 9999px var(--j-dim); }
     body.has-sel #dim { display: none; }
     body.has-sel #sel { display: block; }
-    #size { position: absolute; left: 0; top: -26px; background: #6c7cff; padding: 2px 8px; border-radius: 6px 6px 0 0;
-      font-size: 12px; white-space: nowrap; }
-    #help { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); background: rgba(20, 22, 34, .92);
-      padding: 10px 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.4); display: flex; gap: 10px; align-items: center;
-      cursor: default; z-index: 2; }
-    #help button { border: none; border-radius: 7px; padding: 6px 12px; font: inherit; cursor: pointer; background: #2a2e44; color: #fff; }
-    #help button.primary { background: #6c7cff; }
+    #size { position: absolute; left: 0; top: -26px; background: var(--j-sel); color: var(--j-sel-fg); padding: 2px 8px;
+      border-radius: min(6px, var(--j-radius)) min(6px, var(--j-radius)) 0 0; font: var(--j-font); white-space: nowrap; }
+    #help { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); background: var(--j-panel); color: var(--j-panel-fg);
+      border: 1px solid var(--j-panel-line); padding: 10px 16px; border-radius: var(--j-panel-radius); box-shadow: var(--j-panel-shadow);
+      display: flex; gap: 10px; align-items: center; cursor: default; z-index: 2; font: var(--j-font); }
+    #help #msg { font-size: max(13px, 1em); letter-spacing: 0; }
+    html[data-theme="fliperama"] #help #msg { font: 400 15px "Pixelify Sans", Consolas, monospace; }
+    #help button { border: 1px solid var(--j-btn-line); border-radius: var(--j-radius); padding: 6px 12px; font: inherit; letter-spacing: var(--j-ls);
+      text-transform: var(--j-case); cursor: pointer; background: var(--j-btn); color: var(--j-btn-fg); }
+    #help button:hover:not(:disabled) { background: var(--j-btn-hover); color: var(--j-btn-hover-fg); }
+    #help button.primary, #help button.primary:hover:not(:disabled) { border-color: transparent; background: var(--j-primary); color: var(--j-primary-fg); }
+    /* o Clássico fica como sempre foi */
+    html[data-theme="classico"] #help, html[data-theme="classico"] #help #msg { font-size: 14px; }
+    html[data-theme="classico"] #help button:not(.primary) { background: #2a2e44; }
     #help button:disabled { opacity: .4; cursor: default; }
   </style>
 </head>

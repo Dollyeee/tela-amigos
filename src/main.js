@@ -517,7 +517,7 @@ ipcMain.handle('region:pick', (_e, displayId) => new Promise((resolve) => {
   regionWin = w;
   w.setAlwaysOnTop(true, 'screen-saver');
   w.setBounds(b); // garante o monitor inteiro mesmo com escalas diferentes
-  w.loadFile(path.join(__dirname, 'renderer', 'region.html'));
+  w.loadFile(path.join(__dirname, 'renderer', 'region.html'), { query: { tema: fxTheme } }); // nas cores do tema escolhido
   w.once('ready-to-show', () => { if (!w.isDestroyed()) { w.show(); w.focus(); } });
   const onDone = (ev, rect) => {
     if (w.isDestroyed() || ev.sender !== w.webContents) return; // resposta de outra janela
