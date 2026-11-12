@@ -11,6 +11,16 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.64',
+    title: 'Transmissão mais esperta e barra das telas mais simples',
+    items: [
+      '**Barra de cada tela mais simples:** ficam à vista só volume, caneta, salvar clipe, focar e tela cheia (o de focar ganhou um desenho próprio, antes era igual ao de tela cheia). O resto está no "⋯", organizado em grupos.',
+      '**Versão leve na "Nativa direta":** quem vê a sua tela em miniatura, ou está com a rede fraca, recebe uma versão mais leve (960x540, 30 fps). Os outros continuam no máximo: um amigo com rede ruim não puxa mais a qualidade de todo mundo para baixo.',
+      '**Servidor de vídeo só quando precisa:** com a opção ligada (sala online), a tela vai direto para os amigos e só passa pelo servidor quando o seu upload não dá conta de mandar para todos, ou quando a conexão direta com alguém cai. O limite grátis do mês dura bem mais.',
+      '**Tema em tudo:** a janelinha da sobreposição, a de escolher a área da tela e o gráfico do histórico agora seguem o tema escolhido.',
+    ],
+  },
+  {
     v: '1.0.63',
     title: 'Os temas ganharam vida',
     text: 'Agora cada tema reage ao que acontece na sala: quando alguém entra, começa a transmitir ou manda mensagem. E alguns têm detalhes que se mexem sozinhos. Escolha um tema aqui embaixo e entre numa sala para ver.',

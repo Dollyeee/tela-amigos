@@ -88,10 +88,23 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Estatísticas** (S): FPS, bitrate, ping, buffer, travadas, perdas, rota, encoder.
 - **Rota por amigo** (menu de resolução na tela dele → "Conexão"): *Automática* troca sozinha para a internet direta quando o Radmin trava (ping alto/perdas por ~30 s) e volta se não conectar em 15 s; *Pelo Radmin/VPN* ou *Internet direta* fixam. Fica salvo por amigo.
 - **Freio na "Nativa direta"**: quando o ping começa a subir (fila se formando no caminho) o bitrate cai na hora e volta devagar; quedas seguidas do mesmo amigo não disparam uma enxurrada de quadros-chave para todos.
-- **Transmitir pelo servidor (beta, sala online)**: você manda uma cópia só e o servidor repassa para cada amigo.
+- **Servidor de vídeo quando precisar (beta, sala online)** (só quando precisa desde a v1.0.64): a tela começa indo
+  direto para cada amigo e passa para o servidor (você manda uma cópia só e ele repassa para cada um) quando o seu
+  upload não dá conta: com dois ou mais amigos vendo em tamanho cheio, a qualidade por amigo fica abaixo do que o
+  servidor entregaria e a rede reclama em dois caminhos ao mesmo tempo, por 10 s. Também passa quando a conexão direta
+  com alguém que assiste cai. No servidor fica até o fim da transmissão (a não ser que sobre um amigo só assistindo).
+  Antes, com a opção ligada, tudo ia sempre pelo servidor e o limite grátis do mês acabava antes do fim do mês.
   Na *Nativa direta* vai a imagem da placa de vídeo (H.264/H.265/AV1, uma qualidade, como o Discord): o bitrate
   segue a sua conexão até o servidor e o amigo mais fraco. Na *Nativa adaptativa* o Chromium manda 3 qualidades
   e cada amigo recebe a que a rede dele aguenta (o app baixa para a média por um tempo quando há perda).
+- **Versão leve na "Nativa direta"** (v1.0.64): o helper codifica também uma versão menor da tela (960x540, 30 fps,
+  num segundo encoder da placa). Recebem a leve: quem vê a sua tela em miniatura, quem escolheu 540p ou menos, e quem
+  está com a rede fraca enquanto a dos outros está boa (fica 1 min na leve e tenta a cheia de novo; se cair outra vez
+  logo, espera 2, 4, até 8 min). O bitrate da cheia passa a seguir só quem está nela; o da leve, a pior rede entre quem
+  está nela. Se a placa não abrir o segundo encoder, tudo segue só com a cheia, como antes.
+- **Barra de cada tela mais simples** (v1.0.64): à vista só volume, caneta, salvar clipe, focar (desenho próprio, antes
+  igual ao de tela cheia) e tela cheia, mais a 2ª tela quando o amigo tem. O resto mora no "⋯", em grupos (Assistir,
+  Gravar e salvar, Mais) e com nomes curtos. No Terminal a lista escrita continua como era.
 - **Quadros-chave raros** (a cada 30 s, ou na hora quando alguém entra/perde a imagem): antes a imagem "respirava"
   a cada 4 s.
 - **Reconexão automática com o servidor de vídeo**: se a conexão com o servidor cair ou travar, quem transmite volta a mandar direto na hora (sem tela preta) e em ~1,5 s tudo é refeito numa conexão nova. Se nada chegar do servidor por 6 s, quem assiste passa a receber direto sozinho. Caiu 3 vezes em 3 minutos: fica 5 minutos só na conexão direta.
@@ -110,7 +123,8 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Temas (v1.0.60)**: dez visuais novos para o app, além do de sempre (**Clássico**, que continua sendo o padrão): **Arena**, **Varanda** (dia e noite), **Neon**, **Galeria**, **Caderno**, **Planta**, **Terminal**, **Sessão**, **Fliperama** e **Toca-fitas**. Escolha em **Opções → Aparência → Tema** ou no rodapé da tela de entrada: troca na hora, fica salvo e vale só no seu PC (cada amigo usa o que quiser; ninguém vê o tema do outro).
   - Cada tema tem as próprias cores, letras e arrumação da entrada, da sala e do "Compartilhar". O que cada botão faz não muda; em alguns temas parte dos botões de cada tela fica no "⋯".
   - **Emotes, mãozinha e riscos por tema**: os seis emotes são os mesmos para todos, e cada um vê no desenho do tema que escolheu. A mãozinha e os riscos da caneta também, inclusive os que aparecem no monitor de quem transmite.
-  - Ainda sem tema: a janelinha da sobreposição, a de escolher área e as cores do gráfico do histórico.
+  - **Também com tema** (v1.0.64): a janelinha da sobreposição, a de escolher a área da tela e as cores do gráfico do
+    histórico (`tema-janelas.css`: cores e letras de cada tema para essas telas).
   - **Tema se instalando (v1.0.62)**: ao escolher um tema (na lista ou na galeria das novidades), ele "se instala" com uma animação no estilo dele, em menos de 2 s: Clássico abre num círculo a partir de onde você clicou, Arena passa uma faixa vermelha, Varanda desce o toldo, Neon acende piscando, Galeria monta a exposição, Caderno vira a página, Planta é desenhada pelo plotter, Terminal digita a instalação, Sessão fecha e abre as cortinas, Fliperama carrega em blocos e Toca-fitas troca a fita. As telas dos amigos continuam passando durante a animação. Com as animações do Windows desligadas, a troca é na hora.
   - **Temas com vida (v1.0.63)**: no uso, cada tema reage quando alguém entra, sai, começa a transmitir ou manda mensagem, e alguns têm detalhes que se mexem sozinhos. Fliperama: estrelas piscando, bonequinhos de quem está ao vivo andando no lugar, o de quem chega pula, "JOGADOR 2 ENTROU!" ao lado da contagem e mensagens letra por letra. Toca-fitas: bobinas girando na fita de quem está ao vivo e o ponteiro acompanhando o som da tela (só com o som ligado). Sessão: as luzes da sala apagam quando alguém entra no ar e as lâmpadas do "Compartilhar tela" correm. Varanda: folhas balançando, festões do toldo balançando quando o mouse chega no cartão da entrada e, à noite, vaga-lumes. Neon: o letreiro pisca quando alguém entra e o "AO VIVO" pulsa. Terminal: cursor piscando e mensagens digitadas. Caderno: o "ao vivo!" é circulado e as mensagens chegam como bilhetes. Planta: a linha de quem chega é traçada e as medidas da tela nova crescem. Arena: o placar de pessoas vira. Galeria e Clássico, mais discretos. **Tudo para** com jogo em tela cheia, no modo leve, com a janela minimizada ou escondida e com as animações do Windows desligadas; o que se mexe sem parar só roda com a janela em uso.
   - **Fliperama legível (v1.0.61)**: a letra de pixel do desenho fechava a abertura do "c" e do "C" em letra pequena e em negrito ("Tuca" saía "Tuoa"). Ela ficou só no texto corrido e nos nomes, sem negrito e em tamanhos que ficam legíveis de 100% a 200% de escala; botões, rótulos e avisos usam a letra dos títulos. Medido com as ferramentas `letras-*` do catálogo (fora do repositório).
@@ -136,7 +150,8 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
   vez depois de atualizar (o resto dela, com a janela de verdade, está no `lifecycle-test.js`);
 - `node scripts/lifecycle-test.js` – parar/sair no meio do início, área da tela, reinícios automáticos, troca
   de codec, clipes seguindo a tela (captura falsa: não usa a placa de vídeo);
-- `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro.
+- `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro; no fim
+  confere a versão leve (o segundo encoder) e a volta para a cheia.
 - `node scripts/theme-shots.js [tema ...]` – fotografa os temas no app de verdade com a janela escondida: uma sala de
   mentira com três "amigos" (sem vídeo, som nem placa de vídeo), cerca de 20 cenas por tema, em `design/capturas/`
   (`--size=900x560` muda o tamanho da janela). `node_modules/electron/dist/electron.exe scripts/fx-shots.js [tema ...]`
@@ -166,6 +181,6 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
   Publicar: `cd online-server && npx wrangler login && npx wrangler deploy`; depois pôr a URL `wss://...`
   em `ONLINE_SERVER_DEFAULT` (`src/renderer/app.js`). TURN opcional: `npx wrangler secret put TURN_KEY_ID`
   e `TURN_KEY_API_TOKEN` (chave TURN do Cloudflare Realtime).
-  Servidor de vídeo (opção "Transmitir pelo servidor (beta)"): criar um app de SFU em Cloudflare Realtime e
+  Servidor de vídeo (opção "Servidor de vídeo quando precisar (beta)"): criar um app de SFU em Cloudflare Realtime e
   `npx wrangler secret put SFU_APP_ID` / `SFU_APP_TOKEN`. O servidor da sala soma os GB do mês e recusa
   novas sessões acima de `SFU_MONTHLY_GB` (padrão 900, abaixo dos 1.000 GB grátis).
