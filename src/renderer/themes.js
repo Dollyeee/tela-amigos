@@ -145,11 +145,17 @@
     const want = byId(current).place || {};
     const known = new Set();
     for (const t of THEMES) for (const sel of Object.keys(t.place || {})) known.add(sel);
+    // Primeiro guarda a casa de TODAS as peças, com os irmãos ainda no lugar; só depois move. (A ordem dos irmãos
+    // fica guardada porque várias peças podem sair do mesmo lugar e voltar em qualquer ordem. Guardando uma a uma
+    // enquanto movia, quem abria o app num tema que tira várias peças do mesmo lugar ficava com a ordem delas
+    // errada ao trocar de tema: "Parar" antes de "+ 2ª tela" e "Ajustes".)
+    for (const sel of known) {
+      const el = document.querySelector(sel);
+      if (el && !homes.has(el)) homes.set(el, { parent: el.parentNode, order: [...el.parentNode.children] });
+    }
     for (const sel of known) {
       const el = document.querySelector(sel);
       if (!el) continue;
-      // (a ordem dos irmãos em casa fica guardada: várias peças podem sair do mesmo lugar e voltar em qualquer ordem)
-      if (!homes.has(el)) homes.set(el, { parent: el.parentNode, order: [...el.parentNode.children] });
       const dest = want[sel] ? document.querySelector(want[sel]) : null;
       if (dest) {
         if (el.parentNode !== dest) dest.appendChild(el);

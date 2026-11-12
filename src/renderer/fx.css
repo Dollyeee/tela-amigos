@@ -134,11 +134,11 @@ html[data-theme="fliperama"] .fx-emo { filter: drop-shadow(3px 3px 0 rgba(8, 6, 
 html[data-theme="fliperama"] .react-bar button .fx-emo { filter: none; }
 html[data-theme="fliperama"] :is(.float-emoji, .emote) { animation-timing-function: steps(8, end); text-shadow: none; filter: none; }
 html[data-theme="fliperama"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 3px 6px; border-radius: 0; background: #08061c; color: #ffd23f;
-  font: 700 11px/1 "Pixelify Sans", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
-html[data-theme="fliperama"] .emote small { font-size: 14px; }
+  font: 400 7px/1 "Press Start 2P", Consolas, monospace; letter-spacing: 0; text-transform: none; } /* (a Pixelify fecha o "c" em letra pequena) */
+html[data-theme="fliperama"] .emote small { font-size: 9px; }
 html[data-theme="fliperama"] .hand { filter: drop-shadow(3px 3px 0 rgba(8, 6, 28, .55)); }
-html[data-theme="fliperama"] :is(.hand span, #tag) { padding: 3px 6px; border-radius: 0; background: var(--c); color: #08061c; font: 700 11px/1 "Pixelify Sans", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 0 0 2px #08061c; }
-html[data-theme="fliperama"] #tag { font-size: 14px; }
+html[data-theme="fliperama"] :is(.hand span, #tag) { padding: 3px 6px; border-radius: 0; background: var(--c); color: #08061c; font: 400 7px/1 "Press Start 2P", Consolas, monospace; letter-spacing: 0; text-transform: none; box-shadow: 0 0 0 2px #08061c; }
+html[data-theme="fliperama"] #tag { font-size: 9px; }
 html[data-theme="fliperama"] :is(.press-ripple, .ripple) { border: 4px solid var(--c); border-radius: 0; animation-timing-function: steps(4, end); }
 
 /* ---------- Toca-fitas: disquinhos que chegam girando, mão creme, nome numa etiqueta de fita escrita à mão ---------- */
