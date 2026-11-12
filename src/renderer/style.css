@@ -426,13 +426,14 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
   padding: 7px 10px; font-size: 12px; line-height: 1.5; white-space: nowrap; }
 .s2-pip video { object-fit: contain; }
 
-/* barra da tela: em tela estreita os botões menos usados vão para o "⋯" */
+/* barra da tela: só o essencial à vista (volume, caneta, clipe, focar, tela cheia); o resto mora no "⋯", em grupos.
+   Antes eram até 15 ícones lado a lado, e o de focar tinha o mesmo desenho do de tela cheia. Em tela estreita, até a
+   caneta, o clipe e o focar vão para o "⋯" */
 .tile { container-type: inline-size; }
-.more-btn { display: none; color: #fff; font-size: 18px; line-height: 1; padding: 0 0 6px; }
-@container (max-width: 820px) {
-  .tile-actions .icon-btn.opt { display: none; }
-  .tile-actions .more-btn { display: inline-block; }
-}
+.more-btn { display: inline-block; color: #fff; font-size: 18px; line-height: 1; padding: 0 0 6px; }
+.tile-actions .icon-btn.opt { display: none; }
+.menu-pop .menu-head + .menu-icon { margin-top: 0; }
+.menu-pop .menu-icon + .menu-head { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line-soft, var(--line)); }
 @container (max-width: 600px) {
   .tile-actions .icon-btn.opt2 { display: none; }
   .tile-actions .vol input { width: 70px; }

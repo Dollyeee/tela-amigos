@@ -94,10 +94,15 @@ async function buildRendererDiag() {
   const s = state.share;
   lines.push(`nome=${state.myName} id=${state.myId} sala=${state.hostIp} anfitriao=${!!state.isHost} layout=${state.layout}`);
   lines.push(`servidor de vídeo: sala=${state.sfuServer ? 'tem' : 'não tem'} opção=${localStorage.getItem('sfu') === '1' ? 'ligada' : 'desligada'} ` +
-    `minhaTransmissão=${state.share && state.share.sfu ? 'pelo servidor' : '-'} conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
+    `minhaTransmissão=${state.share && state.share.sfu ? 'pelo servidor' : '-'} motivo=${(state.share && state.share.sfuAuto && state.share.sfuAuto.why) || '-'} ` +
+    `conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
   try { for (const l of await window.Sfu.stats()) lines.push(`  ${l}`); } catch {}
   lines.push(`config=${safeJson(state.settings)}`);
   lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} pisoQP=${s.minQp || 'sem'} modoLeve=${!!state.lightMode}` : ''}`);
+  if (s && s.direct) {
+    lines.push(`versão leve: ${s.videoLight ? `ligada ${s.lightKbps} kb/s; recebem: ${[...state.peers.values()].filter((p) => p.sendLayer === 1).map((p) => `${p.name}${Date.now() < (p.weakUntil || 0) ? ' (rede fraca)' : ''}`).join(', ') || 'ninguém'}`
+      : `desligada${window.NativeVideo.dbg.lightErr ? ` (${window.NativeVideo.dbg.lightErr})` : ''}`}`);
+  }
   if (state.nativeStats) lines.push(`helper=${safeJson(state.nativeStats)}`);
   if (s && s.direct) {
     lines.push(`bitrate da direta: alvo=${state.nativeKbps} kb/s rede=${state.netInfo.level}${state.netInfo.why ? ` (${state.netInfo.why})` : ''} ` +
@@ -725,7 +730,7 @@ function onRelay(from, data) {
         const dc = state.share && state.share.direct ? state.share.codec : null;
         if ((dc === 'hevc' && !peer.h265) || (dc === 'av1' && !peer.av1)) restartDirectCodec(peer.name, dc);
         // pelo servidor de vídeo em H.265/AV1 e entrou alguém numa versão antiga (não puxa esses codecs de lá)
-        else if (dc && dc !== 'h264' && sfuWanted() && !peer.sfu2) restartDirectCodec(peer.name, 'hevc', 'sfu');
+        else if (dc && dc !== 'h264' && sfuInUse() && !peer.sfu2) restartDirectCodec(peer.name, 'hevc', 'sfu');
         // 2ª tela
         const had2 = peer.share2;
         peer.share2 = !!data.share2 && !!data.sharing;
@@ -1235,14 +1240,19 @@ async function routeWatch() {
 setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000);
 
 // ------------------------------------------------------------------ servidor de vídeo (beta)
-// Na sala online, com a opção ligada, quem transmite manda a tela UMA vez para o servidor de vídeo
+// Na sala online, com a opção ligada, quem transmite pode mandar a tela UMA vez para o servidor de vídeo
 // (sfu.js) e cada amigo puxa de lá a qualidade que aguenta. Quem puxou avisa ("sfu-pull") e eu paro
 // de mandar direto para ele. Qualquer falha: volta para a conexão direta.
+// Só quando precisa (desde a 1.0.64): a transmissão começa direto para os amigos (não gasta o limite grátis do
+// mês, e direto a qualidade pode passar do teto do servidor) e vai para o servidor quando o meu upload não dá
+// conta de mandar uma cópia para cada um, ou quando a conexão direta com alguém que assiste caiu (sfuNeedWatch).
 function sfuWanted() { return isOnlineCode(state.hostIp) && !!state.sfuServer && localStorage.getItem('sfu') === '1'; }
+// a transmissão está (ou deve estar) indo pelo servidor agora
+function sfuInUse(share = state.share) { return !!(share && share.sfuAuto && sfuWanted() && !sfuPaused()); }
 // uso do mês ao lado da opção (o limite grátis é por mês e vale para a sala toda)
 function showSfuUsage(u) {
   const sp = $('#opt-sfu') && $('#opt-sfu').parentElement.querySelector('span');
-  if (sp) sp.textContent = 'Transmitir pelo servidor (beta)' + (u && u.limit ? ` · ${Math.round(u.used)} de ${u.limit} GB do mês` : u ? ` · ${Math.round(u.used)} GB no mês` : '');
+  if (sp) sp.textContent = 'Servidor de vídeo quando precisar (beta)' + (u && u.limit ? ` · ${Math.round(u.used)} de ${u.limit} GB do mês` : u ? ` · ${Math.round(u.used)} GB no mês` : '');
 }
 window.Sfu.onUsage = showSfuUsage;
 function sfuPaused() { return Date.now() < (state.sfuPauseUntil || 0); }
@@ -1255,7 +1265,7 @@ function sfuSync() {
 }
 async function sfuSyncInner() {
   const share = state.share;
-  const want = !!(share && sfuWanted() && !sfuPaused());
+  const want = sfuInUse(share);
   if (want) {
     try {
       const s = share.settings;
@@ -1296,6 +1306,72 @@ async function sfuSyncInner() {
     await window.Sfu.unpublish();
     for (const peer of state.peers.values()) { peer.sfuPulling = false; applySendParams(peer); sendState(peer.id); }
   }
+}
+
+// Vigia do "só quando precisa" (a cada 2 s, transmitindo, com a opção ligada na sala online):
+//  - alguém que assiste ficou sem a conexão direta (falhou, ou caiu há mais de 8 s): vai para o servidor;
+//  - o meu upload não dá conta: com 2+ amigos vendo em tamanho cheio, a qualidade por amigo ficou abaixo de 70% do
+//    que o servidor entregaria e a rede reclamou em dois caminhos ao mesmo tempo, por 10 s seguidos (um amigo só
+//    com rede ruim não conta: o servidor não melhora a chegada até ele);
+//  - no servidor fica até o fim desta transmissão (trocar de caminho interrompe a imagem de todo mundo); volta para
+//    o direto só se sobrar um amigo (ou nenhum) assistindo por 30 s: aí o servidor não economiza upload nenhum.
+async function sfuNeedWatch() {
+  const sh = state.share;
+  if (!sh || !sfuWanted() || sfuPaused()) return;
+  const viewers = [...state.peers.values()].filter((p) => p.theyWant && p.theyWant !== 'off' && p.pc.connectionState !== 'closed');
+  const full = viewers.filter((p) => p.theyWant !== 'thumb' && p.pc.connectionState === 'connected');
+  const short = !sh.sfuAuto && full.length >= 2 && (await uploadShort(sh, full));
+  if (state.share !== sh) return;
+  const d = sfuDecide(sh, viewers, short, Date.now());
+  if (!d) return;
+  if (d.use) {
+    console.log(`servidor de vídeo: ${d.why}; passando a transmitir pelo servidor`);
+    toast(d.lost ? `A conexão direta com ${d.lost} caiu: sua tela passa a ir pelo servidor de vídeo.`
+      : 'Seu upload não está dando conta de mandar a tela para todos: ela passa a ir uma vez só pelo servidor de vídeo.');
+  } else console.log('servidor de vídeo: só um amigo assistindo, voltando a mandar direto');
+  sfuSync();
+}
+// a decisão em si, sem rede (os testes chamam direto): marca sh.sfuAuto e devolve { use, why, lost } quando muda,
+// null quando fica como está. viewers: amigos assistindo; short: o upload não deu conta nesta medida
+function sfuDecide(sh, viewers, short, now) {
+  if (sh.sfuAuto) {
+    if (viewers.length > 1) { sh.sfuFew = 0; return null; }
+    sh.sfuFew = sh.sfuFew || now;
+    if (now - sh.sfuFew < 30000) return null;
+    sh.sfuAuto = null; sh.sfuFew = 0; sh.sfuShortN = 0;
+    return { use: false };
+  }
+  for (const p of viewers) p.sfuDiscAt = p.pc.connectionState === 'disconnected' ? (p.sfuDiscAt || now) : 0;
+  const lost = viewers.find((p) => p.pc.connectionState === 'failed' || (p.sfuDiscAt && now - p.sfuDiscAt > 8000));
+  sh.sfuShortN = short && !lost ? (sh.sfuShortN || 0) + 1 : 0;
+  if (!lost && sh.sfuShortN < 5) return null;
+  const why = lost ? `conexão direta com ${lost.name} caiu` : 'upload não dá conta de uma cópia para cada amigo';
+  sh.sfuAuto = { at: now, why };
+  return { use: true, why, lost: lost ? lost.name : null };
+}
+setInterval(() => { sfuNeedWatch().catch((e) => console.warn('servidor de vídeo (vigia)', e)); }, 2000);
+
+// a qualidade que chega aos amigos pela conexão direta ficou abaixo do que o servidor entregaria, por falta de upload
+async function uploadShort(sh, full) {
+  const want = Math.min((Number(sh.settings.bitrate) || 20) * 1000, sfuKbps(sh.settings)); // kb/s
+  const now = Date.now();
+  if (sh.direct) {
+    // nativa direta: a mesma imagem para todos, no bitrate que o controle de rede decidiu (adaptNativeBitrate)
+    const tight = full.filter((p) => p.net && p.net.st && ['soft', 'cong', 'severe'].includes(p.net.st.level)).length;
+    if (tight >= 2) sh.multiTightAt = now;
+    return (state.nativeKbps || 0) < want * 0.7 && now - (sh.multiTightAt || 0) < 15000;
+  }
+  // adaptativa: cada amigo tem o seu encoder; conta quem está limitado pela banda abaixo do que o servidor daria
+  let n = 0;
+  for (const p of full) {
+    try {
+      (await p.pc.getStats()).forEach((r) => {
+        if (r.type !== 'outbound-rtp' || r.kind !== 'video' || (p.vT && p.vT.mid != null && String(r.mid) !== String(p.vT.mid))) return;
+        if (r.qualityLimitationReason === 'bandwidth' && r.targetBitrate && r.targetBitrate / 1000 < want * 0.7) n++;
+      });
+    } catch {}
+  }
+  return n >= 2;
 }
 
 // lado de quem assiste: puxa do servidor quando o amigo transmite por lá (e eu estou vendo)
@@ -1474,7 +1550,7 @@ function freezeWatch(peer, decodedD) {
 function sendKeyFrame(peer) {
   const sh = state.share;
   if (!sh) return;
-  if (sh.direct) { window.NativeVideo.key(); return; }
+  if (sh.direct) { window.NativeVideo.key(peer.sendLayer === 1 ? 1 : 0); return; }
   const senders = [peer.vT.sender];
   if (sh.sfu && window.Sfu.pubSender()) senders.push(window.Sfu.pubSender());
   for (const s of senders) { try { if (s.track && s.generateKeyFrame) s.generateKeyFrame().catch(() => {}); } catch {} }
@@ -1610,16 +1686,23 @@ async function doApplySendParams(peer) {
     negotiate(peer);
     // o 1º keyframe pode sair ainda no codec antigo (renegociação em andamento) e quem assiste
     // ficaria esperando outro: pede mais alguns logo depois da troca
-    if (native) for (const ms of [800, 1800, 3500]) setTimeout(() => { if (state.share && state.share.direct) window.Helper.videoKey(); }, ms);
+    if (native) for (const ms of [800, 1800, 3500]) setTimeout(() => { if (state.share && state.share.direct) window.NativeVideo.key(peer.sendLayer === 1 ? 1 : 0); }, ms);
   } else if (native && wantVideo && peer.pc.connectionState === 'connected' && performance.now() - (peer.rateNegAt || 0) > 8000) {
     // os limites de banda combinados com este amigo são de antes desta transmissão (ou de uma
     // qualidade menor): renegocia para o teto da estimativa de banda ficar acima do que a placa manda
     const ro = rateOpts(peer);
     if (!peer.sdpNative || (peer.sdpMax || 0) < ro.maxKbps * 0.95) { peer.rateNegAt = performance.now(); negotiate(peer); }
   }
+  // "Nativa direta" com a versão leve: quem vê em miniatura, escolheu 540p ou menos ou está com a rede fraca recebe a
+  // leve (cada camada tem a sua trilha vazia; trocar de trilha recomeça o envio dele num keyframe da camada nova)
+  const layer = native && share.videoLight && wantVideo && wantsLight(peer) ? 1 : 0;
+  if (native && wantVideo && (peer.sendLayer || 0) !== layer) console.log(`versão leve: ${peer.name} passa a receber a ${layer ? 'leve' : 'cheia'}`);
+  peer.sendLayer = wantVideo ? layer : 0;
+  const sendVideo = layer === 1 ? share.videoLight : wantVideo;
   // antes de trocar a trilha: assim o primeiro quadro já é tratado no modo certo
+  if (native) window.NativeVideo.setLayer(peer.id, layer);
   window.NativeVideo.setMode(peer.id, native, !!wantVideo && peer.pc.connectionState === 'connected');
-  if (vSender.track !== wantVideo) await vSender.replaceTrack(wantVideo).catch(() => {});
+  if (vSender.track !== sendVideo) await vSender.replaceTrack(sendVideo).catch(() => {});
   if (aSender.track !== wantAudio) await aSender.replaceTrack(wantAudio).catch(() => {});
   // câmera (independe de estar compartilhando a tela)
   const wantCam = state.camera && level !== 'off' ? state.camera.track : null;
@@ -1687,6 +1770,35 @@ async function doApplySendParams(peer) {
       await aSender.setParameters(ap);
     }
   } catch {}
+}
+
+// ------------------------------------------------------------------ versão leve da "Nativa direta" (2ª qualidade)
+// Na direta a imagem é uma só para todos: quem via em miniatura levava uma cópia cheia do upload, e um amigo de rede
+// fraca puxava o bitrate de todo mundo para baixo. O helper codifica também uma versão leve (960x540, 30 fps, num
+// segundo encoder) e cada amigo recebe uma das duas (doApplySendParams). O controle de bitrate (adaptNativeBitrate)
+// decide a cheia só por quem está nela; a leve acompanha a pior rede entre quem está nela.
+const LIGHT = { maxWidth: 960, maxHeight: 540, fps: 30 };
+function lightKbps(codec) { return codec === 'h264' ? 1800 : 1300; } // teto da leve (o encoder começa nele)
+function lightLayerOn() { return localStorage.getItem('lightLayer') !== '0'; }
+// recebe a leve: vê a minha tela em miniatura, escolheu 540p ou menos, ou está com a rede fraca (markWeak)
+function wantsLight(peer) {
+  return peer.theyWant === 'thumb' || (peer.theyWantH > 0 && peer.theyWantH <= 540) || Date.now() < (peer.weakUntil || 0);
+}
+// a rede até este amigo não dá conta da cheia enquanto a dos outros dá: ele vai para a leve por um tempo e depois tenta
+// a cheia de novo (1, 2, 4 e até 8 min se cair de novo logo depois de voltar)
+function markWeak(peer, now = Date.now()) {
+  const again = peer.weakEnd && now - peer.weakEnd < 120000;
+  peer.weakMs = again ? Math.min(480000, (peer.weakMs || 60000) * 2) : 60000;
+  peer.weakUntil = now + peer.weakMs;
+  peer.weakEnd = peer.weakUntil;
+  peer.weakN = 0;
+  console.log(`versão leve: a rede até ${peer.name} não dá conta da tela cheia; ele recebe a leve por ${peer.weakMs / 1000} s`);
+  if (!peer.weakToastAt || now - peer.weakToastAt > 600000) {
+    peer.weakToastAt = now;
+    toast(`A rede até ${peer.name} está fraca: ele passa a receber uma versão mais leve da sua tela, e os outros continuam no máximo.`);
+  }
+  applySendParams(peer);
+  setTimeout(() => applySendParams(peer), peer.weakMs + 200);
 }
 
 // ------------------------------------------------------------------ orçamento de upload
@@ -2134,7 +2246,8 @@ async function startShareInner(overrides) {
       // direto: começa no máximo; adaptNativeBitrate só reduz se a rede reclamar
       // adaptativo: o encoder do helper só alimenta a decodificação local -> qualidade alta fixa
       state.nativeKbps = directMbps(settings.bitrate) * 1000; // começa no valor por amigo (orçamento de upload)
-      if (direct && sfuWanted()) state.nativeKbps = sfuKbps(settings); // pelo servidor: uma cópia só, teto do mês
+      // pelo servidor: uma cópia só, teto do mês (a transmissão nova começa direto; um reinício continua onde estava)
+      if (direct && sfuInUse(old)) state.nativeKbps = sfuKbps(settings);
       // troca de resolução pela rede: continua de onde estava (começar no máximo entupiria de novo)
       if (settings.startKbps) state.nativeKbps = Math.min(state.nativeKbps, settings.startKbps);
       // transmissão nova: o controle de bitrate começa do zero; reinício da mesma (troca de resolução
@@ -2146,7 +2259,7 @@ async function startShareInner(overrides) {
       // pelo servidor de vídeo a imagem da placa é a mesma para o servidor e para os amigos: H.265/AV1
       // só quando todos na sala puxam esses codecs de lá (versão com a conexão de receber separada;
       // as antigas davam "subscriber's SDP is missing the published track's codec")
-      const viaSfu = direct && sfuWanted() && !sfuPaused() && !peersNow.every((p) => p.sfu2);
+      const viaSfu = direct && sfuInUse(old) && !peersNow.every((p) => p.sfu2);
       const wantAv1 = direct && !viaSfu && settings.codec !== 'H264' && !settings.forceH264 && !settings.noAv1 && !window.Sdp.sendBad('AV1') &&
         !state.noAv1Encoder && localStorage.getItem('av1') !== '0' && window.Sdp.hasAV1Hw() && peersNow.every((p) => p.av1);
       const wantHevc = direct && !viaSfu && settings.codec !== 'H264' && !settings.forceH264 && !window.Sdp.sendBad('H265') && window.Sdp.hasH265() &&
@@ -2158,7 +2271,7 @@ async function startShareInner(overrides) {
       };
       for (let i = 0; i < codecs.length && !nativeInfo && gen === shareGen; i++) {
         try {
-          const o = { ...opts, codec: codecs[i] };
+          const o = { ...opts, codec: codecs[i], light: direct && lightLayerOn() ? { ...LIGHT, kbps: lightKbps(codecs[i]) } : null };
           nativeInfo = window.__testNative ? await window.__testNative(o) : await window.NativeVideo.start(o);
         } catch (e) {
           if (gen !== shareGen) break; // pararam no meio: não tenta o codec seguinte
@@ -2238,6 +2351,9 @@ async function startShareInner(overrides) {
 
   state.share = {
     stream, video, audio, settings, preview,
+    // a versão leve da direta (2ª qualidade): a trilha vazia da camada 1, quando o helper abriu o segundo encoder
+    videoLight: nativeInfo && direct && nativeInfo.light ? nativeInfo.lightTrack : null,
+    lightKbps: nativeInfo && direct && nativeInfo.light ? lightKbps(nativeInfo.codec) : 0,
     sourceName: src.crop ? `${src.name} (área)` : src.name,
     source: src,                         // para reiniciar a mesma tela se a captura cair
     native: !!nativeInfo,                // captura feita pelo helper
@@ -2248,6 +2364,8 @@ async function startShareInner(overrides) {
     minQp: nativeInfo ? nativeInfo.minQp || 0 : 0, // piso de qualidade aceito pelo encoder (0 = sem)
     codec: nativeInfo && direct ? nativeInfo.codec : null, // 'hevc' / 'h264' na "Nativa direta"
     autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
+    sfuAuto: (old && old.sfuAuto) || null, // indo pelo servidor de vídeo porque precisou (reinício continua nele)
+    sfuShortN: (old && old.sfuShortN) || 0, multiTightAt: (old && old.multiTightAt) || 0, // (e o que o vigia já viu)
     smartH: settings.smartH || 0,        // resolução reduzida pela rede (0 = cheia)
     // por que não vai som (quem assiste vê no lugar do volume): 'none' = escolheu "Sem áudio"
     audioWhy: settings.audio === 'none' ? 'none' : audio ? '' : (audioErr || 'não ligou'),
@@ -2559,6 +2677,7 @@ async function adaptNativeBitrate() {
       }
     } catch {}
   }
+  let lightBwe = Infinity;
   for (const peer of direct) {
     let report;
     try { report = await peer.pc.getStats(); } catch { continue; }
@@ -2578,11 +2697,15 @@ async function adaptNativeBitrate() {
       if (sent > 400) rx = Math.min(2, rep.kb / sent);
     }
     const w = ns[peer.id]; // amigo cujo envio ficou para trás (quadros descartados à espera de keyframe)
-    paths.push({ name: peer.name, n, stale: !m.fresh,
+    // na versão leve: não entra na decisão da cheia; a estimativa dele decide o bitrate da leve
+    if (peer.sendLayer === 1) { if (m.bwe > 0 && m.fresh) lightBwe = Math.min(lightBwe, m.bwe); continue; }
+    paths.push({ peer, name: peer.name, n, stale: !m.fresh,
       s: { loss: m.loss, rtt: m.rtt, bwe: m.bwe, pace: m.pace, bweFloor: peer.sdpFloor || 0, flush: (w && w.active && w.flush) || 0, vpn: peer.routePath === 'vpn', rx } });
   }
+  if (state.share !== share) return;
+  lightBitrate(share, lightBwe);
   if (!paths.length) return;
-  if (state.share !== share || state.nativeKbps !== R) return; // mudou no meio (o teto de envio agiu): decide no próximo segundo
+  if (state.nativeKbps !== R) return; // mudou no meio (o teto de envio agiu): decide no próximo segundo
   let lossMax = 0, rttMax = 0, bweMin = Infinity;
   for (const p of paths) {
     const t = window.__testNet && window.__testNet(p.name); // teste automático: rede simulada por caminho
@@ -2593,6 +2716,17 @@ async function adaptNativeBitrate() {
     lossMax = Math.max(lossMax, p.s.loss || 0);
     rttMax = Math.max(rttMax, p.s.rtt || 0);
     if (p.s.bwe > 0) bweMin = Math.min(bweMin, p.s.bwe);
+  }
+  // um amigo reclama (congestionado) enquanto outro está tranquilo: a rede dele é que não dá conta da cheia. Ele vai para a
+  // leve (4 s seguidos assim) e o bitrate da cheia deixa de seguir ele. Todos reclamando juntos é o meu upload: não
+  // adianta separar ninguém (aí o servidor de vídeo, se ligado, ajuda: sfuNeedWatch)
+  if (share.videoLight && paths.length >= 2) {
+    const calm = paths.some((p) => !p.stale && p.st.level === 'ok');
+    for (const p of paths) {
+      const bad = !p.stale && (p.st.level === 'cong' || p.st.level === 'severe');
+      p.peer.weakN = bad && calm ? (p.peer.weakN || 0) + 1 : 0;
+      if (p.peer.weakN >= 4) markWeak(p.peer);
+    }
   }
   const d = window.NetCtl.decide(netCtl, paths, R, max, 1000, now);
   let target = d.target, did = d.did, why = d.why;
@@ -2620,6 +2754,19 @@ async function adaptNativeBitrate() {
 }
 setInterval(() => { adaptNativeBitrate().catch((e) => console.warn('bitrate da direta', e)); }, 1000);
 
+// bitrate da versão leve: 85% da pior estimativa de banda entre quem está nela (entre 500 kb/s e o teto), mudando no
+// máximo a cada 3 s e só quando a diferença passa de 15%
+function lightBitrate(share, bwe) {
+  if (!share.videoLight || !share.lightKbps) return;
+  const top = lightKbps(share.codec || 'h264');
+  const want = isFinite(bwe) ? Math.round(Math.max(500, Math.min(top, bwe * 0.85))) : top;
+  const now = performance.now();
+  if (Math.abs(want - share.lightKbps) / share.lightKbps < 0.15 || now - (share.lightAt || 0) < 3000) return;
+  share.lightKbps = want;
+  share.lightAt = now;
+  window.Helper.videoBitrate(want, true);
+}
+
 // registro dos cortes (o do teto de envio no máximo a cada 5 s: ele acompanha a estimativa o tempo todo)
 let paceLogAt = 0;
 function logCut(did, why, target) {
@@ -2636,7 +2783,8 @@ async function paceGuard() {
   const share = state.share;
   if (!share || !share.direct || !state.nativeKbps) return;
   const peers = [...state.peers.values()];
-  const jobs = peers.filter((p) => p.vT.sender.track && p.pc.connectionState === 'connected').map((p) => [p.pc, p.net, p.name]);
+  // (só quem está na cheia: o ritmo de quem recebe a leve é o da leve)
+  const jobs = peers.filter((p) => p.vT.sender.track && p.pc.connectionState === 'connected' && p.sendLayer !== 1).map((p) => [p.pc, p.net, p.name]);
   if (share.sfu && peers.some((p) => p.sfuPulling) && window.Sfu.pc() && window.Sfu.pubSender()) jobs.push([window.Sfu.pc(), sfuNet, 'servidor de vídeo']);
   let pace = Infinity, who = '';
   await Promise.all(jobs.map(async ([pc, n, name]) => {
@@ -2763,7 +2911,7 @@ async function watchKeyRequests() {
     report.forEach((r) => {
       if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
       const n = (r.pliCount || 0) + (r.firCount || 0);
-      if (who.keyReqs != null && n > who.keyReqs) window.NativeVideo.key();
+      if (who.keyReqs != null && n > who.keyReqs) window.NativeVideo.key(who.sendLayer === 1 ? 1 : 0);
       who.keyReqs = n;
     });
   }
@@ -3508,6 +3656,10 @@ setInterval(updateRecBadges, 1000);
 // Abre uma janelinha sempre por cima com a tela do amigo. A janela é do mesmo app, então
 // recebe o próprio stream (sem decodificar de novo nem gastar banda extra).
 const overlayWins = new Map(); // id do amigo -> janela
+// trocou de tema: as sobreposições abertas trocam junto
+window.Themes.onChange((id) => {
+  for (const w of overlayWins.values()) { try { if (!w.closed && w.setTheme) w.setTheme(id); } catch {} }
+});
 function openOverlay(id) {
   const old = overlayWins.get(id);
   if (old && !old.closed) {
@@ -3529,6 +3681,7 @@ function openOverlay(id) {
       stream: p.sharing ? p.remoteStream : p.camStream,
       cam: p.sharing && p.hasCam ? p.camStream : null,
       name: p.name,
+      theme: window.Themes.current, // a janelinha usa as cores e as letras do tema (tema-janelas.css)
     });
   };
   feed();
@@ -3826,7 +3979,7 @@ function directCodecProblem() {
   const known = [...state.peers.values()].filter((p) => p.h265 !== undefined);
   const bad = known.find((p) => (sh.codec === 'hevc' && !p.h265) || (sh.codec === 'av1' && !p.av1));
   if (bad) return { who: bad.name, from: sh.codec, why: '' };
-  const old = sfuWanted() ? known.find((p) => !p.sfu2) : null;
+  const old = sfuInUse() ? known.find((p) => !p.sfu2) : null;
   return old ? { who: old.name, from: 'hevc', why: 'sfu' } : null;
 }
 
@@ -4076,7 +4229,7 @@ async function closeRoomForEveryone() {
 }
 
 const ICONS = {
-  focus: '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  focus: '<svg viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="12" rx="1.5"/><path d="M4.5 20h4M10 20h4M15.5 20h4"/></svg>',
   pip: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" class="fill"/></svg>',
   full: '<svg viewBox="0 0 24 24"><path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6"/></svg>',
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3 3.4M6.5 7.5C4.3 9 3 12 3 12s4 6 9 6a9 9 0 0 0 4.2-1"/></svg>',
@@ -4096,6 +4249,16 @@ const ICONS = {
   corner: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="5" width="8" height="6" rx="1" class="fill"/></svg>',
 };
 
+// nome curto e grupo de cada botão da barra da tela, para o menu "⋯" (a dica do mouse continua com a explicação longa)
+const ICON_MENU = {
+  focus: ['Focar nesta tela / voltar para a grade', 'Assistir'], full: ['Tela cheia', 'Assistir'],
+  playpause: ['Play/pausa no vídeo dele', 'Assistir'], pip: ['Janela flutuante (picture-in-picture)', 'Assistir'],
+  overlay: ['Sobreposição por cima do jogo', 'Assistir'], screen2: ['2ª tela', 'Assistir'], corner: ['Minimizar para o canto', 'Assistir'],
+  latency: ['Atraso', 'Assistir'], res: ['Resolução que você recebe', 'Assistir'],
+  rec: ['Replay: guardar os últimos 30 s', 'Gravar e salvar'], clip: ['Salvar clipe (Ctrl+Shift+C)', 'Gravar e salvar'],
+  record: ['Gravar esta tela', 'Gravar e salvar'], shot: ['Foto desta tela', 'Gravar e salvar'],
+  pen: ['Caneta', 'Mais'], chart: ['Histórico da qualidade', 'Mais'], hide: ['Ocultar esta tela', 'Mais'],
+};
 function iconButton(icon, title, onClick) {
   const b = document.createElement('button');
   b.className = 'icon-btn';
@@ -4288,7 +4451,9 @@ function makeTile(id) {
   more.onpointerdown = (e) => e.stopPropagation();
   if (tile.resBtn) tile.resBtn.onpointerdown = (e) => e.stopPropagation();
   actions.append(more);
-  actions.append(iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id)));
+  const hideBtn = iconButton('hide', isMe ? 'Ocultar minha prévia' : 'Ocultar esta tela (para de receber)', () => hideTile(id));
+  hideBtn.classList.add('opt'); // (depois do "⋯": mora nele)
+  actions.append(hideBtn);
   bar.append(grip, label, actions);
   screen.append(video, tile.s2.box, tile.camBox);
   el.append(screen, tile.stats, bar);
@@ -5278,7 +5443,8 @@ function autoResolution(peer, mineBad, good, frameH) {
     if (peer.resGood >= 60) { peer.autoResCap = 0; peer.resStrikes = 0; updateResButton(peer); render(); }
   }
 }
-const OPT_ICONS = new Set(['playpause', 'overlay', 'rec', 'clip', 'record', 'latency', 'res', 'chart', 'shot']);
+// vão para o "⋯" em qualquer largura (na barra ficam volume, caneta, clipe, focar, tela cheia, 2ª tela e o canto)
+const OPT_ICONS = new Set(['playpause', 'overlay', 'rec', 'record', 'latency', 'res', 'chart', 'shot', 'pip', 'hide']);
 function openMoreMenu(actions, btn) {
   const was = document.querySelector('.menu-pop');
   closeMenus();
@@ -5286,17 +5452,32 @@ function openMoreMenu(actions, btn) {
   const m = document.createElement('div');
   m.className = 'menu-pop';
   m.dataset.for = 'more';
-  // o menu mostra o que a largura da tela (ou o tema) escondeu da barra
+  // o menu mostra o que a largura da tela (ou o tema) escondeu da barra, em grupos e com nomes curtos
+  const groups = new Map([['Assistir', []], ['Gravar e salvar', []], ['Mais', []]]);
   for (const b of actions.querySelectorAll('.icon-btn:not(.more-btn)')) {
     if (b.classList.contains('hidden') || b.style.display === 'none' || getComputedStyle(b).display !== 'none') continue;
+    const meta = ICON_MENU[b.dataset.icon] || [b.title, 'Mais'];
+    // atraso e resolução mostram o valor atual (que está na dica: "Atraso: Automático (clique...)")
+    let label = meta[0];
+    if (b.dataset.icon === 'latency' || b.dataset.icon === 'res') label = `${meta[0]}: ${(b.title.split(': ')[1] || '').replace(/ \(.*$/, '')}`;
+    if (b.dataset.icon === 'hide' && b.title.startsWith('Ocultar minha')) label = 'Ocultar minha prévia';
     const it = document.createElement('button');
-    it.className = 'menu-icon' + (b.classList.contains('active') ? ' on' : '');
+    const on = b.classList.contains('active');
+    it.className = 'menu-icon' + (on ? ' on' : '');
+    it.title = b.title;
     it.innerHTML = b.innerHTML;
     const t = document.createElement('span');
-    t.textContent = b.title;
+    t.textContent = label + (on ? ' · ligado' : '');
     it.appendChild(t);
     it.onclick = (e) => { e.stopPropagation(); closeMenus(); b.click(); };
-    m.appendChild(it);
+    (groups.get(meta[1]) || groups.get('Mais')).push(it);
+  }
+  for (const [name, items] of groups) {
+    if (!items.length) continue;
+    const head = document.createElement('div');
+    head.className = 'menu-head';
+    head.textContent = name;
+    m.append(head, ...items);
   }
   m.onpointerdown = (e) => e.stopPropagation();
   m.ondblclick = (e) => e.stopPropagation();
@@ -5358,7 +5539,16 @@ function openResMenu(id, btn) {
 // e ping, cada um na sua escala), faixa de status em cima e marcas nas travadas. Passar o mouse
 // mostra os valores e a causa daquele momento.
 let histOpen = null, histHover = null;
-const HIST_COLORS = { line: '#3987e5', good: '#0ca30c', warn: '#fab219', bad: '#d03b3b', grid: 'rgba(255,255,255,0.07)', axis: '#8a90a2', text: '#e8eaf0' };
+// cores do gráfico: as do tema (var(--hist-...) em tema-janelas.css), com as de sempre de reserva
+const HIST_COLORS = { line: '#3987e5', good: '#0ca30c', warn: '#fab219', bad: '#d03b3b', grid: 'rgba(255,255,255,0.07)', axis: '#8a90a2', text: '#e8eaf0',
+  guide: 'rgba(232,234,240,0.5)', ring: '#16181f', font: '11px system-ui, sans-serif', glow: '0' };
+function histColors(el) {
+  const cs = getComputedStyle(el);
+  const o = {};
+  for (const k of Object.keys(HIST_COLORS)) o[k] = cs.getPropertyValue(`--hist-${k}`).trim() || HIST_COLORS[k];
+  o.glow = Number(o.glow) || 0; // brilho em volta das linhas (o Neon acende)
+  return o;
+}
 function openHistory(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
@@ -5391,6 +5581,7 @@ function drawHistory() {
   const W = c.clientWidth, H = c.clientHeight;
   if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
   const g = c.getContext('2d');
+  const C = histColors(c);
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
   const L = 44, R = 12, T = 6, STRIP = 8, GAP = 26;
@@ -5400,7 +5591,7 @@ function drawHistory() {
   // faixa de status (bom / atenção / ruim)
   for (let i = 0; i < h.length; i++) {
     const a = x(h[i].t - 2000), b = x(h[i].t);
-    g.fillStyle = HIST_COLORS[h[i].level] || HIST_COLORS.good;
+    g.fillStyle = C[h[i].level] || C.good;
     g.fillRect(Math.max(L, a), T, Math.max(1, b - a - 0.5), STRIP);
   }
   const panels = [
@@ -5409,18 +5600,19 @@ function drawHistory() {
     { key: 'rtt', label: 'ping ms', max: Math.max(50, ...h.map((p) => p.rtt || 0)) },
   ];
   const top0 = T + STRIP + GAP, ph = (H - top0 - 22 - GAP * 2) / 3;
-  g.font = '11px system-ui, sans-serif';
+  g.font = C.font;
   panels.forEach((pn, i) => {
     const y0 = top0 + i * (ph + GAP), y = (v) => y0 + ph - (v / pn.max) * ph;
     pn.y = y; pn.y0 = y0;
-    g.strokeStyle = HIST_COLORS.grid; g.lineWidth = 1;
+    g.strokeStyle = C.grid; g.lineWidth = 1;
     for (const f of [0, 0.5, 1]) { g.beginPath(); g.moveTo(L, Math.round(y0 + ph * f) + 0.5); g.lineTo(W - R, Math.round(y0 + ph * f) + 0.5); g.stroke(); }
-    g.fillStyle = HIST_COLORS.axis; g.textAlign = 'right'; g.textBaseline = 'middle';
+    g.fillStyle = C.axis; g.textAlign = 'right'; g.textBaseline = 'middle';
     g.fillText(String(Math.round(pn.max)), L - 6, y0 + 2);
     g.fillText('0', L - 6, y0 + ph);
-    g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = HIST_COLORS.text;
+    g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = C.text;
     g.fillText(pn.label, L + 4, y0 + 2);
-    g.strokeStyle = HIST_COLORS.line; g.lineWidth = 2; g.lineJoin = 'round';
+    g.strokeStyle = C.line; g.lineWidth = 2; g.lineJoin = 'round';
+    if (C.glow) { g.shadowColor = C.line; g.shadowBlur = C.glow; }
     g.beginPath();
     let started = false;
     for (const p of h) {
@@ -5429,19 +5621,20 @@ function drawHistory() {
       if (!started) { g.moveTo(x(p.t), y(v)); started = true; } else g.lineTo(x(p.t), y(v));
     }
     g.stroke();
+    g.shadowBlur = 0;
   });
   // travadas: marca vermelha atravessando os painéis
   for (const p of h) {
     if (!p.fz) continue;
     const xx = Math.round(x(p.t)) + 0.5;
-    g.strokeStyle = HIST_COLORS.bad; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.strokeStyle = C.bad; g.lineWidth = 1; g.setLineDash([3, 3]);
     g.beginPath(); g.moveTo(xx, top0); g.lineTo(xx, top0 + 3 * ph + 2 * GAP); g.stroke();
     g.setLineDash([]);
-    g.fillStyle = HIST_COLORS.bad;
+    g.fillStyle = C.bad;
     g.beginPath(); g.arc(xx, panels[0].y(p.fps), 4, 0, Math.PI * 2); g.fill();
   }
   // eixo de tempo
-  g.fillStyle = HIST_COLORS.axis; g.textBaseline = 'alphabetic';
+  g.fillStyle = C.axis; g.textBaseline = 'alphabetic';
   for (let m = 10; m >= 0; m -= 2) {
     const xx = x(now - m * 60000);
     g.textAlign = m === 10 ? 'left' : m === 0 ? 'right' : 'center';
@@ -5453,12 +5646,12 @@ function drawHistory() {
     let best = h[0];
     for (const p of h) if (Math.abs(x(p.t) - histHover) < Math.abs(x(best.t) - histHover)) best = p;
     const xx = Math.round(x(best.t)) + 0.5;
-    g.strokeStyle = 'rgba(232,234,240,0.5)'; g.lineWidth = 1;
+    g.strokeStyle = C.guide; g.lineWidth = 1;
     g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, top0 + 3 * ph + 2 * GAP); g.stroke();
     for (const pn of panels) {
       const v = best[pn.key];
       if (v == null) continue;
-      g.fillStyle = HIST_COLORS.line; g.strokeStyle = '#16181f'; g.lineWidth = 2;
+      g.fillStyle = C.line; g.strokeStyle = C.ring; g.lineWidth = 2;
       g.beginPath(); g.arc(xx, pn.y(v), 4, 0, Math.PI * 2); g.fill(); g.stroke();
     }
     const lvl = { good: '● bom', warn: '▲ atenção', bad: '■ ruim' }[best.level] || best.level;

@@ -374,6 +374,104 @@ async function pageA() {
       await stopShare();
     }
 
+    // ---------------------------------------------------------------- 7b) servidor de vídeo só quando precisa
+    // A sala de teste não é online, e o servidor de verdade gastaria o limite do mês: a opção fica "ligada" de mentira
+    // e o servidor é trocado por um que só conta os pedidos. Confere a decisão (sfuDecide, com amigos de mentira), a
+    // medida do upload (uploadShort) e que a transmissão só vai para o servidor quando a decisão manda.
+    {
+      const realWanted = sfuWanted;
+      const S = window.Sfu, real = { publish: S.publish, unpublish: S.unpublish, published: S.published };
+      let pubs = 0, unpubs = 0, isPub = false;
+      sfuWanted = () => true;
+      S.publish = async () => { pubs++; isPub = true; return { s: 'teste', v: 'v1', a: null, n: 1 }; };
+      S.unpublish = async () => { unpubs++; isPub = false; };
+      S.published = () => isPub;
+      try {
+        setOpts('native-direct', '720', 60);
+        selectedSource = src; delay = 0;
+        await startShare();
+        await sfuSync();
+        const sh = state.share;
+        check('servidor quando precisar: a transmissão começa direto (não publica no servidor)', !!sh && pubs === 0 && !sh.sfu && !sfuInUse(), 'publicações=' + pubs);
+        const v = (name, st, want = 'full') => ({ name, theyWant: want, pc: { connectionState: st } });
+        const t0 = Date.now();
+        const two = [v('A', 'connected'), v('B', 'connected')];
+        const a = {};
+        let d = null;
+        for (let i = 0; i < 4; i++) d = sfuDecide(a, two, true, t0 + i * 2000);
+        const before = d;
+        d = sfuDecide(a, two, true, t0 + 8000);
+        check('servidor quando precisar: upload apertado por 10 s seguidos com 2 amigos manda para o servidor (antes não)', before === null && !!d && d.use && !!a.sfuAuto, JSON.stringify(d));
+        const b = {};
+        sfuDecide(b, two, true, t0); sfuDecide(b, two, false, t0 + 2000);
+        for (let i = 2; i < 6; i++) d = sfuDecide(b, two, true, t0 + i * 2000);
+        check('servidor quando precisar: uma medida boa no meio recomeça a contagem', d === null && !b.sfuAuto);
+        d = sfuDecide({}, [v('A', 'connected'), v('Duda', 'failed')], false, t0);
+        check('servidor quando precisar: a conexão direta com quem assiste falhou: servidor na hora', !!d && d.use && d.lost === 'Duda');
+        const e = {}, disc = [v('A', 'connected'), v('Léo', 'disconnected')];
+        const d1 = sfuDecide(e, disc, false, t0), d2 = sfuDecide(e, disc, false, t0 + 9000);
+        check('servidor quando precisar: conexão caída (disconnected) só conta depois de 8 s', d1 === null && !!d2 && d2.use && d2.lost === 'Léo');
+        const one = [v('A', 'connected')];
+        const f = { sfuAuto: { at: t0, why: 'x' } };
+        const f1 = sfuDecide(f, one, false, t0), f2 = sfuDecide(f, one, false, t0 + 20000), f3 = sfuDecide(f, one, false, t0 + 31000);
+        check('servidor quando precisar: no servidor, volta ao direto só com um amigo assistindo por 30 s', f1 === null && f2 === null && !!f3 && f3.use === false && !f.sfuAuto);
+        const g = { sfuAuto: { at: t0, why: 'x' } };
+        sfuDecide(g, one, false, t0);
+        const g2 = sfuDecide(g, two, false, t0 + 31000);
+        check('servidor quando precisar: com dois ou mais assistindo, fica no servidor', g2 === null && !!g.sfuAuto);
+        // a medida do upload na nativa direta: bitrate abaixo do que o servidor daria E dois caminhos reclamando
+        const k0 = state.nativeKbps;
+        const tight = [{ net: { st: { level: 'cong' } } }, { net: { st: { level: 'soft' } } }];
+        const oneBad = [{ net: { st: { level: 'cong' } } }, { net: { st: { level: 'ok' } } }];
+        state.nativeKbps = 1500;
+        const u1 = await uploadShort({ direct: true, settings: { bitrate: 20 } }, tight);
+        const u2 = await uploadShort({ direct: true, settings: { bitrate: 20 } }, oneBad);
+        state.nativeKbps = 12000;
+        const u3 = await uploadShort({ direct: true, settings: { bitrate: 20 } }, tight);
+        state.nativeKbps = k0;
+        check('servidor quando precisar: upload apertado = bitrate baixo e dois caminhos reclamando (um só, ou bitrate bom, não)', u1 === true && u2 === false && u3 === false, [u1, u2, u3].join(','));
+        // a transmissão vai para o servidor e volta conforme a decisão
+        sh.sfuAuto = { at: Date.now(), why: 'teste' };
+        await sfuSync();
+        check('servidor quando precisar: decidido, a transmissão passa a ir pelo servidor', pubs === 1 && !!sh.sfu && sfuInUse(), 'publicações=' + pubs);
+        sh.sfuAuto = null;
+        await sfuSync();
+        check('servidor quando precisar: de volta ao direto, sai do servidor', unpubs === 1 && !sh.sfu && !sfuInUse(), 'saídas=' + unpubs);
+      } finally {
+        await stopShare();
+        sfuWanted = realWanted;
+        Object.assign(S, real);
+      }
+    }
+
+    // ---------------------------------------------------------------- 7c) versão leve da direta: quem vai para ela
+    // (o caminho dos quadros é conferido no smoke-test e, com o helper de verdade, no direct-test; aqui só as regras)
+    {
+      check('versão leve: miniatura e 540p ou menos recebem a leve; tela cheia sem pedir nada, não',
+        wantsLight({ theyWant: 'thumb' }) && wantsLight({ theyWant: 'full', theyWantH: 480 }) && !wantsLight({ theyWant: 'full', theyWantH: 720 }) && !wantsLight({ theyWant: 'full' }));
+      const fake = { name: 'Rede Fraca', sendQueue: Promise.resolve() };
+      const t0 = Date.now();
+      clearToasts();
+      markWeak(fake, t0);
+      const first = fake.weakUntil - t0, ok1 = wantsLight({ theyWant: 'full', weakUntil: fake.weakUntil });
+      markWeak(fake, fake.weakEnd + 30000); // caiu de novo logo depois de voltar para a cheia
+      const second = fake.weakMs;
+      check('versão leve: rede fraca vai para a leve por 1 min; caindo de novo logo depois de voltar, espera o dobro', first === 60000 && ok1 && second === 120000, first + ' / ' + second);
+      check('versão leve: avisa quem transmite uma vez (não a cada queda)', toasts().filter((t) => /Rede Fraca/.test(t)).length === 1);
+      clearToasts();
+      const sentKb = [];
+      const vb = window.Helper.videoBitrate;
+      window.Helper.videoBitrate = (kb, light) => { if (light) sentKb.push(kb); };
+      const sh = { videoLight: {}, lightKbps: 1800, codec: 'h264', lightAt: 0 };
+      lightBitrate(sh, 1000);         // a pior rede da leve aguenta ~1 Mb/s: 85% disso
+      const a = sh.lightKbps;
+      lightBitrate(sh, 1050);         // mudança pequena e logo em seguida: não mexe
+      sh.lightAt = 0;
+      lightBitrate(sh, Infinity);     // ninguém reclamando: volta ao teto
+      window.Helper.videoBitrate = vb;
+      check('versão leve: o bitrate acompanha a pior rede dela e volta ao teto (sem ficar mexendo à toa)', a === 850 && sentKb.join(',') === '850,1800' && sh.lightKbps === 1800, sentKb.join(','));
+    }
+
     // ---------------------------------------------------------------- 8) clipe segue a tela quando a trilha troca
     {
       const v1 = fakeVideo('#135'), a1 = fakeAudio(); fakes.push(v1, a1);
