@@ -613,6 +613,12 @@ function setupAutoUpdate() {
 ipcMain.handle('app:version', () => app.getVersion());
 // cópia aberta por um script de teste: a tela de novidades não abre sozinha por cima do que o teste confere
 ipcMain.handle('app:testing', () => !!process.env.TELA_TEST_SCRIPT);
+// a codificação de vídeo pela placa está ligada no Chromium do app? ("enabled"; "disabled_software" quando ele a
+// desliga, por exemplo depois de a placa travar) — vale para todas as transmissões, mesmo sem o nome do encoder
+ipcMain.handle('gpu:status', () => {
+  const st = app.getGPUFeatureStatus();
+  return { video_encode: st.video_encode, video_decode: st.video_decode };
+});
 ipcMain.handle('app:autostart', (_e, on) => {
   if (!app.isPackaged) return false; // rodando pelo npm start: não mexe no Windows
   if (typeof on === 'boolean') app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'] });

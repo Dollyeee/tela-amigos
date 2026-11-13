@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('native', {
   saveShot: (buffer, name) => ipcRenderer.invoke('shot:save', buffer, name),
   appVersion: () => ipcRenderer.invoke('app:version'),
   testing: () => ipcRenderer.invoke('app:testing'),
+  gpuStatus: () => ipcRenderer.invoke('gpu:status'),
   recovered: () => ipcRenderer.invoke('app:recovered'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),

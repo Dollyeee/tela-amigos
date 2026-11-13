@@ -98,7 +98,9 @@ async function buildRendererDiag() {
     `conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
   try { for (const l of await window.Sfu.stats()) lines.push(`  ${l}`); } catch {}
   lines.push(`config=${safeJson(state.settings)}`);
-  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} pisoQP=${s.minQp || 'sem'} modoLeve=${!!state.lightMode}` : ''}`);
+  try { const g = await window.native.gpuStatus(); lines.push(`placa no Chromium: codificar=${g.video_encode} decodificar=${g.video_decode}`); } catch {}
+  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} pisoQP=${s.minQp || 'sem'} modoLeve=${!!state.lightMode}` +
+    ` codificacao=${s.direct ? 'helper' : s.encSeen || '?'}${s.soft ? ` NO PROCESSADOR (${s.soft})` : ''}` : ''}`);
   if (s && s.direct) {
     lines.push(`versão leve: ${s.videoLight ? `ligada ${s.lightKbps} kb/s; recebem: ${[...state.peers.values()].filter((p) => p.sendLayer === 1).map((p) => `${p.name}${Date.now() < (p.weakUntil || 0) ? ' (rede fraca)' : ''}`).join(', ') || 'ninguém'}`
       : `desligada${window.NativeVideo.dbg.lightErr ? ` (${window.NativeVideo.dbg.lightErr})` : ''}`}`);
@@ -807,6 +809,7 @@ function onRelay(from, data) {
         cpu: !!data.cpu, gaming: !!data.gaming,
         cap: Number.isFinite(data.cap) ? data.cap : null, target: Number.isFinite(data.target) ? data.target : null,
         out: Number.isFinite(data.out) ? data.out : null, // quadros/s que ele está mandando
+        sw: ['placa', 'limite', 'codec'].includes(data.sw) ? data.sw : null, // a placa dele não está codificando
       };
       break;
     case 'media': onMediaRequest(peer); break;
@@ -3725,13 +3728,34 @@ async function healthSender(sh) {
     let cpu = false;
     let sendMime = '';
     let outFps = 0; // quadros por segundo que estou mandando (quem recebe distingue tela parada de travada)
+    // as saídas de vídeo desta medida: quem codifica cada uma (placa ou processador) e o tamanho que ela DEVERIA ter (o da
+    // tela, menos a redução que o app pediu para miniatura/camada). Não o que saiu: no processador, com banda ou CPU
+    // apertados, o Chromium encolhe a imagem (1920x1080 saindo 640x360), e o aviso sumiria justo no pior caso.
+    const encs = [];
+    const look = (rep, r, sender) => {
+      if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
+      let e = null;
+      try { const all = sender.getParameters().encodings || []; e = (r.rid && all.find((x) => x.rid === r.rid)) || all[0] || null; } catch {}
+      if (e && e.active === false) return;
+      const c = r.codecId && rep.get(r.codecId), src = r.mediaSourceId && rep.get(r.mediaSourceId);
+      const div = (e && e.scaleResolutionDownBy) || 1;
+      const w = src && src.width ? Math.round(src.width / div) : r.frameWidth || 0;
+      const h = src && src.height ? Math.round(src.height / div) : r.frameHeight || 0;
+      encs.push({ w, h, sent: `${r.frameWidth || 0}x${r.frameHeight || 0}`, enc: r.encoderImplementation || '', hw: r.powerEfficientEncoder, mime: (c && c.mimeType) || '' });
+    };
     const sfuS = sh.sfu && window.Sfu.pubSender();
-    if (sfuS) { try { (await sfuS.getStats()).forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') outFps = Math.max(outFps, r.framesPerSecond || 0); }); } catch {} }
+    if (sfuS) {
+      try {
+        const rep = await sfuS.getStats();
+        rep.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') outFps = Math.max(outFps, r.framesPerSecond || 0); look(rep, r, sfuS); });
+      } catch {}
+    }
     for (const peer of state.peers.values()) {
       if (!peer.vT.sender.track) continue;
       try {
         const rep = await peer.vT.sender.getStats();
         rep.forEach((r) => {
+          look(rep, r, peer.vT.sender);
           if (r.type === 'outbound-rtp' && r.kind === 'video') outFps = Math.max(outFps, r.framesPerSecond || 0);
           if (r.type === 'outbound-rtp' && r.qualityLimitationReason === 'cpu') cpu = true;
           if (r.type === 'outbound-rtp' && r.codecId && rep.get(r.codecId)) {
@@ -3741,8 +3765,15 @@ async function healthSender(sh) {
         });
       } catch {}
     }
+    // a codificação pela placa está ligada no Chromium? (só importa na captura adaptativa)
+    let gpuEnc = null;
+    if (!sh.direct) { try { gpuEnc = (await window.native.gpuStatus()).video_encode || null; } catch {} }
     if (state.share !== sh) return; // parou ou reiniciou durante as esperas
     if (sendMime) markSendingCodec(sendMime);
+    // a placa de vídeo está codificando? (só na captura adaptativa: na "Nativa direta" quem codifica é o helper,
+    // sempre na placa, e o Chromium só embrulha uns quadros pequenos de mentira)
+    sh.gpuEnc = gpuEnc;
+    softCheck(sh, sh.direct ? [] : encs, !!gpuEnc && !/^enabled/.test(gpuEnc));
     const ns = state.nativeStats;
     // encoder do helper não dá conta: quadros descartados, ou boa parte deles saindo atrasada (o
     // helper agora espera o encoder liberar em vez de descartar)
@@ -3772,9 +3803,105 @@ async function healthSender(sh) {
     // (gaming = um jogo desenhando o tempo todo; navegador/player em tela cheia não conta: lá,
     //  nenhum quadro novo é só vídeo pausado ou página parada)
     const capFps = ns && sh.native ? ns.captureFps : null;
-    sendRelay(null, { kind: 'health', direct: !!sh.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (sh.settings && sh.settings.fps) || 60), gaming: gameDrawing(), out: Math.round(outFps) });
+    sendRelay(null, { kind: 'health', direct: !!sh.direct, cpu: state.lightMode || cpu, cap: capFps, target: (state.lightMode ? 30 : (sh.settings && sh.settings.fps) || 60), gaming: gameDrawing(), out: Math.round(outFps), sw: sh.soft || null });
   }
 }
+
+// ---- a placa de vídeo está codificando a minha transmissão?
+// Na captura adaptativa quem codifica é o Chromium, uma cópia por amigo (e uma para o servidor): na placa de vídeo
+// ("MediaFoundation... NVIDIA/AMD/Intel") ou, quando ela não está disponível, no processador (OpenH264, libvpx,
+// libaom), que com um jogo aberto não dá conta. Foi o que aconteceu no diagnóstico de 2026-11-12: a placa do Toddy
+// travou com o RDR2, a captura nativa caiu e o Chromium passou a codificar em 720p no processador, sem ninguém saber.
+// Medido neste Electron (placa NVIDIA): H.264 e H.265 a partir de 640x360 vão para a placa; até 480x270 o Chromium
+// usa o processador de propósito (custa pouco: não conta aqui); VP8, VP9 e AV1 vão sempre para o processador. Uma
+// miniatura que vira tela cheia volta para a placa (conferido), e o tamanho que vale é o pedido (ver look()).
+// Dois sinais: o nome do encoder de cada saída (o Chromium só diz com uma captura dele ou câmera ativa: na captura do
+// Chromium sim, como no caso do Toddy; na Nativa adaptativa, não) e a codificação pela placa ligada ou não no Chromium
+// do app (vale sempre; "disabled_software" quando ele desliga a placa, por exemplo depois de ela travar).
+const SOFT_MIN_PX = 640 * 360;
+function isSoftEnc(s) {
+  if (s.hw === true) return false;
+  if (s.hw === false) return true;
+  const n = s.enc || ''; // sem o powerEfficientEncoder: pelo nome
+  return /openh264|libvpx|libaom|svt/i.test(n) && !/mediafoundation|accelerator|external|nvidia|amd|intel|qsv/i.test(n);
+}
+// streams: [{ w, h, enc, hw, mime }] das saídas de vídeo. null = tudo o que é grande está na placa; senão o motivo:
+// 'codec' (um codec que aqui só o processador faz: AV1, VP9, VP8), 'limite' (parte na placa e parte no processador: a
+// placa não abriu mais uma cópia) ou 'placa' (nada na placa: travou, ou o driver não está deixando)
+// (encOff: a codificação pela placa está desligada no Chromium: tudo sai do processador)
+function softEncode(streams, encOff = false) {
+  const big = streams.filter((s) => s.w * s.h >= SOFT_MIN_PX);
+  if (encOff && big.length) return 'placa';
+  const soft = big.filter(isSoftEnc);
+  if (!soft.length) return null;
+  if (soft.some((s) => /av1|vp8|vp9/i.test(s.mime || ''))) return 'codec';
+  return soft.length < big.length ? 'limite' : 'placa';
+}
+const SOFT_TEXT = {
+  placa: 'Sua placa de vídeo parou de codificar a transmissão: agora é o processador que faz isso, e com jogo aberto a sua tela ' +
+    'engasga para os amigos. Feche e abra o Tela Amigos; se continuar, reinicie o PC e atualize o driver da placa de vídeo.',
+  limite: 'Sua placa de vídeo não está dando conta de uma cópia da tela para cada amigo: parte delas está saindo pelo processador. ' +
+    'Em Ajustes, troque a Captura para "Nativa direta" (uma cópia só, para todos).',
+  codec: 'O codec escolhido (AV1, VP9 ou VP8) sai pelo processador nesta captura, e isso pesa muito com jogo aberto. ' +
+    'Em "Trocar tela", ponha o Codec em "Automático": a placa de vídeo faz H.265 e H.264.',
+};
+// a notificação do Windows (quem está jogando em tela cheia não vê o aviso dentro do app)
+const SOFT_NOTE = {
+  placa: 'Sua placa de vídeo parou de codificar a transmissão, e a sua tela está engasgando para os amigos. Clique para ver o que fazer.',
+  limite: 'Sua placa de vídeo não está dando conta de uma cópia da tela para cada amigo. Clique para ver o que fazer.',
+  codec: 'O codec escolhido está pesando no processador. Clique para ver o que fazer.',
+};
+// o motivo que os amigos veem no indicador da tela de quem transmite
+const SOFT_WHY = {
+  placa: (n) => `a placa de vídeo de ${n} parou de codificar: quem codifica agora é o processador`,
+  limite: (n) => `a placa de vídeo de ${n} não dá conta de uma cópia para cada amigo: parte sai pelo processador`,
+  codec: (n) => `${n} está transmitindo num codec que sai pelo processador (AV1, VP9 ou VP8)`,
+};
+const softWarned = {}; // último aviso de cada motivo (no máximo um a cada 10 min)
+let softFocusAt = 0;
+let underTest = true; // nas cópias abertas pelos testes, sem notificação do Windows (até o main responder: na dúvida, sem)
+try { window.native.testing().then((t) => { underTest = !!t; }, () => { underTest = false; }); } catch { underTest = false; }
+// quem codifica esta saída, para o diagnóstico ("não informado": o Chromium não disse o nome nem se é da placa)
+function encWho(s, encOff) {
+  if (encOff) return 'processador: codificação pela placa desligada no Chromium';
+  if (isSoftEnc(s)) return 'processador';
+  return s.hw === true || /mediafoundation|accelerator|external|nvidia|amd|intel|qsv/i.test(s.enc || '') ? 'placa' : 'não informado';
+}
+function softCheck(sh, encs, encOff = false) {
+  const kind = softEncode(encs, encOff);
+  const big = encs.filter((s) => s.w * s.h >= SOFT_MIN_PX).sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  if (big) sh.encSeen = `${big.enc || '?'} ${big.sent || big.w + 'x' + big.h} de ${big.w}x${big.h} ${String(big.mime).replace(/^video\//i, '')} (${encWho(big, encOff)})`;
+  // o mesmo motivo em 3 medidas seguidas (4 a 6 s): uma troca de tamanho ou de encoder no meio não avisa
+  sh.softN = kind ? (kind === sh.softKind ? (sh.softN || 0) + 1 : 1) : 0;
+  sh.softKind = kind;
+  if (!kind) {
+    if (sh.soft) console.log('codificação de volta na placa de vídeo');
+    sh.soft = null;
+    return;
+  }
+  if (sh.softN < 3 || sh.soft === kind) return;
+  sh.soft = kind;
+  console.warn(`codificação no processador (${kind})${encOff ? ' — codificação pela placa desligada no Chromium' : ''}: ` +
+    encs.filter((s) => s.w * s.h >= SOFT_MIN_PX && (encOff || isSoftEnc(s))).map((s) => `${s.enc || '?'} ${s.sent || ''} de ${s.w}x${s.h}`).join(' · '));
+  const now = Date.now();
+  if (now - (softWarned[kind] || 0) < 600000) return;
+  softWarned[kind] = now;
+  softFocusAt = now;
+  toast(SOFT_TEXT[kind], 'error');
+  if (!document.hasFocus() && !underTest) {
+    try {
+      const n = new Notification('Tela Amigos', { body: SOFT_NOTE[kind], silent: true, icon: 'icon.png' });
+      n.onclick = () => window.native.focusWindow();
+    } catch {}
+  }
+}
+// voltou para o app (ex.: saiu do jogo) e a placa continua sem codificar: o aviso de novo (no máximo 1 por minuto)
+window.addEventListener('focus', () => {
+  const sh = state.share;
+  if (!sh || !sh.soft || Date.now() - softFocusAt < 60000) return;
+  softFocusAt = Date.now();
+  toast(SOFT_TEXT[sh.soft], 'error');
+});
 
 async function healthViewer() {
   for (const peer of state.peers.values()) {
@@ -3825,7 +3952,8 @@ async function healthViewer() {
     // "PC dele no limite" = o app DELE avisou (encoder atrasado/descartando). Antes contava também
     // "capturando menos quadros que o alvo", mas a captura só conta quadros NOVOS: tela parada ou um
     // filme a 24/30 fps acusavam "PC no limite" para todo mundo, com a imagem perfeita.
-    const senderSlow = !!h.cpu || capStopped;
+    // (codificando no processador só conta quando a imagem mostra: com quadros sobrando, nada a dizer)
+    const senderSlow = !!h.cpu || capStopped || (!!h.sw && (fps < lowFps || freezes >= 1));
     const netBad = loss > 0.01 || (rtt && rtt > 0.12) || (freezes >= 1 && lostD > 0);
     const kbpsIn = ((q.bytes - prev.bytes) * 8) / dt / 1000;
     // "Nativa direta" dele vindo direto para mim: aviso quanto recebi nestes 2 s. O app dele compara
@@ -3841,6 +3969,7 @@ async function healthViewer() {
       if (senderSlow) {
         reason = `PC de ${peer.name} no limite${h.cap != null ? ` (capturando ${Math.round(h.cap)} fps)` : ''}${h.gaming ? ' — jogo pesado' : ''}`;
         short = `PC de ${peer.name}`;
+        if (h.sw) reason = SOFT_WHY[h.sw](peer.name);
         if (capStopped) { // não é rede nem o meu PC: a captura dele travou com o jogo
           reason = `a captura de ${peer.name} parou (0 fps com o jogo aberto); o app dele tenta reiniciar sozinho`;
           short = 'captura dele parou';

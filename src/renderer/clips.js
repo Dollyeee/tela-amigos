@@ -1,5 +1,5 @@
 // Clipes: guarda os últimos 30 s de uma tela (vídeo + áudio) e salva em MP4.
-// Um VideoEncoder por tela com replay ligado (placa de vídeo), keyframe a cada 1 s para o clipe
+// Um VideoEncoder por tela com replay ligado (placa de vídeo; sem ela, o processador), keyframe a cada 1 s para o clipe
 // poder começar em qualquer segundo. Só ficam na memória os pedaços já codificados (~30 MB).
 window.Clips = (() => {
   const KEEP_US = 31_000_000; // 31 s
@@ -61,21 +61,26 @@ window.Clips = (() => {
     }
 
     async startVideo(stream) {
-      let encoder = null, cfgKey = '';
+      let encoder = null, cfgKey = '', remadeAt = 0;
       const makeEncoder = async (w, h) => {
         if (encoder) { try { await encoder.flush(); encoder.close(); } catch {} }
         // tamanho par (exigência do H.264) e no máximo 1080p para o clipe
         const s = Math.min(1, 1920 / w, 1080 / h);
         this.width = Math.max(2, Math.round(w * s) & ~1);
         this.height = Math.max(2, Math.round(h * s) & ~1);
+        // A placa primeiro. Sem ela (o Chromium desliga a codificação pela placa, por exemplo depois de ela travar com
+        // um jogo), "prefer-hardware" é recusado como se fosse obrigatório e o replay ficava vazio, sem aviso nenhum:
+        // aí vai com "no-preference" (o processador, ou a placa se ela voltar). Conferido com o Chromium sem a placa.
+        const cfg = { codec: 'avc1.640028', width: this.width, height: this.height, bitrate: this.bitrate, framerate: 60, latencyMode: 'realtime', avc: { format: 'avc' } };
+        let hw = 'prefer-hardware';
+        try { if (!(await VideoEncoder.isConfigSupported({ ...cfg, hardwareAcceleration: hw })).supported) hw = 'no-preference'; } catch { hw = 'no-preference'; }
+        if (hw !== this.encHw && hw !== 'prefer-hardware') console.warn('clipe: placa de vídeo indisponível para codificar; usando o processador');
+        this.encHw = hw;
         encoder = new VideoEncoder({
           output: (chunk, meta) => this.pushVideo(chunk, meta),
           error: (e) => console.warn('clipe (vídeo)', e),
         });
-        encoder.configure({
-          codec: 'avc1.640028', width: this.width, height: this.height, bitrate: this.bitrate, framerate: 60,
-          hardwareAcceleration: 'prefer-hardware', latencyMode: 'realtime', avc: { format: 'avc' },
-        });
+        encoder.configure({ ...cfg, hardwareAcceleration: hw });
         this.video.length = 0; // pedaços antigos (outro tamanho) não servem mais
       };
       // Emenda dos horários: cada trilha tem o relógio dela, e o clipe precisa de um só, sempre
@@ -103,6 +108,16 @@ window.Clips = (() => {
               const key = `${frame.displayWidth}x${frame.displayHeight}`;
               // gravação: o tamanho fica fixo (o arquivo não pode mudar de resolução no meio)
               if (key !== cfgKey && !(this.fixedSize && encoder)) { cfgKey = key; await makeEncoder(frame.displayWidth, frame.displayHeight); lastKeyTs = -1; }
+              // o codificador parou (a placa travou no meio, ou recusou a configuração): antes o replay morria aqui em
+              // silêncio e "Salvar clipe" não salvava nada. O replay recomeça com um novo (no máximo um a cada 2 s); a
+              // gravação não tem como trocar de codificador no meio do arquivo: termina, como antes.
+              if (encoder.state === 'closed') {
+                if (this.fixedSize) throw new Error('o codificador de vídeo parou');
+                if (performance.now() - remadeAt < 2000) { frame.close(); continue; }
+                remadeAt = performance.now();
+                console.warn('clipe: o codificador de vídeo parou; começando outro');
+                await makeEncoder(frame.displayWidth, frame.displayHeight); lastKeyTs = -1;
+              }
               if (encoder.encodeQueueSize > 6) { frame.close(); continue; } // placa ocupada: pula um quadro
               let f = frame;
               const withCam = !!(this.opts.compose && this.opts.compose());

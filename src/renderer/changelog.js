@@ -11,6 +11,16 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.67',
+    title: 'Aviso quando a placa de vídeo para de codificar',
+    items: [
+      'Se a sua placa de vídeo para de codificar a transmissão (ela pode travar com um jogo pesado) e o processador assume, a sua tela engasga para todo mundo. Agora o app avisa e diz o que fazer: fechar e abrir o Tela Amigos e, se continuar, reiniciar o PC e atualizar o driver da placa. Jogando em tela cheia, o aviso chega como notificação do Windows e aparece de novo quando você volta para o app.',
+      'Quem assiste vê o motivo certo no indicador da sua tela ("a placa de vídeo de Fulano parou de codificar"), em vez de só "PC no limite".',
+      'Também avisa quando a placa não dá conta de uma cópia da tela para cada amigo, ou quando o codec escolhido (AV1, VP9 ou VP8) sai pelo processador.',
+      '**Conserto do replay:** com a placa de vídeo fora do ar, o "Salvar clipe" não guardava nada, e se ela travava no meio o replay parava sem avisar. Agora ele grava pelo processador quando precisa e volta sozinho se a placa travar.',
+    ],
+  },
+  {
     v: '1.0.66',
     title: 'Tema novo: Galeria (noite)',
     text: 'A Galeria ganhou uma versão escura, como a Varanda tem a dela: a mesma exposição, com a parede cor de carvão, molduras claras e a bolinha vermelha de sempre. Clique nela aqui embaixo para experimentar.',

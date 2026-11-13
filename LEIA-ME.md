@@ -83,6 +83,17 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
   todos (e no monitor de quem transmite) e depois somem; "Apagar" tira os seus na hora; Esc desliga.
 - Qualidade de cada tela (bolinha verde/amarela/vermelha), **modo leve** automático quando o PC está no limite,
   prévia escondida automaticamente ao jogar em tela cheia, notificações, ícone na bandeja.
+- **Aviso de placa sem codificar** (v1.0.67): na captura adaptativa quem codifica é o Chromium; se a placa de vídeo para
+  de codificar (ela pode travar com um jogo pesado) e o processador assume, o app avisa e diz o que fazer (no app, por
+  notificação do Windows se estiver jogando, e de novo ao voltar para o app). Também avisa quando a placa não dá conta
+  de uma cópia para cada amigo ou quando o codec escolhido (AV1, VP9, VP8) sai pelo processador. Os amigos veem o
+  motivo no indicador da tela. Sinais: o nome do encoder de cada saída (o Chromium só informa com uma captura dele
+  ativa) e `app.getGPUFeatureStatus().video_encode`. Teste com a placa desligada no Chromium:
+  `TELA_TEST_ARGS=--disable-accelerated-video-encode node scripts/lifecycle-test.js`.
+- **Replay sem a placa** (v1.0.67): o clipe pedia a placa (`prefer-hardware`), que o Chromium sem ela recusa como
+  obrigatória, e o replay ficava vazio; agora cai para `no-preference` (processador). E se o codificador parar no meio
+  (placa travou), o replay começa outro sozinho; a gravação longa termina, como antes (não dá para trocar de
+  codificador no meio do arquivo).
 - Atalhos globais: **Ctrl+Shift+S** transmitir/parar · **M** mutar todos · **O** destravar sobreposição · **C** salvar clipe.
 - **Enviar diagnóstico**: gera um .txt na Área de Trabalho com tudo o que ajuda a achar problemas.
 - **Estatísticas** (S): FPS, bitrate, ping, buffer, travadas, perdas, rota, encoder.

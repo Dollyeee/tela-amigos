@@ -293,6 +293,20 @@ async function pageA() {
     check('Ajustes > Aplicar: fica guardado para a próxima', state.settings.res === '1080' && state.settings.fps === 60 && $('#opt-res').value === '1080');
     $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option>'; $('#opt-audio').value = 'none';
 
+    // ---------------------------------------------------------------- 4b) quem codifica a transmissão adaptativa, medido de verdade
+    // Normal: a placa de vídeo, sem aviso. Com TELA_TEST_ARGS=--disable-accelerated-video-encode (o Chromium sem a
+    // placa, como no PC do Toddy no diagnóstico de 2026-11-12): percebe, avisa e conta para o amigo (conferido no B).
+    {
+      const sw = !!window.SW_MODE;
+      // (na Nativa adaptativa o Chromium não diz o nome do encoder: vale o estado da placa no Chromium; espera 3 medidas)
+      await until(() => state.share && state.share.encSeen && state.share.gpuEnc && (!sw || state.share.soft), 20000, 'medida de quem codifica').catch(() => {});
+      if (!sw) await sleep(5000);
+      const sh = state.share;
+      const got = sh ? `${sh.soft || 'sem aviso'} · placa no Chromium: ${sh.gpuEnc} · ${sh.encSeen || 'sem medida'}` : 'sem transmissão';
+      if (sw) check('placa sem codificar (Chromium sem a placa): percebe e avisa', !!sh && sh.soft === 'placa' && toasts().some((x) => /placa de vídeo parou de codificar/.test(x)), got);
+      else check('quem codifica a transmissão adaptativa: placa ligada no Chromium, sem aviso', !!sh && sh.gpuEnc === 'enabled' && !sh.soft, got);
+    }
+
     // ---------------------------------------------------------------- 5) caneta depois de a tela sair da página
     if (meTile && meTile.el.isConnected) {
       // a janela escondida do teste não desenha quadros: o desenho do app passa a andar por temporizador
@@ -484,6 +498,39 @@ async function pageA() {
       check('versão leve: o bitrate acompanha a pior rede dela e volta ao teto (sem ficar mexendo à toa)', a === 850 && sentKb.join(',') === '850,1800' && sh.lightKbps === 1800, sentKb.join(','));
     }
 
+    // ---------------------------------------------------------------- 7d) a placa de vídeo está codificando?
+    // (nomes e tamanhos medidos neste Electron; o caso real é o do diagnóstico de 2026-11-12)
+    {
+      const nv = 'MediaFoundationVideoEncodeAccelerator (NVIDIA H.264 Encoder MFT)';
+      const S = (w, h, enc, hw, mime = 'video/H264') => ({ w, h, enc, hw, mime });
+      check('placa codificando: tudo na placa, nada a avisar', softEncode([S(1280, 720, nv, true), S(1920, 1080, nv, true)]) === null);
+      check('placa codificando: OpenH264 pequeno (320x180) é normal', softEncode([S(320, 180, 'OpenH264', false), S(1280, 720, nv, true)]) === null);
+      check('placa codificando: tudo grande no OpenH264 (placa travada) = "placa"', softEncode([S(1280, 720, 'OpenH264', false), S(1280, 720, 'OpenH264', false)]) === 'placa');
+      check('placa codificando: sem o powerEfficientEncoder, pelo nome', softEncode([S(1280, 720, 'OpenH264')]) === 'placa' && softEncode([S(1280, 720, nv)]) === null);
+      check('placa codificando: parte na placa e parte no processador = "limite"', softEncode([S(1280, 720, nv, true), S(1280, 720, 'OpenH264', false)]) === 'limite');
+      check('placa codificando: AV1 no libaom = "codec"', softEncode([S(1280, 720, 'libaom', false, 'video/AV1')]) === 'codec');
+      check('placa codificando: servidor com camadas (adaptador com placa e OpenH264) não avisa',
+        softEncode([S(1280, 720, `SimulcastEncoderAdapter (OpenH264, ${nv})`, true), S(320, 180, `SimulcastEncoderAdapter (OpenH264, ${nv})`, true)]) === null);
+      // o aviso só depois de 3 medidas seguidas, uma vez; e some quando a placa volta
+      const sh = {}, bad = [S(1280, 720, 'OpenH264', false)];
+      for (const k of Object.keys(softWarned)) delete softWarned[k]; // (um aviso de verdade antes, no teste, não conta)
+      const realToast = toast;
+      let toasts = 0;
+      toast = () => { toasts++; };
+      try {
+        softCheck(sh, bad); softCheck(sh, bad);
+        const before = sh.soft;
+        softCheck(sh, bad);
+        const at3 = sh.soft;
+        softCheck(sh, bad);
+        softCheck(sh, [S(1280, 720, nv, true)]);
+        check('placa codificando: com a codificação pela placa desligada no Chromium, avisa mesmo sem o nome do encoder',
+        softEncode([S(1280, 720, '', undefined)], true) === 'placa' && softEncode([S(1280, 720, '', undefined)], false) === null && softEncode([S(320, 180, '', undefined)], true) === null);
+      check('placa codificando: avisa na 3ª medida seguida, uma vez só, e limpa quando a placa volta',
+          !before && at3 === 'placa' && toasts === 1 && sh.soft === null && /placa/.test(sh.encSeen || ''), `${before} ${at3} toasts=${toasts} ${sh.encSeen}`);
+      } finally { toast = realToast; }
+    }
+
     // ---------------------------------------------------------------- 8) clipe segue a tela quando a trilha troca
     {
       const v1 = fakeVideo('#135'), a1 = fakeAudio(); fakes.push(v1, a1);
@@ -503,6 +550,27 @@ async function pageA() {
       check('replay continua depois de a trilha da tela trocar', !!after && after.seconds > (before ? before.seconds : 0) + 1.5, after ? after.seconds.toFixed(1) + ' s' : 'erro: ' + err);
       check('clipe montado com imagem e som (horários emendados sem erro)', !!after && /avc1/.test(txt) && /Opus/.test(txt), after ? Math.round(after.buffer.byteLength / 1000) + ' kB' : err);
       window.Clips.stop('teste');
+    }
+    // o codificador do replay para no meio (a placa travou): o replay começa outro e volta a guardar
+    {
+      const Real = window.VideoEncoder;
+      let made = 0, killed = false;
+      window.VideoEncoder = class extends Real {
+        constructor(init) { super(init); this.n = 0; this.first = made++ === 0; }
+        encode(f, o) { if (this.first && ++this.n === 30) { killed = true; this.close(); return; } return super.encode(f, o); }
+      };
+      window.VideoEncoder.isConfigSupported = (c) => Real.isConfigSupported(c);
+      const v = fakeVideo('#246'), a = fakeAudio(); fakes.push(v, a);
+      const cur = new MediaStream([v.track, a.track]);
+      try {
+        window.Clips.toggle('teste2', cur, 'teste2', { source: () => cur });
+        await until(() => killed, 8000, 'o codificador parar').catch(() => {});
+        await sleep(4500);
+        let clip = null, err = '';
+        try { clip = window.Clips.build('teste2'); } catch (e) { err = e.message; }
+        check('replay: o codificador parou no meio e o replay voltou sozinho', killed && made >= 2 && !!clip && clip.seconds > 1.2,
+          `parou=${killed} codificadores=${made} ${clip ? clip.seconds.toFixed(1) + ' s' : 'vazio ' + err}`);
+      } finally { window.Clips.stop('teste2'); window.VideoEncoder = Real; v.stop(); a.stop(); }
     }
 
     // ---------------------------------------------------------------- 9) câmera: dois cliques
@@ -563,11 +631,16 @@ async function pageB() {
       autoJoinOnStart();
     }
     let joined = true;
+    // o motivo que o A manda quando a placa dele não codifica (só no modo TELA_TEST_ARGS=--disable-accelerated-video-encode)
+    let sawSw = null;
+    setInterval(() => { for (const p of state.peers.values()) if (p.health && p.health.sw) sawSw = p.health.sw; }, 500);
     await until(() => !$('#room').classList.contains('hidden'), 8000, 'entrar sozinho').catch(() => { joined = false; });
     check('"entrar sozinho na última sala" entra sem clique' + (already ? ' (já ao abrir o app)' : ''), joined);
     localStorage.setItem('autoJoin', '0');
     if (!joined) { $('#name').value = 'VIDA B'; checkName(); joinRoom('127.0.0.1'); await until(() => !$('#room').classList.contains('hidden'), 15000, 'entrar na sala'); }
     await until(() => /fim-a/.test($('#chat-log').textContent), 170000, 'A terminar');
+    if (window.SW_MODE) check('placa sem codificar: o amigo recebe o motivo (para o indicador dele)', sawSw === 'placa', String(sawSw));
+    else check('placa codificando: o amigo não recebe aviso de processador', sawSw === null, String(sawSw));
     log('B OK');
   } catch (e) { log('FALHOU B: ' + ((e && e.stack) || e)); }
   await sleep(300);
@@ -579,10 +652,13 @@ async function pageB() {
 function run(name, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tela-vida-'));
   const file = path.join(dir, name + '.js');
-  fs.writeFileSync(file, `(${pageCommon})();\n(${fn})();\n`);
+  // TELA_TEST_ARGS: chaves a mais para o Chromium das cópias (ex.: --disable-accelerated-video-encode)
+  const extra = (process.env.TELA_TEST_ARGS || '').split(/\s+/).filter(Boolean);
+  const swMode = extra.includes('--disable-accelerated-video-encode');
+  fs.writeFileSync(file, `${swMode ? 'window.SW_MODE = true;\n' : ''}(${pageCommon})();\n(${fn})();\n`);
   const env = { ...process.env, TELA_PROFILE: 'smoke-' + name, TELA_PORT: String(PORT), TELA_TEST_SCRIPT: file, TELA_TEST_HIDDEN: '1', ELECTRON_ENABLE_LOGGING: '' };
   delete env.ELECTRON_RUN_AS_NODE;
-  const child = spawn(electronPath, ['.'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(electronPath, ['.', ...extra], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];
   let rest = '';
   child.stderr.on('data', () => {});
