@@ -4,12 +4,22 @@
 // A CADA VERSÃO PUBLICADA: pôr uma entrada nova no topo, com o número que a versão vai ter (o `npm run release`
 // confere e não publica sem ela). Escrever para os amigos, em linguagem simples: o que mudou para quem usa,
 // não o que mudou no código.
+// TODA entrada termina com o item 'toddy bucha' (pedido do dono do app em 2026-11-13; o news-test, que roda no
+// release, não deixa publicar sem).
 //   v      número da versão (igual ao do package.json depois do release)
 //   title  a novidade principal, numa frase curta
 //   text   (opcional) um parágrafo de apresentação
 //   themes (opcional) true mostra a galeria de temas, com clique para trocar
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
+  {
+    v: '1.0.68',
+    title: 'toddy bucha',
+    text: 'A partir de agora, toda novidade termina assim.',
+    items: [
+      'toddy bucha',
+    ],
+  },
   {
     v: '1.0.67',
     title: 'Aviso quando a placa de vídeo para de codificar',
@@ -18,6 +28,7 @@ const CHANGELOG = [
       'Quem assiste vê o motivo certo no indicador da sua tela ("a placa de vídeo de Fulano parou de codificar"), em vez de só "PC no limite".',
       'Também avisa quando a placa não dá conta de uma cópia da tela para cada amigo, ou quando o codec escolhido (AV1, VP9 ou VP8) sai pelo processador.',
       '**Conserto do replay:** com a placa de vídeo fora do ar, o "Salvar clipe" não guardava nada, e se ela travava no meio o replay parava sem avisar. Agora ele grava pelo processador quando precisa e volta sozinho se a placa travar.',
+      'toddy bucha',
     ],
   },
   {
@@ -28,6 +39,7 @@ const CHANGELOG = [
     items: [
       'A janelinha da sobreposição, a de escolher a área da tela e o gráfico do histórico também ficam escuros nela.',
       'Para trocar depois: **Opções → Aparência → Tema**, ou "Tema" no rodapé da tela de entrada.',
+      'toddy bucha',
     ],
   },
   {
@@ -36,6 +48,7 @@ const CHANGELOG = [
     items: [
       'Na 1.0.64, com "Servidor de vídeo quando precisar" ligado, quem tem a rede fechada para conexões diretas transmitia e parte da sala não via nada (a conexão ficava "conectando" para sempre). Agora, se alguém que assiste está há mais de 8 segundos sem conexão direta com você, sua tela vai pelo servidor.',
       'Também vai pelo servidor quando o seu PC não dá conta de codificar a tela uma vez para cada amigo (jogo pesado na captura adaptativa): pelo servidor ela é codificada uma vez só.',
+      'toddy bucha',
     ],
   },
   {
@@ -46,6 +59,7 @@ const CHANGELOG = [
       '**Versão leve na "Nativa direta":** quem vê a sua tela em miniatura, ou está com a rede fraca, recebe uma versão mais leve (960x540, 30 fps). Os outros continuam no máximo: um amigo com rede ruim não puxa mais a qualidade de todo mundo para baixo.',
       '**Servidor de vídeo só quando precisa:** com a opção ligada (sala online), a tela vai direto para os amigos e só passa pelo servidor quando o seu upload não dá conta de mandar para todos, ou quando a conexão direta com alguém cai. O limite grátis do mês dura bem mais.',
       '**Tema em tudo:** a janelinha da sobreposição, a de escolher a área da tela e o gráfico do histórico agora seguem o tema escolhido.',
+      'toddy bucha',
     ],
   },
   {
@@ -61,6 +75,7 @@ const CHANGELOG = [
       'Nos outros: o **Neon** pisca o letreiro quando alguém entra, o **Terminal** digita as mensagens, o **Caderno** circula o "ao vivo!", a **Planta** desenha as medidas da tela nova, a **Arena** vira o placar, e a **Galeria** e o **Clássico** fazem tudo de um jeito mais discreto.',
       'Tudo para sozinho quando você está jogando em tela cheia, no modo leve ou com a janela minimizada. Quem desligou as animações do Windows não vê nada se mexendo.',
       '**Consertos:** no Varanda (dia e noite), transmitindo no modo Grade ou sozinho, o "Parar" caía em cima do "Trocar tela" e a Câmera e as Estatísticas sumiam. No Clássico, a barra de cima ficava espremida, com os botões quebrando em duas linhas; agora, quando falta espaço, os botões de apoio viram só o ícone.',
+      'toddy bucha',
     ],
   },
   {
@@ -72,6 +87,7 @@ const CHANGELOG = [
       'Cada um tem a sua: o Clássico abre num círculo, o Arena passa uma faixa vermelha, a Galeria monta a exposição, o Caderno vira a página, a Planta é desenhada pelo plotter, o Terminal digita a instalação e o Toca-fitas troca a fita.',
       'Leva menos de 2 segundos, e as telas dos amigos continuam passando durante a animação.',
       'Quem desligou as animações do Windows vê a troca na hora, como antes.',
+      'toddy bucha',
     ],
   },
   {
@@ -86,6 +102,7 @@ const CHANGELOG = [
       '**Novo: esta tela de novidades.** Ela aparece uma vez depois de cada atualização, contando o que mudou.',
       '**Fliperama mais legível:** a letra de pixel deixava o "c" igual ao "o" ("Tuca" virava "Tuoa"). Agora botões, rótulos e avisos usam a letra dos títulos, e os nomes saem com o acento certo.',
       'Outros consertos nos temas: botão "Parar" fora do lugar ao trocar do Fliperama para outro tema; tela de entrada do Toca-fitas cortada com a janela pequena.',
+      'toddy bucha',
     ],
   },
 ];

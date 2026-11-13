@@ -36,6 +36,8 @@ LOG.forEach((e, i) => {
     if (typeof s === 'string' && (s.split('**').length - 1) % 2) bad.push(`${where}: negrito aberto e não fechado em "${s.slice(0, 40)}..."`);
   }
   if (i > 0 && cmp(LOG[i - 1].v, e.v) <= 0) bad.push(`${where}: fora de ordem (a mais nova vem primeiro, sem repetir)`);
+  // pedido do dono do app (2026-11-13): toda entrada termina com "toddy bucha"
+  if (!e || !Array.isArray(e.items) || e.items[e.items.length - 1] !== 'toddy bucha') bad.push(`${where}: o último item tem de ser 'toddy bucha'`);
 });
 check('cada entrada tem versão, título e conteúdo, da mais nova para a mais antiga', !bad.length, bad.join(' | '));
 // entre uma publicação e outra o topo é a versão que vem (ou a atual, logo depois de publicar): nunca uma mais antiga
