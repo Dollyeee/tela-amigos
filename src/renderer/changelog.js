@@ -11,6 +11,16 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.66',
+    title: 'Tema novo: Galeria (noite)',
+    text: 'A Galeria ganhou uma versão escura, como a Varanda tem a dela: a mesma exposição, com a parede cor de carvão, molduras claras e a bolinha vermelha de sempre. Clique nela aqui embaixo para experimentar.',
+    themes: true,
+    items: [
+      'A janelinha da sobreposição, a de escolher a área da tela e o gráfico do histórico também ficam escuros nela.',
+      'Para trocar depois: **Opções → Aparência → Tema**, ou "Tema" no rodapé da tela de entrada.',
+    ],
+  },
+  {
     v: '1.0.65',
     title: 'Conserto: servidor de vídeo quando a conexão direta não fecha',
     items: [

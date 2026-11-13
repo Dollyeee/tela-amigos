@@ -25,6 +25,11 @@
       '.settings .field:has(#opt-audio) > span': 'Som',
     },
   };
+  // a Galeria e a versão dela com a parede escura (galeria-noite) arrumam as peças do mesmo jeito
+  const GALERIA = {
+    tile: { badgeInBar: true, frame: [26, 70] },
+    text: { '#my-slot span': 'a compartilhar' },
+  };
   const THEMES = [
     { id: 'classico', name: 'Clássico', bar: ['#0e0f13', '#c9cdd8'] },
     {
@@ -41,11 +46,8 @@
       tile: { frame: [10, 10] },
       text: { '.lobby-head p': 'FPS', '#my-slot span': 'acende aqui quando você compartilhar' },
     },
-    {
-      id: 'galeria', name: 'Galeria', bar: ['#ffffff', '#121212'],
-      tile: { badgeInBar: true, frame: [26, 70] },
-      text: { '#my-slot span': 'a compartilhar' },
-    },
+    { id: 'galeria', name: 'Galeria', bar: ['#ffffff', '#121212'], ...GALERIA },
+    { id: 'galeria-noite', name: 'Galeria (noite)', bar: ['#131312', '#ecebe6'], ...GALERIA },
     {
       id: 'caderno', name: 'Caderno', bar: ['#fdfcf6', '#3d3d3d'],
       place: { '.top-actions': '#stage' },
@@ -308,7 +310,7 @@
   // o que aparece na plaquinha de "instalando"; o tema mostra só o que quiser (o estilo fica no tema-instala.css)
   const KICKER = {
     classico: 'Instalando', arena: 'Instalando', varanda: 'Montando a', 'varanda-noite': 'Montando a', neon: 'Ligando',
-    galeria: 'Nova exposição', caderno: 'virando a página…', planta: 'Folha', terminal: '$ tela-amigos --tema terminal',
+    galeria: 'Nova exposição', 'galeria-noite': 'Nova exposição', caderno: 'virando a página…', planta: 'Folha', terminal: '$ tela-amigos --tema terminal',
     sessao: 'A sessão vai começar', fliperama: 'Loading', tocafitas: 'lado A',
   };
   const LOG = ['baixando as cores', 'trocando as letras', 'arrumando a sala', 'pronto'];

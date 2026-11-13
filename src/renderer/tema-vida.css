@@ -111,15 +111,15 @@ html.vivo[data-theme="neon"] .tile[data-ev="aovivo"] { animation: neon-acende 1s
 html.vivo[data-theme="neon"] #people li[data-ev="aovivo"] .tag.live { animation: neon-acende .9s steps(1) var(--ev-t, 0s) both; }
 html.vivo[data-theme="neon"] .chat-msg[data-ev="novo"] { animation: neon-acende .6s steps(1) both; }
 
-/* ---------- Galeria: tudo devagar, como numa exposição ---------- */
-html.vivo[data-theme="galeria"] #people li[data-ev="entrou"] { animation: ga-surge 1.1s cubic-bezier(.2, .7, .2, 1) var(--ev-t, 0s) both; }
+/* ---------- Galeria (dia e noite): tudo devagar, como numa exposição ---------- */
+html.vivo:is([data-theme="galeria"], [data-theme="galeria-noite"]) #people li[data-ev="entrou"] { animation: ga-surge 1.1s cubic-bezier(.2, .7, .2, 1) var(--ev-t, 0s) both; }
 @keyframes ga-surge { from { opacity: 0; transform: translateY(5px); } }
-html.vivo[data-theme="galeria"] .tile[data-ev="aovivo"] { animation: ga-quadro 1.2s cubic-bezier(.2, .7, .2, 1) var(--ev-t, 0s) both; }
+html.vivo:is([data-theme="galeria"], [data-theme="galeria-noite"]) .tile[data-ev="aovivo"] { animation: ga-quadro 1.2s cubic-bezier(.2, .7, .2, 1) var(--ev-t, 0s) both; }
 @keyframes ga-quadro { from { opacity: 0; transform: scale(.985); } }
 /* a bolinha vermelha (de "vendido") cola na etiqueta da tela que entrou no ar */
-html.vivo[data-theme="galeria"] .tile[data-ev="aovivo"] .tile-name .live-dot { animation: ga-selo .7s cubic-bezier(.3, 1.6, .5, 1) calc(var(--ev-t, 0s) + .5s) both; }
+html.vivo:is([data-theme="galeria"], [data-theme="galeria-noite"]) .tile[data-ev="aovivo"] .tile-name .live-dot { animation: ga-selo .7s cubic-bezier(.3, 1.6, .5, 1) calc(var(--ev-t, 0s) + .5s) both; }
 @keyframes ga-selo { 0% { transform: scale(0); } 60% { transform: scale(1.4); } 100% { transform: none; } }
-html.vivo[data-theme="galeria"] .chat-msg[data-ev="novo"] { animation: ga-surge .6s cubic-bezier(.2, .7, .2, 1) both; }
+html.vivo:is([data-theme="galeria"], [data-theme="galeria-noite"]) .chat-msg[data-ev="novo"] { animation: ga-surge .6s cubic-bezier(.2, .7, .2, 1) both; }
 
 /* ---------- Caderno: escrito à mão ---------- */
 /* o nome de quem chega é escrito; o "ao vivo!" ganha o círculo desenhado; a mensagem é um bilhete colado; a foto da

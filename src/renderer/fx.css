@@ -68,17 +68,18 @@ html[data-theme="neon"] :is(.hand span, #tag) { padding: 0 2px; border-radius: 0
 html[data-theme="neon"] #tag { font-size: 18px; }
 html[data-theme="neon"] :is(.press-ripple, .ripple) { border-width: 2px; border-color: color-mix(in srgb, var(--c) 45%, #fff); box-shadow: 0 0 8px var(--c), inset 0 0 6px var(--c); }
 
-/* ---------- Galeria: etiquetas brancas de filete preto, nome em itálico de catálogo ---------- */
-html[data-theme="galeria"] .fx-emo { filter: drop-shadow(0 6px 5px rgba(0, 0, 0, .28)); }
-html[data-theme="galeria"] .react-bar button .fx-emo { filter: none; }
-html[data-theme="galeria"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
-html[data-theme="galeria"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 1px 8px 2px; border-radius: 0; background: #fff; color: #121212; box-shadow: 0 0 0 1px #121212;
+/* ---------- Galeria (e noite): etiquetas brancas de filete preto, nome em itálico de catálogo. Ficam por cima da
+   tela compartilhada, então são as mesmas com a parede escura ---------- */
+html[data-theme^="galeria"] .fx-emo { filter: drop-shadow(0 6px 5px rgba(0, 0, 0, .28)); }
+html[data-theme^="galeria"] .react-bar button .fx-emo { filter: none; }
+html[data-theme^="galeria"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme^="galeria"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 5px auto 0; padding: 1px 8px 2px; border-radius: 0; background: #fff; color: #121212; box-shadow: 0 0 0 1px #121212;
   font: italic 400 14px/1.2 "Instrument Serif", Georgia, serif; }
-html[data-theme="galeria"] .emote small { font-size: 18px; }
-html[data-theme="galeria"] .hand { filter: drop-shadow(0 4px 4px rgba(0, 0, 0, .3)); }
-html[data-theme="galeria"] :is(.hand span, #tag) { padding: 0 8px 2px; border-radius: 0; background: #fff; color: #121212; box-shadow: 0 0 0 1px #121212; font: italic 400 15px/1.3 "Instrument Serif", Georgia, serif; }
-html[data-theme="galeria"] #tag { font-size: 19px; }
-html[data-theme="galeria"] :is(.press-ripple, .ripple) { border-width: 1.5px; border-color: #121212; box-shadow: 0 0 0 1.5px #fff, inset 0 0 0 1.5px #fff; }
+html[data-theme^="galeria"] .emote small { font-size: 18px; }
+html[data-theme^="galeria"] .hand { filter: drop-shadow(0 4px 4px rgba(0, 0, 0, .3)); }
+html[data-theme^="galeria"] :is(.hand span, #tag) { padding: 0 8px 2px; border-radius: 0; background: #fff; color: #121212; box-shadow: 0 0 0 1px #121212; font: italic 400 15px/1.3 "Instrument Serif", Georgia, serif; }
+html[data-theme^="galeria"] #tag { font-size: 19px; }
+html[data-theme^="galeria"] :is(.press-ripple, .ripple) { border-width: 1.5px; border-color: #121212; box-shadow: 0 0 0 1.5px #fff, inset 0 0 0 1.5px #fff; }
 
 /* ---------- Caderno: bilhetes amarelos, nome a caneta, toque em volta de caneta vermelha ---------- */
 html[data-theme="caderno"] .fx-emo { filter: drop-shadow(2px 3px 0 rgba(0, 0, 0, .16)); }

@@ -56,7 +56,7 @@ html[data-theme="neon"] {
   --hist-axis: #9a94b8; --hist-text: #f4f0ff; --hist-ring: #13111f; --hist-font: 600 11px "Outfit", "Segoe UI", sans-serif; --hist-glow: 8;
 }
 
-/* ---------- Galeria: branco, letras finas em caixa alta, a bolinha vermelha ---------- */
+/* ---------- Galeria (dia e noite): branco ou carvão, letras finas em caixa alta, a bolinha vermelha ---------- */
 html[data-theme="galeria"] {
   --j-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif; --j-name: italic 400 18px "Instrument Serif", Georgia, serif; --j-case: uppercase; --j-ls: .16em;
   --j-bar: rgba(255, 255, 255, .92); --j-fg: #121212;
@@ -66,6 +66,16 @@ html[data-theme="galeria"] {
   --j-primary: #121212; --j-sel: #d42a20; --j-dim: rgba(255, 255, 255, .45);
   --hist-line: #121212; --hist-good: #2f8f5b; --hist-warn: #b7791f; --hist-bad: #d42a20; --hist-grid: #eeede8;
   --hist-axis: #8b8a84; --hist-text: #121212; --hist-guide: rgba(18, 18, 18, .35); --hist-ring: #fff; --hist-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif;
+}
+html[data-theme="galeria-noite"] {
+  --j-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif; --j-name: italic 400 18px "Instrument Serif", Georgia, serif; --j-case: uppercase; --j-ls: .16em;
+  --j-bar: rgba(19, 19, 18, .92); --j-fg: #ecebe6;
+  --j-btn: transparent; --j-btn-fg: #ecebe6; --j-btn-hover: #ecebe6; --j-btn-hover-fg: #131312; --j-radius: 0;
+  --j-cam: #1b1b19; --j-cam-radius: 0;
+  --j-panel: #1b1b19; --j-panel-fg: #ecebe6; --j-panel-radius: 0; --j-panel-shadow: 0 0 0 1px #2e2e2b, 0 10px 40px rgba(0, 0, 0, .55);
+  --j-primary: #ecebe6; --j-primary-fg: #131312; --j-sel: #f04a3c; --j-dim: rgba(12, 12, 11, .5);
+  --hist-line: #ecebe6; --hist-good: #4cbf80; --hist-warn: #e0a347; --hist-bad: #f04a3c; --hist-grid: #252523;
+  --hist-axis: #8f8d86; --hist-text: #ecebe6; --hist-guide: rgba(236, 235, 230, .35); --hist-ring: #1b1b19; --hist-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif;
 }
 
 /* ---------- Caderno: folha pautada, caneta azul, marca-texto ---------- */

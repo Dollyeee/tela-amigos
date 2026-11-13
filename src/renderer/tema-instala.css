@@ -162,28 +162,35 @@ html.vt-run[data-vt="neon"] .vt-name { animation: vt-ne-buzz 900ms 260ms steps(1
 @keyframes vt-ne-buzz { 0%, 100% { opacity: 1; } 30% { opacity: .35; } 34% { opacity: 1; } 61% { opacity: .55; } 64% { opacity: 1; } }
 html.vt-run[data-vt="neon"] .vt-bar > i { animation: vt-fill 850ms 330ms cubic-bezier(.45, 0, .3, 1) both; }
 
-/* ---------- Galeria: a parede fica branca, a placa da exposição aparece e a parede abre para o tema novo ---------- */
-html[data-vt="galeria"] { --vt-t: 1650ms; }
-html[data-vt="galeria"]::view-transition-old(root) { animation: vt-hide 1ms 330ms both; }
-html[data-vt="galeria"]::view-transition-new(root) { animation: vt-show 1ms 330ms both; }
-html[data-vt="galeria"] .vt-fx > i:nth-child(1) { display: block; inset: 0; background: #fbfaf7;
+/* ---------- Galeria (e noite): a parede fica branca (ou escura), a placa da exposição aparece e a parede abre para o tema novo ---------- */
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) { --vt-t: 1650ms; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"])::view-transition-old(root) { animation: vt-hide 1ms 330ms both; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"])::view-transition-new(root) { animation: vt-show 1ms 330ms both; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-fx > i:nth-child(1) { display: block; inset: 0; background: #fbfaf7;
   -webkit-mask-image: linear-gradient(90deg, transparent var(--vt-a), #000 calc(var(--vt-a) + 220px)); mask-image: linear-gradient(90deg, transparent var(--vt-a), #000 calc(var(--vt-a) + 220px)); }
-html.vt-run[data-vt="galeria"] .vt-fx > i:nth-child(1) { animation: vt-ga-wall 1650ms both; }
+html.vt-run:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-fx > i:nth-child(1) { animation: vt-ga-wall 1650ms both; }
 @keyframes vt-ga-wall {
   0% { opacity: 0; --vt-a: -230px; animation-timing-function: cubic-bezier(.4, 0, .6, 1); }
   20% { opacity: 1; --vt-a: -230px; }
   58% { opacity: 1; --vt-a: -230px; animation-timing-function: cubic-bezier(.6, 0, .25, 1); }
   100% { opacity: 1; --vt-a: 100vw; }
 }
-html[data-vt="galeria"] .vt-hud { left: 50%; top: 50%; width: 560px; margin: -84px 0 0 -280px; text-align: center; color: #121212; }
-html[data-vt="galeria"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
-html[data-vt="galeria"] .vt-k { color: #8b8a84; font: 600 11px/1 "Instrument Sans", "Segoe UI", sans-serif; letter-spacing: .34em; text-transform: uppercase; }
-html[data-vt="galeria"] .vt-name { margin: 14px 0 18px; font: italic 400 84px/1 "Instrument Serif", Georgia, serif; letter-spacing: -.01em; }
-html[data-vt="galeria"] .vt-bar { width: 280px; height: 1px; margin: 0 auto; background: #dddcd6; }
-html[data-vt="galeria"] .vt-bar > i { background: #121212; }
-html.vt-run[data-vt="galeria"] .vt-hud { animation: vt-ga-hud 1650ms both; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-hud { left: 50%; top: 50%; width: 560px; margin: -84px 0 0 -280px; text-align: center; color: #121212; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-hud > :is(.vt-k, .vt-name, .vt-bar) { display: block; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-k { color: #8b8a84; font: 600 11px/1 "Instrument Sans", "Segoe UI", sans-serif; letter-spacing: .34em; text-transform: uppercase; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-name { margin: 14px 0 18px; font: italic 400 84px/1 "Instrument Serif", Georgia, serif; letter-spacing: -.01em; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-bar { width: 280px; height: 1px; margin: 0 auto; background: #dddcd6; }
+html:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-bar > i { background: #121212; }
+html.vt-run:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-hud { animation: vt-ga-hud 1650ms both; }
 @keyframes vt-ga-hud { 0%, 15% { opacity: 0; transform: translateY(8px); } 28%, 52% { opacity: 1; transform: none; } 64%, 100% { opacity: 0; transform: translateY(-4px); } }
-html.vt-run[data-vt="galeria"] .vt-bar > i { animation: vt-fill 560ms 330ms cubic-bezier(.5, 0, .2, 1) both; }
+html.vt-run:is([data-vt="galeria"], [data-vt="galeria-noite"]) .vt-bar > i { animation: vt-fill 560ms 330ms cubic-bezier(.5, 0, .2, 1) both; }
+/* noite: parede de carvão, letras claras; o nome fica numa linha só ("Galeria (noite)") */
+html[data-vt="galeria-noite"] .vt-fx > i:nth-child(1) { background: #161615; }
+html[data-vt="galeria-noite"] .vt-hud { color: #ecebe6; }
+html[data-vt="galeria-noite"] .vt-k { color: #8f8d86; }
+html[data-vt="galeria-noite"] .vt-name { white-space: nowrap; }
+html[data-vt="galeria-noite"] .vt-bar { background: #2e2e2b; }
+html[data-vt="galeria-noite"] .vt-bar > i { background: #ecebe6; }
 
 /* ---------- Caderno: a folha de antes vira para a esquerda e mostra a página nova ---------- */
 html[data-vt="caderno"] { --vt-t: 1500ms; }
