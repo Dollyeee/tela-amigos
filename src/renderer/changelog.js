@@ -11,6 +11,14 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.65',
+    title: 'Conserto: servidor de vídeo quando a conexão direta não fecha',
+    items: [
+      'Na 1.0.64, com "Servidor de vídeo quando precisar" ligado, quem tem a rede fechada para conexões diretas transmitia e parte da sala não via nada (a conexão ficava "conectando" para sempre). Agora, se alguém que assiste está há mais de 8 segundos sem conexão direta com você, sua tela vai pelo servidor.',
+      'Também vai pelo servidor quando o seu PC não dá conta de codificar a tela uma vez para cada amigo (jogo pesado na captura adaptativa): pelo servidor ela é codificada uma vez só.',
+    ],
+  },
+  {
     v: '1.0.64',
     title: 'Transmissão mais esperta e barra das telas mais simples',
     items: [

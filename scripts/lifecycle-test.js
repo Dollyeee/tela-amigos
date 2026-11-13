@@ -406,11 +406,19 @@ async function pageA() {
         sfuDecide(b, two, true, t0); sfuDecide(b, two, false, t0 + 2000);
         for (let i = 2; i < 6; i++) d = sfuDecide(b, two, true, t0 + i * 2000);
         check('servidor quando precisar: uma medida boa no meio recomeça a contagem', d === null && !b.sfuAuto);
-        d = sfuDecide({}, [v('A', 'connected'), v('Duda', 'failed')], false, t0);
-        check('servidor quando precisar: a conexão direta com quem assiste falhou: servidor na hora', !!d && d.use && d.lost === 'Duda');
-        const e = {}, disc = [v('A', 'connected'), v('Léo', 'disconnected')];
-        const d1 = sfuDecide(e, disc, false, t0), d2 = sfuDecide(e, disc, false, t0 + 9000);
-        check('servidor quando precisar: conexão caída (disconnected) só conta depois de 8 s', d1 === null && !!d2 && d2.use && d2.lost === 'Léo');
+        for (const st of ['failed', 'disconnected', 'connecting', 'new']) {
+          const e = {}, list = [v('A', 'connected'), v('Léo', st)];
+          const d1 = sfuDecide(e, list, false, t0), d2 = sfuDecide(e, list, false, t0 + 9000);
+          check(`servidor quando precisar: quem assiste há mais de 8 s sem conexão direta (${st}) manda para o servidor`, d1 === null && !!d2 && d2.use && d2.lost === 'Léo');
+        }
+        const reco = {}, lista = [v('A', 'connected'), v('Léo', 'connecting')];
+        sfuDecide(reco, lista, false, t0);
+        lista[1].pc.connectionState = 'connected';
+        check('servidor quando precisar: a conexão fechou antes dos 8 s, nada muda', sfuDecide(reco, lista, false, t0 + 9000) === null && !reco.sfuAuto);
+        const cpuS = {};
+        for (let i = 0; i < 4; i++) sfuDecide(cpuS, two, 'pc', t0 + i * 2000);
+        d = sfuDecide(cpuS, two, 'pc', t0 + 8000);
+        check('servidor quando precisar: PC sem dar conta de uma cópia para cada amigo (10 s) manda para o servidor', !!d && d.use && d.pc === true, JSON.stringify(d));
         const one = [v('A', 'connected')];
         const f = { sfuAuto: { at: t0, why: 'x' } };
         const f1 = sfuDecide(f, one, false, t0), f2 = sfuDecide(f, one, false, t0 + 20000), f3 = sfuDecide(f, one, false, t0 + 31000);
@@ -419,6 +427,10 @@ async function pageA() {
         sfuDecide(g, one, false, t0);
         const g2 = sfuDecide(g, two, false, t0 + 31000);
         check('servidor quando precisar: com dois ou mais assistindo, fica no servidor', g2 === null && !!g.sfuAuto);
+        const h = { sfuAuto: { at: t0, why: 'x' } }, semDireta = [v('Nuke', 'connecting')];
+        sfuDecide(h, semDireta, false, t0);
+        const h2 = sfuDecide(h, semDireta, false, t0 + 31000);
+        check('servidor quando precisar: o único que assiste está sem conexão direta: fica no servidor', h2 === null && !!h.sfuAuto);
         // a medida do upload na nativa direta: bitrate abaixo do que o servidor daria E dois caminhos reclamando
         const k0 = state.nativeKbps;
         const tight = [{ net: { st: { level: 'cong' } } }, { net: { st: { level: 'soft' } } }];

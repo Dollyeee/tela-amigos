@@ -1309,12 +1309,16 @@ async function sfuSyncInner() {
 }
 
 // Vigia do "só quando precisa" (a cada 2 s, transmitindo, com a opção ligada na sala online):
-//  - alguém que assiste ficou sem a conexão direta (falhou, ou caiu há mais de 8 s): vai para o servidor;
+//  - alguém que assiste está há mais de 8 s sem a conexão direta comigo (falhou, caiu, ou nunca fechou: na sala
+//    online, quem tem a rede fechada fica preso em "conectando" com quase todo mundo; o diagnóstico de 2026-11-12
+//    mostrou 4 de 6 amigos sem a tela do Nuke por isso): vai para o servidor;
 //  - o meu upload não dá conta: com 2+ amigos vendo em tamanho cheio, a qualidade por amigo ficou abaixo de 70% do
 //    que o servidor entregaria e a rede reclamou em dois caminhos ao mesmo tempo, por 10 s seguidos (um amigo só
 //    com rede ruim não conta: o servidor não melhora a chegada até ele);
+//  - o meu PC não dá conta (captura adaptativa: o WebRTC codifica uma cópia para CADA amigo): PC no limite (modo
+//    leve) ou o encoder limitado pelo processador em dois amigos, por 10 s. Pelo servidor a tela é codificada uma vez;
 //  - no servidor fica até o fim desta transmissão (trocar de caminho interrompe a imagem de todo mundo); volta para
-//    o direto só se sobrar um amigo (ou nenhum) assistindo por 30 s: aí o servidor não economiza upload nenhum.
+//    o direto só se sobrar um amigo (ou nenhum) assistindo por 30 s, com conexão direta: aí o servidor não economiza nada.
 async function sfuNeedWatch() {
   const sh = state.share;
   if (!sh || !sfuWanted() || sfuPaused()) return;
@@ -1326,32 +1330,38 @@ async function sfuNeedWatch() {
   if (!d) return;
   if (d.use) {
     console.log(`servidor de vídeo: ${d.why}; passando a transmitir pelo servidor`);
-    toast(d.lost ? `A conexão direta com ${d.lost} caiu: sua tela passa a ir pelo servidor de vídeo.`
-      : 'Seu upload não está dando conta de mandar a tela para todos: ela passa a ir uma vez só pelo servidor de vídeo.');
+    toast(d.lost ? `A conexão direta com ${d.lost} não está funcionando: sua tela passa a ir pelo servidor de vídeo.`
+      : d.pc ? 'Seu PC não está dando conta de codificar a tela para cada amigo: ela passa a ir uma vez só pelo servidor de vídeo.'
+        : 'Seu upload não está dando conta de mandar a tela para todos: ela passa a ir uma vez só pelo servidor de vídeo.');
   } else console.log('servidor de vídeo: só um amigo assistindo, voltando a mandar direto');
   sfuSync();
 }
 // a decisão em si, sem rede (os testes chamam direto): marca sh.sfuAuto e devolve { use, why, lost } quando muda,
-// null quando fica como está. viewers: amigos assistindo; short: o upload não deu conta nesta medida
+// null quando fica como está. viewers: amigos assistindo; short: nesta medida não deu conta ('pc' = o PC; outro valor
+// verdadeiro = o upload)
 function sfuDecide(sh, viewers, short, now) {
+  // desde quando cada um está sem a conexão direta comigo (qualquer estado que não seja "connected")
+  for (const p of viewers) p.sfuDiscAt = p.pc.connectionState !== 'connected' ? (p.sfuDiscAt || now) : 0;
+  const lost = viewers.find((p) => p.sfuDiscAt && now - p.sfuDiscAt > 8000);
   if (sh.sfuAuto) {
-    if (viewers.length > 1) { sh.sfuFew = 0; return null; }
+    if (viewers.length > 1 || lost) { sh.sfuFew = 0; return null; }
     sh.sfuFew = sh.sfuFew || now;
     if (now - sh.sfuFew < 30000) return null;
     sh.sfuAuto = null; sh.sfuFew = 0; sh.sfuShortN = 0;
     return { use: false };
   }
-  for (const p of viewers) p.sfuDiscAt = p.pc.connectionState === 'disconnected' ? (p.sfuDiscAt || now) : 0;
-  const lost = viewers.find((p) => p.pc.connectionState === 'failed' || (p.sfuDiscAt && now - p.sfuDiscAt > 8000));
   sh.sfuShortN = short && !lost ? (sh.sfuShortN || 0) + 1 : 0;
   if (!lost && sh.sfuShortN < 5) return null;
-  const why = lost ? `conexão direta com ${lost.name} caiu` : 'upload não dá conta de uma cópia para cada amigo';
+  const pc = !lost && short === 'pc';
+  const why = lost ? `sem conexão direta com ${lost.name}` : pc ? 'o PC não dá conta de codificar uma cópia para cada amigo'
+    : 'upload não dá conta de uma cópia para cada amigo';
   sh.sfuAuto = { at: now, why };
-  return { use: true, why, lost: lost ? lost.name : null };
+  return { use: true, why, lost: lost ? lost.name : null, pc };
 }
 setInterval(() => { sfuNeedWatch().catch((e) => console.warn('servidor de vídeo (vigia)', e)); }, 2000);
 
 // a qualidade que chega aos amigos pela conexão direta ficou abaixo do que o servidor entregaria, por falta de upload
+// (true) ou, na captura adaptativa, porque o PC não dá conta de uma cópia para cada amigo ('pc'); false se está bem
 async function uploadShort(sh, full) {
   const want = Math.min((Number(sh.settings.bitrate) || 20) * 1000, sfuKbps(sh.settings)); // kb/s
   const now = Date.now();
@@ -1361,17 +1371,20 @@ async function uploadShort(sh, full) {
     if (tight >= 2) sh.multiTightAt = now;
     return (state.nativeKbps || 0) < want * 0.7 && now - (sh.multiTightAt || 0) < 15000;
   }
-  // adaptativa: cada amigo tem o seu encoder; conta quem está limitado pela banda abaixo do que o servidor daria
-  let n = 0;
+  // adaptativa: cada amigo tem o seu encoder; conta quem está limitado pela banda abaixo do que o servidor daria, e
+  // quem está limitado pelo processador (com o PC no limite, o modo leve já ligou: vale direto)
+  if (state.lightMode) return 'pc';
+  let n = 0, cpu = 0;
   for (const p of full) {
     try {
       (await p.pc.getStats()).forEach((r) => {
         if (r.type !== 'outbound-rtp' || r.kind !== 'video' || (p.vT && p.vT.mid != null && String(r.mid) !== String(p.vT.mid))) return;
-        if (r.qualityLimitationReason === 'bandwidth' && r.targetBitrate && r.targetBitrate / 1000 < want * 0.7) n++;
+        if (r.qualityLimitationReason === 'cpu') cpu++;
+        else if (r.qualityLimitationReason === 'bandwidth' && r.targetBitrate && r.targetBitrate / 1000 < want * 0.7) n++;
       });
     } catch {}
   }
-  return n >= 2;
+  return cpu >= 2 ? 'pc' : n >= 2;
 }
 
 // lado de quem assiste: puxa do servidor quando o amigo transmite por lá (e eu estou vendo)

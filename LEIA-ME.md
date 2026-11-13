@@ -91,8 +91,11 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Servidor de vídeo quando precisar (beta, sala online)** (só quando precisa desde a v1.0.64): a tela começa indo
   direto para cada amigo e passa para o servidor (você manda uma cópia só e ele repassa para cada um) quando o seu
   upload não dá conta: com dois ou mais amigos vendo em tamanho cheio, a qualidade por amigo fica abaixo do que o
-  servidor entregaria e a rede reclama em dois caminhos ao mesmo tempo, por 10 s. Também passa quando a conexão direta
-  com alguém que assiste cai. No servidor fica até o fim da transmissão (a não ser que sobre um amigo só assistindo).
+  servidor entregaria e a rede reclama em dois caminhos ao mesmo tempo, por 10 s. Também passa quando alguém que
+  assiste está há mais de 8 s sem conexão direta (caiu, ou nunca fechou: na sala online, quem tem a rede fechada fica
+  "conectando" com quase todos; v1.0.65) e, na captura adaptativa, quando o PC não dá conta de codificar uma cópia
+  para cada amigo (modo leve, ou o encoder limitado pelo processador; v1.0.65). No servidor fica até o fim da
+  transmissão (a não ser que sobre um amigo só assistindo, com conexão direta).
   Antes, com a opção ligada, tudo ia sempre pelo servidor e o limite grátis do mês acabava antes do fim do mês.
   Na *Nativa direta* vai a imagem da placa de vídeo (H.264/H.265/AV1, uma qualidade, como o Discord): o bitrate
   segue a sua conexão até o servidor e o amigo mais fraco. Na *Nativa adaptativa* o Chromium manda 3 qualidades
