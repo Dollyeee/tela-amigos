@@ -6126,6 +6126,7 @@ function initRoomUi() {
     if (e.key === 'Escape') {
       if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
       if (window.News.isOpen()) { window.News.close(); return; }
+      if (window.ThemePicker.isOpen()) { window.ThemePicker.close(); return; }
       if (!$('#adjust-panel').classList.contains('hidden')) { $('#adjust-panel').classList.add('hidden'); return; }
       if ($('#room').classList.contains('opts-open')) { $('#room').classList.remove('opts-open'); return; }
       if (!$('#hist-modal').classList.contains('hidden')) { closeHistory(); return; }
@@ -6136,7 +6137,7 @@ function initRoomUi() {
       if ($('#share-modal').classList.contains('hidden') && state.layout === 'focus') { state.layout = 'grid'; render(); return; }
     }
     if (e.target.matches('input, select, textarea') || $('#room').classList.contains('hidden')) return;
-    if (window.News.isOpen()) return; // com as novidades na frente, as teclas da sala (G, F, S, P...) esperam
+    if (window.News.isOpen() || window.ThemePicker.isOpen()) return; // com as novidades (ou os temas) na frente, as teclas da sala (G, F, S, P...) esperam
     if (e.ctrlKey && e.key === '0') { // Ctrl+0: tira o zoom de todas as telas
       for (const t of [meTile, ...[...state.peers.values()].map((p) => p.tile)]) if (t && t.resetZoom) t.resetZoom();
       e.preventDefault();
@@ -6209,6 +6210,7 @@ window.Sdp.av1Ready.then(() => { if (window.Sdp.hasAV1Hw()) for (const p of stat
 initLobby();
 initRoomUi();
 initUpdates();
+window.ThemePicker.init(); // "Escolher tema": a lista de tema abre a galeria
 window.News.init(); // novidades da versão: abre sozinha uma vez depois de cada atualização
 // o tema se mexe no uso (vida.js): para com jogo em tela cheia e no modo leve; o medidor de som lê as telas dos amigos
 window.Vida.init({

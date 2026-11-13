@@ -19,6 +19,10 @@
   <link rel="stylesheet" href="themes/sessao.css">
   <link rel="stylesheet" href="themes/fliperama.css">
   <link rel="stylesheet" href="themes/tocafitas.css">
+  <link rel="stylesheet" href="themes/cyberpunk.css">
+  <link rel="stylesheet" href="themes/gibi.css">
+  <link rel="stylesheet" href="themes/taverna.css">
+  <link rel="stylesheet" href="themes/disquete.css">
   <link rel="stylesheet" href="fx.css">
   <link rel="stylesheet" href="tema-instala.css">
   <link rel="stylesheet" href="tema-vida.css">
@@ -347,6 +351,18 @@
     </div>
   </div>
 
+  <!-- "Escolher tema": a galeria de todos os temas (tema-escolha.js); abre ao clicar na lista de tema -->
+  <div id="theme-modal" class="modal hidden">
+    <div class="modal-card news-card theme-card">
+      <header class="modal-head"><h2>Escolher tema</h2></header>
+      <div id="theme-body" class="nettest-body news-body"></div>
+      <footer class="modal-foot">
+        <span class="muted">Clique para experimentar: muda na hora e só neste PC (cada amigo usa o seu).</span>
+        <button id="theme-ok" class="primary">Pronto</button>
+      </footer>
+    </div>
+  </div>
+
   <div id="toasts" class="toasts"></div>
 
   <!-- troca de tema: o tema novo "se instala" com uma animação no estilo dele (themes.js: pick; tema-instala.css).
@@ -383,6 +399,7 @@
   <script src="sfu.js"></script>
   <script src="netctl.js"></script>
   <script src="changelog.js"></script>
+  <script src="tema-escolha.js"></script>
   <script src="news.js"></script>
   <script src="vida.js"></script>
   <script src="app.js"></script>

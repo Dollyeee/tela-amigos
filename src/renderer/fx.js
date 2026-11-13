@@ -206,7 +206,83 @@
     return svg('tocafitas', disc + body);
   };
 
-  const EMOTES = { arena, varanda, neon, galeria, caderno, planta, terminal, sessao, fliperama, tocafitas };
+  // ---- Cyberpunk: chip de canto cortado, preto, com o desenho em linha volt (verde-limão) e magenta; o coração treme
+  const cyberpunk = (k) => {
+    const vt = '#c8ff1e', mg = '#ff2b6a', cy = '#23e1ff', ink = '#07080e';
+    const line = (d, c = vt, w = 3.6) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="square" stroke-linejoin="miter"/>`;
+    const chip = `<path d="M3 3h45l13 13v45h-45l-13-13z" fill="${ink}" stroke="${vt}" stroke-width="2.4" stroke-linejoin="miter"/>`
+      + `<path d="M8 56h10M46 8h10" stroke="${mg}" stroke-width="2.4"/>`;
+    const small = (b) => `<g transform="translate(32 33) scale(.6) translate(-32 -32)">${b}</g>`;
+    const body = {
+      laugh: line(D.eyeL) + line(D.eyeR) + `<path d="${D.grin}" fill="${vt}"/>`,
+      wow: `<rect x="19" y="23" width="8" height="8" fill="${vt}"/><rect x="37" y="23" width="8" height="8" fill="${vt}"/>` + line(D.oh, vt, 3.2),
+      fire: small(line(D.flame, mg, 5) + `<path d="${D.flameIn}" fill="${vt}"/>`),
+      like: small(line(D.cuff, vt, 5) + line(D.thumb, vt, 5)),
+      skull: small(line(D.skull, vt, 5) + `<path d="${D.sockLq}" fill="${mg}"/><path d="${D.sockRq}" fill="${mg}"/>` + line(D.teeth, vt, 4)),
+      heart: small(`<path d="${D.heart}" fill="none" stroke="${cy}" stroke-width="3" transform="translate(-3 0)"/><path d="${D.heart}" fill="${mg}"/>`),
+    }[k];
+    return svg('cyberpunk', chip + body);
+  };
+
+  // ---- Gibi: estouro de quadrinho. Explosão de contorno preto e, dentro, o desenho a nanquim com cor chapada
+  const gibi = (k) => {
+    const ink = '#141414', red = '#ef3b2c', blue = '#2a62ff', yl = '#ffd23f';
+    let pts = '';
+    for (let i = 0; i < 24; i++) { const r = i % 2 ? 24 : 31, a = (Math.PI * 2 * i) / 24 - Math.PI / 2; pts += `${(32 + r * Math.cos(a)).toFixed(1)},${(32 + r * Math.sin(a)).toFixed(1)} `; }
+    const bg = { laugh: yl, wow: yl, fire: '#fff', like: yl, skull: '#fff', heart: '#fff' }[k];
+    const burst = `<polygon points="${pts.trim()}" fill="${bg}" stroke="${ink}" stroke-width="2.6" stroke-linejoin="round"/>`;
+    const line = (d, w = 3.6, c = ink) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const fill = (d, c) => `<path d="${d}" fill="${c}" stroke="${ink}" stroke-width="3" stroke-linejoin="round"/>`;
+    const small = (b) => `<g transform="translate(32 33) scale(.56) translate(-32 -32)">${b}</g>`;
+    const body = {
+      laugh: small(fill(D.circle, '#fff') + line(D.eyeL, 4) + line(D.eyeR, 4) + fill(D.grin, red)),
+      wow: small(fill(D.circle, '#fff') + `<circle cx="23" cy="26" r="4" fill="${ink}"/><circle cx="41" cy="26" r="4" fill="${ink}"/>` + fill(D.oh, red)),
+      fire: small(fill(D.flame, red) + fill(D.flameIn, yl)),
+      like: small(fill(D.cuff, blue) + fill(D.thumb, '#fff')),
+      skull: small(fill(D.skull, '#fff') + `<path d="${D.sockL}" fill="${ink}"/><path d="${D.sockR}" fill="${ink}"/>` + line(D.teeth, 3.4)),
+      heart: small(fill(D.heart, red) + line(D.shine, 4, '#fff')),
+    }[k];
+    return svg('gibi', burst + body);
+  };
+
+  // ---- Taverna: moedas de ouro. Borda grossa, aro gravado e o desenho cunhado em tinta escura; o coração é de carmim
+  const taverna = (k) => {
+    const ink = '#2b1d12', crim = '#8e1b1b', bone = '#f6e7c1';
+    const line = (d, c = ink, w = 4) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const coin = `<circle cx="32" cy="32" r="30.5" fill="#c9973a" stroke="#6b4f2a" stroke-width="2.4"/><circle cx="32" cy="32" r="25" fill="#e1b04a" stroke="#8a6a1f" stroke-width="1.4"/>`
+      + `<path d="M14 21a21 21 0 0 1 12-9" fill="none" stroke="#fff4d6" stroke-width="2" stroke-linecap="round" opacity=".7"/>`;
+    const small = (b) => `<g transform="translate(32 33) scale(.56) translate(-32 -32)">${b}</g>`;
+    const body = {
+      laugh: small(line(D.eyeL, ink, 5) + line(D.eyeR, ink, 5) + `<path d="${D.grin}" fill="${ink}"/>`),
+      wow: small(`<circle cx="23" cy="27" r="4.6" fill="${ink}"/><circle cx="41" cy="27" r="4.6" fill="${ink}"/>` + line(D.browL, ink, 4) + line(D.browR, ink, 4) + `<path d="${D.oh}" fill="${ink}"/>`),
+      fire: small(`<path d="${D.flame}" fill="${crim}" stroke="${ink}" stroke-width="3" stroke-linejoin="round"/><path d="${D.flameIn}" fill="#f0a030"/>`),
+      like: small(`<path d="${D.cuff}" fill="${ink}"/><path d="${D.thumb}" fill="${bone}" stroke="${ink}" stroke-width="3.4" stroke-linejoin="round"/>`),
+      skull: small(`<path d="${D.skull}" fill="${bone}" stroke="${ink}" stroke-width="3.4" stroke-linejoin="round"/><path d="${D.sockL}" fill="${ink}"/><path d="${D.sockR}" fill="${ink}"/>` + line(D.teeth, ink, 3.4)),
+      heart: small(`<path d="${D.heart}" fill="${crim}" stroke="${ink}" stroke-width="3" stroke-linejoin="round"/>` + line(D.shine, '#ffd0c0', 4)),
+    }[k];
+    return svg('taverna', coin + body);
+  };
+
+  // ---- Disquete: ícone de computador antigo. Quadrado cinza em relevo e o desenho com contorno preto e cores puras
+  const disquete = (k) => {
+    const ink = '#000', face = '#ffff00';
+    const box = '<rect x="3" y="3" width="58" height="58" fill="#c0c0c0"/><path d="M4 60V4h56" fill="none" stroke="#fff" stroke-width="2.5"/>'
+      + '<path d="M4 60h56V4" fill="none" stroke="#0a0a0a" stroke-width="2.5"/><path d="M7 57h50V7" fill="none" stroke="#808080" stroke-width="2"/>';
+    const fill = (d, c, w = 3) => `<path d="${d}" fill="${c}" stroke="${ink}" stroke-width="${w}" stroke-linejoin="miter"/>`;
+    const line = (d, w = 3.6) => `<path d="${d}" fill="none" stroke="${ink}" stroke-width="${w}" stroke-linecap="square"/>`;
+    const small = (b) => `<g transform="translate(32 32) scale(.62) translate(-32 -32)">${b}</g>`;
+    const body = {
+      laugh: small(fill(D.circle, face) + line(D.eyeL, 4) + line(D.eyeR, 4) + fill(D.grin, '#fff')),
+      wow: small(fill(D.circle, face) + `<rect x="20" y="22" width="6" height="8" fill="${ink}"/><rect x="38" y="22" width="6" height="8" fill="${ink}"/>` + fill(D.oh, ink)),
+      fire: small(fill(D.flame, '#ff0000') + fill(D.flameIn, '#ffff00', 2)),
+      like: small(fill(D.cuff, '#000080') + fill(D.thumb, '#fff')),
+      skull: small(fill(D.skull, '#fff') + `<path d="${D.sockLq}" fill="${ink}"/><path d="${D.sockRq}" fill="${ink}"/>` + line(D.teeth, 3)),
+      heart: small(fill(D.heart, '#ff0000')),
+    }[k];
+    return svg('disquete', box + body);
+  };
+
+  const EMOTES = { arena, varanda, neon, galeria, caderno, planta, terminal, sessao, fliperama, tocafitas, cyberpunk, gibi, taverna, disquete };
   // uma versão do tema com as mesmas peças (ex.: "varanda-noite" usa as do "varanda")
   const base = (theme) => String(theme || '').split('-')[0];
 
@@ -266,6 +342,14 @@
     },
     // mão creme de contorno escuro, com o punho na cor de quem aponta
     tocafitas: { tip: [11, 3.5], body: `<path d="${HAND_PATH}" fill="#f9efd9" stroke="#2b1c13" stroke-width="1.7" stroke-linejoin="round"/><path d="M10.6 24.6c2.6 2.2 6.4 2.4 9.4 .4" fill="none" stroke="var(--c)" stroke-width="3" stroke-linecap="round"/>` },
+    // mão preta de contorno volt, com um quadradinho na cor de quem aponta no punho
+    cyberpunk: { tip: [11, 3.5], body: `<path d="${HAND_PATH}" fill="#07080e" stroke="#c8ff1e" stroke-width="1.6" stroke-linejoin="miter"/><rect x="11.5" y="21" width="6" height="6" fill="var(--c)"/>` },
+    // luva branca de desenho animado, contorno preto grosso e o punho na cor de quem aponta
+    gibi: { tip: [11, 3.5], body: `<path d="${HAND_PATH}" fill="#fff" stroke="#141414" stroke-width="2.2" stroke-linejoin="round"/><path d="M10.6 24.6c2.6 2.2 6.4 2.4 9.4 .4" fill="none" stroke="var(--c)" stroke-width="3.2" stroke-linecap="round"/>` },
+    // luva de couro de contorno escuro, com a pulseira na cor de quem aponta
+    taverna: { tip: [11, 3.5], body: `<path d="${HAND_PATH}" fill="#b07a3f" stroke="#2b1d12" stroke-width="1.8" stroke-linejoin="round"/><path d="M10.6 24.6c2.6 2.2 6.4 2.4 9.4 .4" fill="none" stroke="var(--c)" stroke-width="3.2" stroke-linecap="round"/>` },
+    // a seta do mouse de antigamente (branca de contorno preto), com um quadradinho na cor de quem aponta
+    disquete: { tip: [5, 3], body: `<path d="M5 3v21l5.5-5 3.6 8 3.6-1.6-3.6-8h7.6z" fill="#fff" stroke="#000" stroke-width="1.4" stroke-linejoin="miter"/><rect x="18" y="22" width="7" height="7" fill="var(--c)" stroke="#000" stroke-width="1"/>` },
   };
 
   // ---- o risco (caneta e rastro): camadas, da de baixo para a de cima. w multiplica a largura de sempre;
@@ -281,6 +365,10 @@
     sessao: [{ w: 2.1, color: '#8f7238' }, { w: 1.55, color: '#080706' }, { w: 1.0 }],  // a cor de quem desenha dentro de um filete dourado, como a moldura da tela
     fliperama: [{ w: 2.6, color: '#08061c' }, { w: 1.5, dash: [6, 3] }],              // quadradinhos na cor de quem desenha, sobre um fio escuro grosso
     tocafitas: [{ w: 2.3, color: '#2b1c13' }, { w: 1.5 }, { w: 0.35, color: '#fbf5e4', alpha: 0.85 }], // fita: a cor de quem desenha com contorno escuro e um filete creme no meio
+    cyberpunk: [{ w: 2.4, color: '#07080e' }, { w: 1.2 }, { w: 0.4, color: '#f4ffd6' }],          // laser: a cor de quem desenha com contorno escuro e o miolo quase branco
+    gibi: [{ w: 2.8, color: '#141414' }, { w: 1.6 }],                                   // traço de pincel: a cor de quem desenha com contorno de nanquim
+    taverna: [{ w: 3.4, alpha: 0.22 }, { w: 1.4 }, { w: 0.45, color: '#fff4d6' }],      // rastro de magia: brilho na cor de quem desenha e um fio claro no meio
+    disquete: [{ w: 1.8, color: '#000000' }, { w: 1.1 }],                                // lápis do programa de desenho: a cor de quem desenha com um contorno preto fino
   };
   const light = (color) => { const m = /hsl\(\s*(\d+)/.exec(color || ''); return m ? `hsl(${m[1]}, 100%, 88%)` : '#ffffff'; };
 

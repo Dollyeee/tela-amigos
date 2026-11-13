@@ -44,44 +44,11 @@
     return el;
   };
 
-  // galeria de temas: a miniatura de cada um (news/tema-<id>.jpg); clicar troca o tema na hora
-  function gallery() {
-    const T = window.Themes;
-    const box = make('div', 'news-themes');
-    for (const t of T.list) {
-      // (não é <button>: cada tema veste os botões do seu jeito, e aqui o desenho é o da miniatura)
-      const card = make('div', 'news-theme');
-      card.dataset.id = t.id;
-      card.setAttribute('role', 'button');
-      card.tabIndex = 0;
-      card.title = `Usar o tema ${t.name}`;
-      const img = document.createElement('img');
-      img.alt = '';
-      img.draggable = false;
-      img.onerror = () => img.remove(); // tema sem miniatura: fica só o nome
-      img.src = `news/tema-${t.id}.jpg`;
-      const name = make('span', 'nt-name');
-      const label = make('span', 'nt-label');
-      label.textContent = t.name;
-      name.append(label, make('i', 'nt-on', 'em uso'));
-      card.append(img, name);
-      // o tema se instala com a animação dele, partindo da miniatura clicada
-      const pick = () => { const r = card.getBoundingClientRect(); T.pick(t.id, { x: r.left + r.width / 2, y: r.top + r.height / 2 }); };
-      card.onclick = pick;
-      card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
-      box.appendChild(card);
-    }
-    return box;
-  }
+  // galeria de temas (a mesma da janela "Escolher tema", em tema-escolha.js): clicar troca o tema na hora
+  const gallery = () => window.ThemePicker.gallery();
   function markTheme() {
     const b = body();
-    if (!b || !window.Themes) return;
-    const cur = window.Themes.current;
-    b.querySelectorAll('.news-theme').forEach((c) => {
-      const on = c.dataset.id === cur;
-      c.classList.toggle('on', on);
-      c.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
+    if (b && window.ThemePicker) window.ThemePicker.mark(b);
   }
 
   // a galeria de temas aparece uma vez só, mesmo quando mais de uma versão pede (quem pulou versões)

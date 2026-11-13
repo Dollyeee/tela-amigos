@@ -78,6 +78,54 @@ html[data-theme="galeria-noite"] {
   --hist-axis: #8f8d86; --hist-text: #ecebe6; --hist-guide: rgba(236, 235, 230, .35); --hist-ring: #1b1b19; --hist-font: 500 10.5px "Instrument Sans", "Segoe UI", sans-serif;
 }
 
+/* ---------- Cyberpunk: canto cortado, volt e magenta, letra de código ---------- */
+html[data-theme="cyberpunk"] {
+  --j-font: 600 11px "Chakra Petch", "Segoe UI", sans-serif; --j-name: 700 14px "Chakra Petch", "Segoe UI", sans-serif; --j-case: uppercase; --j-ls: .06em;
+  --j-bar: rgba(7, 8, 14, .92); --j-fg: #e4e9fb; --j-name-shadow: 2px 0 rgba(255, 43, 106, .8), -2px 0 rgba(35, 225, 255, .8);
+  --j-btn: #131624; --j-btn-fg: #e4e9fb; --j-btn-line: #252b42; --j-btn-hover: #c8ff1e; --j-btn-hover-fg: #07080e; --j-radius: 0;
+  --j-cam: #c8ff1e; --j-cam-radius: 0;
+  --j-panel: #0c0e17; --j-panel-fg: #e4e9fb; --j-panel-line: #252b42; --j-panel-radius: 0; --j-panel-shadow: 0 18px 40px rgba(0, 0, 0, .7);
+  --j-primary: #c8ff1e; --j-primary-fg: #07080e; --j-sel: #c8ff1e; --j-sel-style: dashed; --j-sel-fg: #07080e; --j-dim: rgba(3, 4, 8, .6);
+  --hist-line: #c8ff1e; --hist-good: #c8ff1e; --hist-warn: #ffb020; --hist-bad: #ff2b6a; --hist-grid: rgba(228, 233, 251, .06);
+  --hist-axis: #7a84a6; --hist-text: #e4e9fb; --hist-guide: rgba(255, 43, 106, .6); --hist-ring: #0c0e17; --hist-font: 400 11px "Share Tech Mono", Consolas, monospace; --hist-glow: 6;
+}
+
+/* ---------- Gibi: papel branco, contorno preto grosso, legenda amarela ---------- */
+html[data-theme="gibi"] {
+  --j-font: 700 12px "Comic Neue", "Comic Sans MS", sans-serif; --j-name: 400 18px "Bangers", "Impact", sans-serif; --j-case: uppercase; --j-ls: .04em;
+  --j-bar: #ffffff; --j-fg: #141414; --j-name-bg: #ffd23f; --j-name-pad: 1px 8px 0;
+  --j-btn: #ffffff; --j-btn-fg: #141414; --j-btn-line: #141414; --j-btn-hover: #ffd23f; --j-btn-hover-fg: #141414; --j-radius: 8px;
+  --j-cam: #141414; --j-cam-radius: 4px;
+  --j-panel: #ffffff; --j-panel-fg: #141414; --j-panel-line: #141414; --j-panel-radius: 10px; --j-panel-shadow: 5px 5px 0 #141414;
+  --j-primary: #ef3b2c; --j-primary-fg: #fff; --j-sel: #ef3b2c; --j-sel-style: dashed; --j-sel-fg: #fff; --j-dim: rgba(255, 246, 224, .55);
+  --hist-line: #2a62ff; --hist-good: #1f9d55; --hist-warn: #e67700; --hist-bad: #ef3b2c; --hist-grid: rgba(20, 20, 20, .08);
+  --hist-axis: #6e6656; --hist-text: #141414; --hist-guide: rgba(20, 20, 20, .4); --hist-ring: #fff; --hist-font: 700 11px "Comic Neue", "Comic Sans MS", sans-serif;
+}
+
+/* ---------- Taverna: viga de madeira, pergaminho, carmim e dourado ---------- */
+html[data-theme="taverna"] {
+  --j-font: italic 400 13px "IM Fell English", Georgia, serif; --j-name: 400 18px "Pirata One", Georgia, serif;
+  --j-bar: linear-gradient(#3a2616, #26180d); --j-fg: #f0c76a;
+  --j-btn: #efe0bb; --j-btn-fg: #2b1d12; --j-btn-line: #8a6a3a; --j-btn-hover: #f0c76a; --j-btn-hover-fg: #2b1d12; --j-radius: 5px;
+  --j-cam: #3a2616; --j-cam-radius: 4px;
+  --j-panel: #efe0bb; --j-panel-fg: #2b1d12; --j-panel-line: #b99b62; --j-panel-radius: 6px; --j-panel-shadow: 0 12px 30px rgba(0, 0, 0, .55);
+  --j-primary: #8e1b1b; --j-primary-fg: #f6e7c1; --j-sel: #c9973a; --j-sel-fg: #2b1d12; --j-dim: rgba(15, 9, 4, .55);
+  --hist-line: #8e1b1b; --hist-good: #3f6b2a; --hist-warn: #b8862f; --hist-bad: #9e1f1f; --hist-grid: rgba(43, 29, 18, .1);
+  --hist-axis: #7a603e; --hist-text: #2b1d12; --hist-guide: rgba(43, 29, 18, .4); --hist-ring: #efe0bb; --hist-font: italic 400 12px "IM Fell English", Georgia, serif;
+}
+
+/* ---------- Disquete: janelas cinza em relevo e barra de título azul ---------- */
+html[data-theme="disquete"] {
+  --j-font: 400 12px "Microsoft Sans Serif", Tahoma, sans-serif; --j-name: 700 12px "Microsoft Sans Serif", Tahoma, sans-serif;
+  --j-bar: linear-gradient(90deg, #000080, #1084d0); --j-fg: #ffffff;
+  --j-btn: #c0c0c0; --j-btn-fg: #000000; --j-btn-line: #0a0a0a; --j-btn-hover: #dfdfdf; --j-btn-hover-fg: #000000; --j-radius: 0;
+  --j-cam: #c0c0c0; --j-cam-radius: 0;
+  --j-panel: #c0c0c0; --j-panel-fg: #000000; --j-panel-line: #0a0a0a; --j-panel-radius: 0; --j-panel-shadow: 3px 3px 0 rgba(0, 0, 0, .35);
+  --j-primary: #000080; --j-primary-fg: #ffffff; --j-sel: #000080; --j-sel-style: dotted; --j-sel-fg: #ffffff; --j-dim: rgba(0, 128, 128, .35);
+  --hist-line: #000080; --hist-good: #008000; --hist-warn: #806000; --hist-bad: #c00000; --hist-grid: rgba(0, 0, 0, .1);
+  --hist-axis: #444444; --hist-text: #000000; --hist-guide: rgba(0, 0, 0, .45); --hist-ring: #c0c0c0; --hist-font: 400 11px "Microsoft Sans Serif", Tahoma, sans-serif;
+}
+
 /* ---------- Caderno: folha pautada, caneta azul, marca-texto ---------- */
 html[data-theme="caderno"] {
   --j-font: 16px "Patrick Hand", "Segoe Print", cursive; --j-name: 700 19px "Kalam", "Segoe Print", cursive;

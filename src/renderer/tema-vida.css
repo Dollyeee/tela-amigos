@@ -121,6 +121,74 @@ html.vivo:is([data-theme="galeria"], [data-theme="galeria-noite"]) .tile[data-ev
 @keyframes ga-selo { 0% { transform: scale(0); } 60% { transform: scale(1.4); } 100% { transform: none; } }
 html.vivo:is([data-theme="galeria"], [data-theme="galeria-noite"]) .chat-msg[data-ev="novo"] { animation: ga-surge .6s cubic-bezier(.2, .7, .2, 1) both; }
 
+/* ---------- Cyberpunk: tudo chega tremendo (glitch) ---------- */
+/* quem entra na lista e a mensagem nova chegam com o tremido de cor; a tela que entra no ar pisca as cantoneiras; o nome
+   do app treme de vez em quando com a janela em uso (só transform e sombra de texto, em degraus) */
+html.vivo[data-theme="cyberpunk"] #people li[data-ev="entrou"] { animation: cp-chega .6s steps(1, end) var(--ev-t, 0s) both; }
+@keyframes cp-chega {
+  0% { opacity: 0; transform: translateX(-12px); }
+  15% { opacity: 1; transform: translateX(8px); text-shadow: 3px 0 rgba(255, 43, 106, .9), -3px 0 rgba(35, 225, 255, .9); }
+  30% { transform: translateX(-4px); }
+  45% { transform: translateX(2px); text-shadow: -2px 0 rgba(255, 43, 106, .9), 2px 0 rgba(35, 225, 255, .9); }
+  60%, 100% { opacity: 1; transform: none; text-shadow: none; }
+}
+html.vivo[data-theme="cyberpunk"] .tile[data-ev="aovivo"] { animation: cp-tela .9s steps(1, end) var(--ev-t, 0s) both; }
+@keyframes cp-tela { 0% { opacity: .2; filter: hue-rotate(90deg); } 12% { opacity: 1; filter: none; } 24% { opacity: .5; } 36%, 100% { opacity: 1; } }
+html.vivo[data-theme="cyberpunk"] .tile[data-ev="aovivo"] .tile-name { animation: cp-etiqueta .7s steps(1, end) calc(var(--ev-t, 0s) + .2s) both; }
+@keyframes cp-etiqueta { 0% { transform: translateX(-10px); clip-path: inset(0 40% 0 0); } 25% { transform: translateX(6px); clip-path: inset(0 0 50% 0); } 50% { transform: translateX(-2px); clip-path: inset(0); } 100% { transform: none; } }
+html.vivo[data-theme="cyberpunk"] #people li[data-ev="aovivo"] .tag.live { animation: cp-chega .5s steps(1, end) var(--ev-t, 0s) both; }
+html.vivo[data-theme="cyberpunk"] .chat-msg[data-ev="novo"] { animation: cp-chega .45s steps(1, end) both; }
+html.vivo.foco[data-theme="cyberpunk"] .app-brand { animation: cp-marca 9s steps(1, end) infinite; }
+@keyframes cp-marca {
+  0%, 93% { transform: none; text-shadow: 2px 0 rgba(255, 43, 106, .8), -2px 0 rgba(35, 225, 255, .8); }
+  94% { transform: translateX(3px); text-shadow: 5px 0 rgba(255, 43, 106, .9), -4px 0 rgba(35, 225, 255, .9); }
+  95% { transform: translateX(-2px); text-shadow: -3px 0 rgba(255, 43, 106, .9), 3px 0 rgba(35, 225, 255, .9); }
+  96%, 100% { transform: none; text-shadow: 2px 0 rgba(255, 43, 106, .8), -2px 0 rgba(35, 225, 255, .8); }
+}
+
+/* ---------- Gibi: tudo entra como num quadrinho ---------- */
+/* quem chega dá um pulo; a tela que entra no ar treme ("tremido" de desenho) e o recordatório salta; o balão novo
+   cresce a partir do rabinho; o "AO VIVO" estoura */
+html.vivo[data-theme="gibi"] #people li[data-ev="entrou"] { animation: gi-pula .6s cubic-bezier(.3, 1.6, .5, 1) var(--ev-t, 0s) both; }
+@keyframes gi-pula { 0% { opacity: 0; transform: translateY(10px) scale(.8) rotate(-4deg); } 60% { opacity: 1; transform: translateY(-4px) scale(1.04) rotate(2deg); } 100% { transform: none; } }
+html.vivo[data-theme="gibi"] .tile[data-ev="aovivo"] { animation: gi-treme .5s steps(1, end) var(--ev-t, 0s) both; }
+@keyframes gi-treme { 0% { transform: translate(-3px, 1px) rotate(-.4deg); } 20% { transform: translate(3px, -1px) rotate(.4deg); } 40% { transform: translate(-2px, -1px); } 60% { transform: translate(2px, 1px); } 80%, 100% { transform: none; } }
+html.vivo[data-theme="gibi"] .tile[data-ev="aovivo"] .tile-name { animation: gi-salta .55s cubic-bezier(.3, 1.6, .5, 1) calc(var(--ev-t, 0s) + .15s) both; }
+@keyframes gi-salta { 0% { transform: scale(.4) rotate(-12deg); opacity: 0; } 100% { transform: none; opacity: 1; } }
+html.vivo[data-theme="gibi"] #people li[data-ev="aovivo"] .tag.live { animation: gi-estoura .5s cubic-bezier(.3, 1.8, .5, 1) var(--ev-t, 0s) both; }
+@keyframes gi-estoura { 0% { transform: scale(0) rotate(-20deg); } 100% { transform: rotate(-3deg); } }
+html.vivo[data-theme="gibi"] .chat-msg[data-ev="novo"] .chat-body { transform-origin: 0 100%; animation: gi-balao .4s cubic-bezier(.3, 1.6, .5, 1) both; }
+html.vivo[data-theme="gibi"] .chat-msg.me[data-ev="novo"] .chat-body { transform-origin: 100% 100%; }
+html.vivo[data-theme="gibi"] .chat-msg.system[data-ev="novo"] { animation: gi-balao .4s cubic-bezier(.3, 1.6, .5, 1) both; }
+@keyframes gi-balao { from { opacity: 0; transform: scale(.3); } }
+
+/* ---------- Taverna: luz de vela ---------- */
+/* com a janela em uso, a luz da sala tremula como vela (só a opacidade de uma camada, em degraus); quem chega acende
+   em dourado; a tela que entra no ar ganha o selo de cera carimbado; a mensagem nova aparece como tinta secando */
+html.vivo.foco[data-theme="taverna"] #room > .vida { display: block; }
+html.vivo.foco[data-theme="taverna"] #room > .vida i:nth-child(1) { inset: 0; background: radial-gradient(ellipse at 55% 35%, rgba(255, 170, 70, .16), transparent 62%); animation: ta-vela 4.2s steps(14, end) infinite; }
+@keyframes ta-vela { 0%, 100% { opacity: .65; } 18% { opacity: 1; } 33% { opacity: .78; } 47% { opacity: .95; } 66% { opacity: .7; } 84% { opacity: 1; } }
+html.vivo[data-theme="taverna"] #people li[data-ev="entrou"] { animation: vida-chega .5s cubic-bezier(.2, .9, .3, 1.15) var(--ev-t, 0s) both; }
+html.vivo[data-theme="taverna"] #people li[data-ev="entrou"] .person-name { animation: ta-acende 2.2s ease-out var(--ev-t, 0s) both; }
+@keyframes ta-acende { 0% { text-shadow: 0 0 0 rgba(201, 151, 58, 0); color: #8a5a10; } 20% { text-shadow: 0 0 10px rgba(240, 199, 106, .95); color: #8a5a10; } 100% { text-shadow: none; } }
+html.vivo[data-theme="taverna"] .tile[data-ev="aovivo"] .tile-name .live-dot { animation: ta-selo .55s cubic-bezier(.3, 1.4, .5, 1) calc(var(--ev-t, 0s) + .2s) both; }
+@keyframes ta-selo { 0% { opacity: 0; transform: scale(2.6) rotate(-30deg); } 70% { opacity: 1; transform: scale(.9); } 100% { transform: none; } }
+html.vivo[data-theme="taverna"] #people li[data-ev="aovivo"] .tag.live { animation: ta-selo .55s cubic-bezier(.3, 1.4, .5, 1) var(--ev-t, 0s) both; }
+html.vivo[data-theme="taverna"] .chat-msg[data-ev="novo"] { animation: ta-tinta .7s ease-out both; }
+@keyframes ta-tinta { from { opacity: 0; filter: blur(2px); } }
+
+/* ---------- Disquete: tudo em degraus, como numa tela antiga ---------- */
+/* quem chega pisca selecionado na lista; a tela que entra no ar pisca a barra de título entre cinza e azul; a mensagem
+   nova aparece em três degraus */
+html.vivo[data-theme="disquete"] #people li[data-ev="entrou"] { animation: dq-seleciona 1.2s steps(1, end) var(--ev-t, 0s) both; }
+@keyframes dq-seleciona { 0%, 25%, 50% { background: #000080; color: #fff; } 12%, 37%, 62%, 100% { background: none; color: inherit; } }
+html.vivo[data-theme="disquete"] .tile[data-ev="aovivo"] .tile-name { animation: dq-titulo 1s steps(1, end) var(--ev-t, 0s) both; }
+@keyframes dq-titulo { 0%, 40% { background: linear-gradient(90deg, #808080, #b5b5b5); } 20%, 60%, 100% { background: linear-gradient(90deg, #000080, #1084d0); } }
+html.vivo[data-theme="disquete"] #people li[data-ev="aovivo"] .tag.live { animation: dq-pisca 1s steps(1, end) var(--ev-t, 0s) both; }
+@keyframes dq-pisca { 0%, 40% { opacity: 0; } 20%, 60%, 100% { opacity: 1; } }
+html.vivo[data-theme="disquete"] .chat-msg[data-ev="novo"] { animation: dq-aparece .3s steps(3, end) both; }
+@keyframes dq-aparece { from { opacity: 0; } }
+
 /* ---------- Caderno: escrito à mão ---------- */
 /* o nome de quem chega é escrito; o "ao vivo!" ganha o círculo desenhado; a mensagem é um bilhete colado; a foto da
    tela que entra no ar cai e assenta na página */

@@ -13,6 +13,20 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.69',
+    title: 'Quatro temas novos e a tela de escolher tema',
+    text: 'Chegaram o Cyberpunk, o Gibi, a Taverna e o Disquete. E agora, ao clicar em "Tema", abre esta tela com a prévia de todos: clique num para experimentar.',
+    themes: true,
+    items: [
+      '**Cyberpunk:** cantos cortados, verde-limão elétrico, e tudo chega tremendo.',
+      '**Gibi:** história em quadrinhos, com as mensagens em balões de fala e um "POW!" na troca de tema.',
+      '**Taverna:** RPG medieval, com pergaminho, selo de cera no "ao vivo" e luz de vela.',
+      '**Disquete:** o computador de antigamente, com janelas cinza, barra de título azul e a seta do mouse.',
+      'A Varanda e a Galeria aparecem uma vez só na tela de temas, com "dia | noite" no cartão.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.68',
     title: 'toddy bucha',
     text: 'A partir de agora, toda novidade termina assim.',

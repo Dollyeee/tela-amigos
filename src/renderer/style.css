@@ -727,8 +727,8 @@ html:is([data-theme="classico"], :not([data-theme])) :is(.theme-only, .enh-seg, 
 .news-title { margin: 0 0 8px; font-size: 21px; line-height: 1.2; font-weight: 700; }
 .news-text { margin: 0; max-width: 68ch; font-size: 14px; line-height: 1.5; }
 /* galeria de temas: a miniatura de cada um; clicar troca na hora */
-.news-themes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
-.news-theme { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2);
+.news-themes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
+.news-theme { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2);
   overflow: hidden; cursor: pointer; transition: border-color .15s, transform .15s; }
 .news-theme:hover { border-color: var(--accent); transform: translateY(-1px); }
 .news-theme:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
@@ -739,5 +739,14 @@ html:is([data-theme="classico"], :not([data-theme])) :is(.theme-only, .enh-seg, 
 .news-theme .nt-on { display: none; font-style: normal; font-size: 11px; font-weight: 600; color: var(--accent-2); }
 .news-theme.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .news-theme.on .nt-on { display: inline; }
+/* tema com duas versões: "dia | noite" no canto da miniatura (cores próprias: fica em cima da imagem de qualquer tema) */
+.news-theme .nt-vars { position: absolute; top: 6px; right: 6px; display: flex; gap: 1px; padding: 2px; border-radius: 999px;
+  background: rgba(10, 11, 16, .78); color: #f2f3f7; font: 600 10.5px/1 "Segoe UI", sans-serif; letter-spacing: 0; text-transform: none; }
+.news-theme .nt-vars b { padding: 3px 7px; border-radius: 999px; font-weight: 600; cursor: pointer; }
+.news-theme .nt-vars b:hover { background: rgba(255, 255, 255, .2); }
+.news-theme .nt-vars b.sel { background: #f2f3f7; color: #111318; }
+/* a janela "Escolher tema": mais larga que as novidades (miniaturas maiores) */
+.theme-card { width: min(1060px, 95vw); }
+.theme-card .news-themes { margin: 4px 0 6px; }
 .news-list { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; padding-left: 20px; font-size: 13.5px; line-height: 1.45; }
 .news-list li::marker { color: var(--accent-2); }

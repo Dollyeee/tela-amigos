@@ -155,3 +155,54 @@ html[data-theme="tocafitas"] .hand { filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .
 html[data-theme="tocafitas"] :is(.hand span, #tag) { padding: 5px 9px 0; border-radius: 3px; background: #fbf5e4; color: #26306e; box-shadow: inset 0 3px 0 var(--c), 0 0 0 1px #b8a37c; font: 700 15px/1.1 "Caveat", "Segoe Print", cursive; }
 html[data-theme="tocafitas"] #tag { font-size: 20px; }
 html[data-theme="tocafitas"] :is(.press-ripple, .ripple) { border: 3px solid #ffb648; box-shadow: 0 0 0 2px #2b1c13, inset 0 0 0 2px #2b1c13; }
+
+/* ---------- Cyberpunk: etiquetas de canto cortado, mira com contorno volt, toque quadrado ---------- */
+html[data-theme="cyberpunk"] .fx-emo { filter: drop-shadow(0 0 6px rgba(200, 255, 30, .35)); }
+html[data-theme="cyberpunk"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="cyberpunk"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="cyberpunk"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 4px auto 0; padding: 2px 7px; border-radius: 0; background: #c8ff1e; color: #07080e;
+  font: 700 11px/1.2 "Chakra Petch", "Segoe UI", sans-serif; letter-spacing: .06em; text-transform: uppercase; clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px)); }
+html[data-theme="cyberpunk"] .emote small { font-size: 14px; }
+html[data-theme="cyberpunk"] .hand { filter: drop-shadow(0 0 4px rgba(200, 255, 30, .45)); }
+html[data-theme="cyberpunk"] :is(.hand span, #tag) { padding: 1px 7px; border-radius: 0; background: #07080e; color: #c8ff1e; box-shadow: inset 0 0 0 1px var(--c); font: 400 12px/1.3 "Share Tech Mono", Consolas, monospace; letter-spacing: .04em; }
+html[data-theme="cyberpunk"] #tag { font-size: 15px; }
+html[data-theme="cyberpunk"] :is(.press-ripple, .ripple) { border: 2px solid var(--c); border-radius: 0; }
+
+/* ---------- Gibi: legenda amarela de contorno preto, luva de desenho animado, toque com contorno ---------- */
+html[data-theme="gibi"] .fx-emo { filter: drop-shadow(3px 3px 0 #141414); }
+html[data-theme="gibi"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="gibi"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="gibi"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 3px auto 0; padding: 1px 7px 0; border: 2px solid #141414; border-radius: 0; background: #ffd23f; color: #141414;
+  font: 400 13px/1.2 "Bangers", "Impact", sans-serif; letter-spacing: .05em; text-transform: uppercase; box-shadow: 2px 2px 0 #141414; }
+html[data-theme="gibi"] .emote small { font-size: 17px; }
+html[data-theme="gibi"] .hand { filter: drop-shadow(2px 2px 0 rgba(20, 20, 20, .9)); }
+html[data-theme="gibi"] :is(.hand span, #tag) { padding: 1px 7px 0; border: 2px solid #141414; border-radius: 10px; background: #fff; color: #141414; box-shadow: 2px 2px 0 #141414;
+  font: 400 14px/1.2 "Bangers", "Impact", sans-serif; letter-spacing: .05em; text-transform: uppercase; }
+html[data-theme="gibi"] #tag { font-size: 17px; }
+html[data-theme="gibi"] :is(.press-ripple, .ripple) { border: 3px solid var(--c); box-shadow: 0 0 0 2px #141414, inset 0 0 0 2px #141414; }
+
+/* ---------- Taverna: etiquetas de pergaminho, luva de couro, toque dourado ---------- */
+html[data-theme="taverna"] .fx-emo { filter: drop-shadow(0 3px 2px rgba(0, 0, 0, .45)); }
+html[data-theme="taverna"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="taverna"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="taverna"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 3px auto 0; padding: 0 8px 1px; border: 1px solid #8a6a3a; border-radius: 3px;
+  background: radial-gradient(ellipse at 50% 35%, #f6ead0, #e6d2a2 75%); color: #2b1d12; font: 400 15px/1.2 "Pirata One", Georgia, serif; box-shadow: 0 2px 4px rgba(0, 0, 0, .45); }
+html[data-theme="taverna"] .emote small { font-size: 18px; }
+html[data-theme="taverna"] .hand { filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .45)); }
+html[data-theme="taverna"] :is(.hand span, #tag) { padding: 0 8px 1px; border: 1px solid #8a6a3a; border-radius: 3px; background: radial-gradient(ellipse at 50% 35%, #f6ead0, #e6d2a2 75%); color: #2b1d12;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .45), inset 0 -2px 0 var(--c); font: 400 15px/1.25 "Pirata One", Georgia, serif; }
+html[data-theme="taverna"] #tag { font-size: 18px; }
+html[data-theme="taverna"] :is(.press-ripple, .ripple) { border: 2px solid #f0c76a; box-shadow: 0 0 10px rgba(240, 199, 106, .8), inset 0 0 8px var(--c); }
+
+/* ---------- Disquete: dicas amarelas de contorno preto, a seta do mouse, toque quadrado ---------- */
+html[data-theme="disquete"] .fx-emo { filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .45)); }
+html[data-theme="disquete"] .react-bar button .fx-emo { filter: none; }
+html[data-theme="disquete"] :is(.float-emoji, .emote) { text-shadow: none; filter: none; }
+html[data-theme="disquete"] :is(.float-emoji, .emote) small { display: block; width: fit-content; margin: 3px auto 0; padding: 1px 5px; border: 1px solid #000; border-radius: 0; background: #ffffe1; color: #000;
+  font: 400 11px/1.3 "Microsoft Sans Serif", Tahoma, sans-serif; }
+html[data-theme="disquete"] .emote small { font-size: 13px; }
+html[data-theme="disquete"] .hand { filter: none; }
+html[data-theme="disquete"] :is(.hand span, #tag) { padding: 1px 5px; border: 1px solid #000; border-radius: 0; background: #ffffe1; color: #000; box-shadow: inset 0 -2px 0 var(--c);
+  font: 400 11px/1.3 "Microsoft Sans Serif", Tahoma, sans-serif; }
+html[data-theme="disquete"] #tag { font-size: 13px; }
+html[data-theme="disquete"] :is(.press-ripple, .ripple) { border: 1px dotted #000; border-radius: 0; box-shadow: 0 0 0 1px var(--c); }

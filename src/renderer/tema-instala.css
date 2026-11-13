@@ -192,6 +192,152 @@ html[data-vt="galeria-noite"] .vt-name { white-space: nowrap; }
 html[data-vt="galeria-noite"] .vt-bar { background: #2e2e2b; }
 html[data-vt="galeria-noite"] .vt-bar > i { background: #ecebe6; }
 
+/* ---------- Cyberpunk: a tela de antes treme e se desfaz em faixas, a plaquinha "conecta" e a nova entra tremendo ---------- */
+html[data-vt="cyberpunk"] { --vt-t: 1500ms; }
+html[data-vt="cyberpunk"]::view-transition-old(root) { animation: vt-cp-old 440ms steps(1, end) both; }
+@keyframes vt-cp-old {
+  0% { opacity: 1; transform: none; clip-path: inset(0); filter: none; }
+  14% { transform: translateX(-14px); clip-path: inset(10% 0 62% 0); filter: hue-rotate(90deg) saturate(2); }
+  28% { transform: translateX(18px); clip-path: inset(48% 0 20% 0); filter: hue-rotate(-60deg); }
+  42% { transform: translateX(-6px); clip-path: inset(0 0 70% 0); filter: brightness(1.6); }
+  56% { transform: translateX(10px); clip-path: inset(70% 0 4% 0); filter: invert(1); }
+  70% { transform: translateX(-20px); clip-path: inset(30% 0 52% 0); filter: none; }
+  86% { opacity: 1; transform: none; clip-path: inset(49% 0 49% 0); }
+  100% { opacity: 0; }
+}
+/* a nova só aparece no fim (antes disso, o fundo escuro do tema e a plaquinha) */
+html[data-vt="cyberpunk"]::view-transition-new(root) { animation: vt-cp-new 1450ms steps(1, end) both; }
+@keyframes vt-cp-new {
+  0%, 72% { opacity: 0; }
+  73% { opacity: 1; transform: translateX(16px); clip-path: inset(40% 0 40% 0); filter: hue-rotate(120deg); }
+  79% { transform: translateX(-12px); clip-path: inset(10% 0 30% 0); filter: hue-rotate(-90deg); }
+  85% { transform: translateX(8px); clip-path: inset(0 0 12% 0); filter: none; }
+  91% { transform: translateX(-4px); clip-path: inset(0); }
+  96% { transform: translateX(2px); }
+  100% { opacity: 1; transform: none; clip-path: inset(0); filter: none; }
+}
+/* linhas de varredura por cima e duas faixas de glitch (magenta e ciano) pulando de lugar */
+html[data-vt="cyberpunk"] .vt-fx > i:nth-child(1) { display: block; inset: 0; background: repeating-linear-gradient(0deg, rgba(255, 255, 255, .045) 0 1px, transparent 1px 3px); }
+html.vt-run[data-vt="cyberpunk"] .vt-fx > i:nth-child(1) { animation: vt-cp-scan 1500ms linear both; }
+@keyframes vt-cp-scan { 0% { opacity: 0; } 12%, 86% { opacity: 1; } 100% { opacity: 0; } }
+html[data-vt="cyberpunk"] .vt-fx > i:is(:nth-child(2), :nth-child(3)) { display: block; left: 0; right: 0; top: 0; height: 16px; opacity: 0; mix-blend-mode: screen; }
+html[data-vt="cyberpunk"] .vt-fx > i:nth-child(2) { background: rgba(255, 43, 106, .6); }
+html[data-vt="cyberpunk"] .vt-fx > i:nth-child(3) { height: 8px; background: rgba(35, 225, 255, .55); }
+html.vt-run[data-vt="cyberpunk"] .vt-fx > i:nth-child(2) { animation: vt-cp-bar 1500ms steps(1, end) both; }
+html.vt-run[data-vt="cyberpunk"] .vt-fx > i:nth-child(3) { animation: vt-cp-bar2 1500ms steps(1, end) both; }
+@keyframes vt-cp-bar { 0% { opacity: 0; } 3% { opacity: 1; top: 22%; } 9% { top: 61%; } 15% { top: 38%; height: 30px; } 22% { opacity: 0; } 74% { opacity: 1; top: 70%; height: 10px; } 81% { top: 18%; } 88% { top: 47%; } 95%, 100% { opacity: 0; } }
+@keyframes vt-cp-bar2 { 0% { opacity: 0; } 5% { opacity: 1; top: 44%; } 12% { top: 80%; } 19% { top: 9%; } 25% { opacity: 0; } 77% { opacity: 1; top: 33%; } 84% { top: 88%; } 92% { top: 56%; } 97%, 100% { opacity: 0; } }
+html[data-vt="cyberpunk"] .vt-hud { left: 50%; top: 50%; width: 440px; margin: -72px 0 0 -220px; padding: 20px 26px 24px; color: #e4e9fb;
+  background: linear-gradient(#c8ff1e 0 0) 0 0 / 18px 2px no-repeat, linear-gradient(#c8ff1e 0 0) 0 0 / 2px 18px no-repeat,
+    linear-gradient(#c8ff1e 0 0) 100% 100% / 18px 2px no-repeat, linear-gradient(#c8ff1e 0 0) 100% 100% / 2px 18px no-repeat, #0c0e17;
+  box-shadow: inset 0 0 0 1px #252b42; clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px)); }
+html[data-vt="cyberpunk"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar, .vt-pct) { display: block; }
+html[data-vt="cyberpunk"] .vt-k { color: #c8ff1e; font: 400 12px/1 "Share Tech Mono", Consolas, monospace; letter-spacing: .18em; text-transform: uppercase; }
+html[data-vt="cyberpunk"] .vt-name { margin: 10px 0 16px; font: 700 42px/1 "Chakra Petch", "Segoe UI", sans-serif; letter-spacing: .04em; text-transform: uppercase;
+  text-shadow: 2px 0 rgba(255, 43, 106, .85), -2px 0 rgba(35, 225, 255, .85); }
+html[data-vt="cyberpunk"] .vt-bar { height: 6px; background: #1b1f31; }
+html[data-vt="cyberpunk"] .vt-bar > i { background: repeating-linear-gradient(90deg, #c8ff1e 0 10px, transparent 10px 13px); }
+html[data-vt="cyberpunk"] .vt-pct { position: absolute; right: 26px; top: 20px; color: #7a84a6; font: 400 12px/1 "Share Tech Mono", Consolas, monospace; }
+html.vt-run[data-vt="cyberpunk"] .vt-hud { animation: vt-cp-hud 1500ms steps(1, end) both; }
+@keyframes vt-cp-hud { 0%, 20% { opacity: 0; } 22% { opacity: 1; transform: translateX(-8px); } 25% { transform: translateX(4px); } 28%, 66% { opacity: 1; transform: none; } 69% { opacity: 1; transform: translateX(10px); } 72%, 100% { opacity: 0; } }
+html.vt-run[data-vt="cyberpunk"] .vt-bar > i { animation: vt-fill 620ms 340ms steps(12, end) both; }
+html.vt-run[data-vt="cyberpunk"] .vt-pct { animation: vt-count 620ms 340ms steps(12, end) both; }
+
+/* ---------- Gibi: o quadrinho de antes sai da página, a explosão "POW!" anuncia a edição e o novo entra pela direita ---------- */
+html[data-vt="gibi"] { --vt-t: 1550ms; }
+html[data-vt="gibi"]::view-transition-old(root) { animation: vt-gi-old 820ms cubic-bezier(.5, 0, .75, .2) both; }
+@keyframes vt-gi-old { 0% { transform: none; } 45% { transform: scale(.9) rotate(-1.5deg); } 100% { transform: translateX(-118%) scale(.9) rotate(-6deg); } }
+html[data-vt="gibi"]::view-transition-new(root) { animation: vt-gi-new 560ms 940ms cubic-bezier(.2, .9, .3, 1.15) both; }
+@keyframes vt-gi-new { from { transform: translateX(112%) rotate(5deg) scale(.92); } to { transform: none; } }
+/* a retícula (os pontinhos da impressão) ocupa a tela entre um quadrinho e outro */
+html[data-vt="gibi"] .vt-fx > i:nth-child(1) { display: block; inset: 0; background: radial-gradient(rgba(42, 98, 255, .32) 2.4px, transparent 2.6px) 0 0 / 16px 16px, #fff6e0; }
+html.vt-run[data-vt="gibi"] .vt-fx > i:nth-child(1) { animation: vt-gi-dots 1550ms linear both; }
+@keyframes vt-gi-dots { 0%, 8% { opacity: 0; } 22%, 72% { opacity: 1; } 92%, 100% { opacity: 0; } }
+/* a explosão: estrela preta por baixo (o contorno) e amarela por cima, e o nome no meio */
+html[data-vt="gibi"] .vt-hud { left: 50%; top: 50%; width: 440px; height: 300px; margin: -150px 0 0 -220px; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #141414; }
+/* (o flex só com a plaquinha ligada: antes disso ela tem de estar fora da página, senão o Chromium a fotografa no visual de
+   antes e ela some na troca) */
+html.vt-on[data-vt="gibi"] .vt-hud { display: flex; }
+html[data-vt="gibi"] .vt-hud > :is(.vt-art, .vt-k, .vt-name) { display: block; position: relative; }
+html[data-vt="gibi"] .vt-hud > .vt-art { position: absolute; inset: 0; }
+html[data-vt="gibi"] .vt-art > i:nth-child(1), html[data-vt="gibi"] .vt-art > i:nth-child(2) { display: block; position: absolute; inset: 0; clip-path: polygon(50.0% 0.0%, 58.0% 14.9%, 71.7% 5.0%, 72.4% 21.9%, 89.1% 18.8%, 82.4% 34.4%, 98.7% 38.9%, 86.0% 50.0%, 98.7% 61.1%, 82.4% 65.6%, 89.1% 81.2%, 72.4% 78.1%, 71.7% 95.0%, 58.0% 85.1%, 50.0% 100.0%, 42.0% 85.1%, 28.3% 95.0%, 27.6% 78.1%, 10.9% 81.2%, 17.6% 65.6%, 1.3% 61.1%, 14.0% 50.0%, 1.3% 38.9%, 17.6% 34.4%, 10.9% 18.8%, 27.6% 21.9%, 28.3% 5.0%, 42.0% 14.9%); }
+html[data-vt="gibi"] .vt-art > i:nth-child(1) { background: #141414; transform: translate(9px, 9px); }
+html[data-vt="gibi"] .vt-art > i:nth-child(2) { background: #ffd23f; inset: 7px; }
+html[data-vt="gibi"] .vt-k { padding: 2px 8px; border: 2.5px solid #141414; background: #fff; font: 700 13px/1.2 "Comic Neue", "Comic Sans MS", sans-serif; transform: rotate(-3deg); }
+html[data-vt="gibi"] .vt-name { margin-top: 4px; color: #ef3b2c; font: 400 76px/1 "Bangers", "Impact", sans-serif; letter-spacing: .03em; text-transform: uppercase;
+  -webkit-text-stroke: 3px #141414; paint-order: stroke fill; text-shadow: 5px 5px 0 #141414; transform: rotate(-4deg); }
+html[data-vt="gibi"] .vt-name::after { content: '!'; }
+html.vt-run[data-vt="gibi"] .vt-hud { animation: vt-gi-hud 1550ms both; }
+@keyframes vt-gi-hud {
+  0%, 18% { opacity: 0; transform: scale(.2) rotate(-25deg); }
+  30% { opacity: 1; transform: scale(1.12) rotate(4deg); animation-timing-function: ease-out; }
+  36% { transform: scale(.96) rotate(-1deg); }
+  42%, 62% { opacity: 1; transform: none; animation-timing-function: ease-in; }
+  72%, 100% { opacity: 0; transform: scale(1.5) rotate(8deg); }
+}
+
+/* ---------- Taverna: a sala escurece, o pergaminho se desenrola entre dois rolos com o nome da aventura e abre para o tema ---------- */
+html[data-vt="taverna"] { --vt-t: 1650ms; }
+html[data-vt="taverna"]::view-transition-old(root) { animation: vt-ta-old 700ms ease-in both; }
+@keyframes vt-ta-old { to { filter: brightness(.28) sepia(.6); } }
+html[data-vt="taverna"]::view-transition-new(root) { animation: vt-ta-new 600ms 1050ms cubic-bezier(.5, 0, .2, 1) both; }
+@keyframes vt-ta-new { from { clip-path: inset(0 50% 0 50%); } to { clip-path: inset(0); } }
+/* os dois rolos de madeira saem do meio para as pontas do pergaminho */
+html[data-vt="taverna"] .vt-fx > i:is(:nth-child(1), :nth-child(2)) { display: block; left: calc(50% - 10px); top: calc(50% - 104px); width: 20px; height: 208px; border-radius: 10px; opacity: 0;
+  background: linear-gradient(90deg, #24160b, #7a5230 45%, #3a2616); box-shadow: 0 6px 14px rgba(0, 0, 0, .6), inset 0 0 0 1px #0f0904; }
+html.vt-run[data-vt="taverna"] .vt-fx > i:nth-child(1) { animation: vt-ta-rolo-e 1650ms both; }
+html.vt-run[data-vt="taverna"] .vt-fx > i:nth-child(2) { animation: vt-ta-rolo-d 1650ms both; }
+@keyframes vt-ta-rolo-e { 0%, 12% { opacity: 0; transform: none; } 16% { opacity: 1; transform: none; animation-timing-function: cubic-bezier(.4, 0, .2, 1); } 40%, 62% { opacity: 1; transform: translateX(-300px); } 70%, 100% { opacity: 0; transform: translateX(-300px); } }
+@keyframes vt-ta-rolo-d { 0%, 12% { opacity: 0; transform: none; } 16% { opacity: 1; transform: none; animation-timing-function: cubic-bezier(.4, 0, .2, 1); } 40%, 62% { opacity: 1; transform: translateX(300px); } 70%, 100% { opacity: 0; transform: translateX(300px); } }
+html[data-vt="taverna"] .vt-hud { left: 50%; top: 50%; width: 600px; margin: -90px 0 0 -300px; padding: 30px 40px 32px; text-align: center; color: #2b1d12;
+  background: radial-gradient(ellipse at 50% 40%, #f6ead0, #e6d2a2 75%, #d8bf88); box-shadow: inset 0 0 34px rgba(120, 80, 30, .4); }
+html[data-vt="taverna"] .vt-hud > :is(.vt-k, .vt-name) { display: block; }
+html[data-vt="taverna"] .vt-k { font: italic 400 17px/1.2 "IM Fell English", Georgia, serif; color: #7a603e; }
+html[data-vt="taverna"] .vt-name { margin-top: 6px; font: 400 68px/1 "Pirata One", Georgia, serif; color: #8e1b1b; }
+html.vt-run[data-vt="taverna"] .vt-hud { animation: vt-ta-hud 1650ms both; }
+@keyframes vt-ta-hud {
+  0%, 14% { opacity: 0; clip-path: inset(0 50% 0 50%); }
+  16% { opacity: 1; clip-path: inset(0 49% 0 49%); animation-timing-function: cubic-bezier(.4, 0, .2, 1); }
+  40%, 62% { opacity: 1; clip-path: inset(0); }
+  70%, 100% { opacity: 0; clip-path: inset(0); }
+}
+
+/* ---------- Disquete: a janela de antes minimiza, a caixa "Instalando..." copia os arquivos e a nova abre em retângulos ---------- */
+html[data-vt="disquete"] { --vt-t: 1700ms; }
+html[data-vt="disquete"]::view-transition-old(root) { transform-origin: 0 100%; animation: vt-dq-old 360ms steps(6, end) both; }
+@keyframes vt-dq-old { 0% { transform: none; opacity: 1; } 99% { transform: scale(.06); opacity: 1; } 100% { transform: scale(.06); opacity: 0; } }
+html[data-vt="disquete"]::view-transition-new(root) { animation: vt-dq-new 1700ms steps(1, end) both; }
+@keyframes vt-dq-new {
+  0%, 77% { opacity: 0; clip-path: inset(50%); }
+  78% { opacity: 1; clip-path: inset(38%); }
+  82% { clip-path: inset(26%); }
+  86% { clip-path: inset(15%); }
+  90% { clip-path: inset(6%); }
+  94%, 100% { opacity: 1; clip-path: inset(0); }
+}
+/* a área de trabalho verde-azulada atrás da caixa, e o contorno pontilhado que cresce antes de a janela nova abrir */
+html[data-vt="disquete"] .vt-fx > i:nth-child(1) { display: block; inset: 0; background: #008080; }
+html.vt-run[data-vt="disquete"] .vt-fx > i:nth-child(1) { animation: vt-dq-mesa 1700ms steps(1, end) both; }
+@keyframes vt-dq-mesa { 0%, 16% { opacity: 0; } 17%, 93% { opacity: 1; } 94%, 100% { opacity: 0; } }
+html[data-vt="disquete"] .vt-fx > i:nth-child(2) { display: block; inset: 4%; border: 2px dotted #fff; opacity: 0; }
+html.vt-run[data-vt="disquete"] .vt-fx > i:nth-child(2) { animation: vt-dq-zoom 1700ms steps(1, end) both; }
+@keyframes vt-dq-zoom { 0%, 69% { opacity: 0; } 70% { opacity: 1; transform: scale(.12); } 72% { transform: scale(.3); } 74% { transform: scale(.5); } 76% { transform: scale(.75); } 78%, 100% { opacity: 0; transform: none; } }
+html[data-vt="disquete"] .vt-hud { left: 50%; top: 50%; width: 400px; margin: -74px 0 0 -200px; padding: 34px 14px 14px; background: #c0c0c0; color: #000; font: 400 12px/1.35 "Microsoft Sans Serif", Tahoma, sans-serif;
+  box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #ffffff, 3px 3px 0 rgba(0, 0, 0, .35); }
+html[data-vt="disquete"] .vt-hud > :is(.vt-k, .vt-name, .vt-bar, .vt-pct) { display: block; }
+/* "Instalando..." é a barra de título da caixa */
+html[data-vt="disquete"] .vt-k { position: absolute; left: 3px; right: 3px; top: 3px; height: 20px; padding: 0 6px; background: linear-gradient(90deg, #000080, #1084d0); color: #fff; font: 700 12px/20px "Microsoft Sans Serif", Tahoma, sans-serif; }
+html[data-vt="disquete"] .vt-name { margin-bottom: 10px; font: 700 12px/1.3 "Microsoft Sans Serif", Tahoma, sans-serif; }
+html[data-vt="disquete"] .vt-name::before { content: 'Copiando o tema '; font-weight: 400; }
+html[data-vt="disquete"] .vt-name::after { content: '...'; font-weight: 400; }
+html[data-vt="disquete"] .vt-bar { height: 20px; padding: 3px; background: #fff; box-shadow: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a; }
+html[data-vt="disquete"] .vt-bar > i { background: repeating-linear-gradient(90deg, #000080 0 9px, transparent 9px 11px); }
+html[data-vt="disquete"] .vt-pct { position: absolute; right: 14px; top: 34px; font: 400 12px/1.3 "Microsoft Sans Serif", Tahoma, sans-serif; }
+html.vt-run[data-vt="disquete"] .vt-hud { animation: vt-dq-hud 1700ms steps(1, end) both; }
+@keyframes vt-dq-hud { 0%, 17% { opacity: 0; } 18%, 68% { opacity: 1; } 69%, 100% { opacity: 0; } }
+html.vt-run[data-vt="disquete"] .vt-bar > i { animation: vt-fill 760ms 360ms steps(14, end) both; }
+html.vt-run[data-vt="disquete"] .vt-pct { animation: vt-count 760ms 360ms steps(14, end) both; }
+
 /* ---------- Caderno: a folha de antes vira para a esquerda e mostra a página nova ---------- */
 html[data-vt="caderno"] { --vt-t: 1500ms; }
 html[data-vt="caderno"]::view-transition-old(root) { z-index: 2; transform-origin: 0 50%; animation: vt-ca-turn 980ms 60ms cubic-bezier(.5, .02, .45, 1) both; }

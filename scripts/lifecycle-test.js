@@ -94,7 +94,7 @@ async function pageA() {
       check('novidades: só conta como vista depois de fechar', localStorage.getItem(K) === null);
       const cards = [...document.querySelectorAll('#news-body .news-theme')];
       const on = () => cards.filter((c) => c.classList.contains('on')).map((c) => c.dataset.id).join(',');
-      check('novidades: galeria com todos os temas e o atual marcado', cards.length === window.Themes.list.length && on() === window.Themes.current, cards.length + ' cartões; marcado=' + on());
+      check('novidades: galeria com todos os temas (dia e noite num cartão só) e o atual marcado', cards.length === window.ThemePicker.groups().length && on() === window.Themes.current, cards.length + ' cartões; marcado=' + on());
       await Promise.all(cards.map((c) => c.querySelector('img')).filter(Boolean).map((im) => im.decode().catch(() => {})));
       const noImg = cards.filter((c) => { const im = c.querySelector('img'); return !im || !im.naturalWidth; }).map((c) => c.dataset.id);
       check('novidades: a miniatura de cada tema carregou', noImg.length === 0, noImg.join(','));
@@ -120,6 +120,38 @@ async function pageA() {
       localStorage.setItem(K, real);
       N.check({ known: true, current: real });
       if (keep.seen === null) localStorage.removeItem(K); else localStorage.setItem(K, keep.seen);
+    }
+
+    // ---------------------------------------------------------------- 0a) "Escolher tema": a lista de tema abre a galeria
+    {
+      const T = window.Themes, P = window.ThemePicker, keep = T.current;
+      const isOpen = () => !$('#theme-modal').classList.contains('hidden');
+      const cards = () => [...document.querySelectorAll('#theme-body .news-theme')];
+      const md = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+      $('#theme-pick').dispatchEvent(md);
+      check('escolher tema: clicar na lista de tema (rodapé) abre a galeria, sem a lista', isOpen() && md.defaultPrevented);
+      const groups = P.groups();
+      check('escolher tema: um cartão por tema, dia e noite juntos (3 linhas de 5 com os 15)', cards().length === groups.length && groups.length === T.list.length - groups.filter((g) => g.items.length > 1).reduce((n, g) => n + g.items.length - 1, 0),
+        `${cards().length} cartões de ${T.list.length} temas`);
+      const cols = getComputedStyle(document.querySelector('#theme-body .news-themes')).gridTemplateColumns.split(' ').length;
+      check('escolher tema: 5 por linha', cols === 5, String(cols));
+      const two = cards().find((c) => c.querySelector('.nt-vars b'));
+      if (two) {
+        const night = [...two.querySelectorAll('.nt-vars b')].pop();
+        night.click();
+        check('escolher tema: "noite" no cartão troca para a versão da noite e marca o cartão', T.current === night.dataset.v && two.classList.contains('on') && two.dataset.id === night.dataset.v,
+          `${T.current} · cartão ${two.dataset.id}`);
+        const plain = cards().find((c) => !c.querySelector('.nt-vars') && !c.classList.contains('on'));
+        plain.click();
+        check('escolher tema: clicar num cartão troca na hora e a janela fica aberta', T.current === plain.dataset.id && plain.classList.contains('on') && !two.classList.contains('on') && isOpen());
+      } else check('escolher tema: há cartão com dia e noite', false);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      check('escolher tema: Esc fecha', !isOpen());
+      $('#opt-theme').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      check('escolher tema: Enter na lista de tema das Opções também abre', isOpen());
+      $('#theme-ok').click();
+      check('escolher tema: "Pronto" fecha', !isOpen());
+      T.set(keep);
     }
 
     // ---------------------------------------------------------------- 0b) Troca de tema com a animação de instalação

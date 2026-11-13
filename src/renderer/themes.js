@@ -121,6 +121,39 @@
         '#chat-input@placeholder': 'Mensagem para a sala',
       },
     },
+    {
+      id: 'cyberpunk', name: 'Cyberpunk', bar: ['#07080e', '#c8ff1e'],
+      tile: { frame: [12, 12] },
+      text: {
+        '.sidebar h3 .h3-t': 'Conectados',
+        '#chat-input@placeholder': '> mensagem para a sala_',
+      },
+    },
+    {
+      id: 'gibi', name: 'Gibi', bar: ['#ffffff', '#141414'],
+      tile: { frame: [6, 6] },
+      text: {
+        '.sidebar h3 .h3-t': 'A turma',
+        '#chat-input@placeholder': 'Fala aí...',
+      },
+    },
+    {
+      id: 'taverna', name: 'Taverna', bar: ['#2e1d10', '#f0c76a'],
+      tile: { frame: [14, 14] },
+      text: {
+        '.sidebar h3 .h3-t': 'O grupo',
+        '#chat-input@placeholder': 'Diga algo ao grupo...',
+        '.lobby-head p': 'Reúna o grupo: a tela de cada um em 60 fps, direto de PC para PC.',
+      },
+    },
+    {
+      id: 'disquete', name: 'Disquete', bar: ['#c0c0c0', '#000000'],
+      tile: { frame: [8, 29] },
+      text: {
+        '.sidebar h3 .h3-t': 'Usuários conectados',
+        '#chat-input@placeholder': 'Digite uma mensagem',
+      },
+    },
   ];
   const byId = (id) => THEMES.find((t) => t.id === id);
   const stored = () => {
@@ -312,6 +345,7 @@
     classico: 'Instalando', arena: 'Instalando', varanda: 'Montando a', 'varanda-noite': 'Montando a', neon: 'Ligando',
     galeria: 'Nova exposição', 'galeria-noite': 'Nova exposição', caderno: 'virando a página…', planta: 'Folha', terminal: '$ tela-amigos --tema terminal',
     sessao: 'A sessão vai começar', fliperama: 'Loading', tocafitas: 'lado A',
+    cyberpunk: '// conectando', gibi: 'Edição especial', taverna: 'Uma nova aventura:', disquete: 'Instalando...',
   };
   const LOG = ['baixando as cores', 'trocando as letras', 'arrumando a sala', 'pronto'];
   let active = null; // transição em andamento

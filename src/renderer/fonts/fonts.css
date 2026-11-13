@@ -70,3 +70,19 @@
 /* Rubik (Toca-fitas) */
 @font-face { font-family: "Rubik"; font-style: normal; font-weight: 400; font-display: block; src: url("rubik-latin-400-normal.woff2") format("woff2"); }
 @font-face { font-family: "Rubik"; font-style: normal; font-weight: 500; font-display: block; src: url("rubik-latin-500-normal.woff2") format("woff2"); }
+/* Chakra Petch (Cyberpunk) */
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 400; font-display: block; src: url("chakra-petch-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 500; font-display: block; src: url("chakra-petch-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 600; font-display: block; src: url("chakra-petch-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 700; font-display: block; src: url("chakra-petch-latin-700-normal.woff2") format("woff2"); }
+/* Bangers (Gibi) */
+@font-face { font-family: "Bangers"; font-style: normal; font-weight: 400; font-display: block; src: url("bangers-latin-400-normal.woff2") format("woff2"); }
+/* Comic Neue (Gibi) */
+@font-face { font-family: "Comic Neue"; font-style: normal; font-weight: 400; font-display: block; src: url("comic-neue-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Comic Neue"; font-style: normal; font-weight: 700; font-display: block; src: url("comic-neue-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Comic Neue"; font-style: italic; font-weight: 400; font-display: block; src: url("comic-neue-latin-400-italic.woff2") format("woff2"); }
+/* Pirata One (Taverna) */
+@font-face { font-family: "Pirata One"; font-style: normal; font-weight: 400; font-display: block; src: url("pirata-one-latin-400-normal.woff2") format("woff2"); }
+/* IM Fell English (Taverna) */
+@font-face { font-family: "IM Fell English"; font-style: normal; font-weight: 400; font-display: block; src: url("im-fell-english-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IM Fell English"; font-style: italic; font-weight: 400; font-display: block; src: url("im-fell-english-latin-400-italic.woff2") format("woff2"); }
