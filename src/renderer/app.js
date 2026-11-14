@@ -869,7 +869,7 @@ function onRelay(from, data) {
     case 'ink':
       if (Array.isArray(data.segs)) {
         const segs = data.segs.slice(0, drawBudget(peer, 'ink', 200, 600)).filter((sg) => Array.isArray(sg) && sg.length === 4 && sg.every((v) => Number.isFinite(v) && v >= 0 && v <= 1));
-        if (segs.length) showInk(data.target, from, peer.name, segs);
+        if (segs.length) showInk(data.target, from, peer.name, segs, senderTheme(data.th));
       }
       break;
     case 'ink-clear': clearInk(data.target, from); break;
@@ -883,18 +883,18 @@ function onRelay(from, data) {
       break;
     case 'react':
       if (typeof data.emoji === 'string' && data.emoji.length <= 8) {
-        showReaction(String(data.target), data.emoji, peer.name);
+        showReaction(String(data.target), data.emoji, peer.name, senderTheme(data.th));
         // emote na MINHA tela: sobe também no meu monitor
         if (sendToMyDesktop(String(data.target), from, 'react')) {
-          deskSend('react', { displayId: state.share.source.displayId, emoji: data.emoji, name: peer.name, color: `hsl(${nameHue(peer.name)}, 85%, 55%)` });
+          deskSend('react', { displayId: state.share.source.displayId, emoji: data.emoji, name: peer.name, color: `hsl(${nameHue(peer.name)}, 85%, 55%)`, th: senderTheme(data.th) });
         }
       }
       break;
     case 'point':
-      if (Number.isFinite(data.x) && Number.isFinite(data.y) && drawBudget(peer, 'point', 1, 400)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y, !!data.draw);
+      if (Number.isFinite(data.x) && Number.isFinite(data.y) && drawBudget(peer, 'point', 1, 400)) showLaser(String(data.target), peer.id, peer.name, data.x, data.y, !!data.draw, senderTheme(data.th));
       break;
     case 'press':
-      if (Number.isFinite(data.x) && Number.isFinite(data.y) && drawBudget(peer, 'point', 1, 400)) showPress(String(data.target), peer.id, peer.name, data.x, data.y);
+      if (Number.isFinite(data.x) && Number.isFinite(data.y) && drawBudget(peer, 'point', 1, 400)) showPress(String(data.target), peer.id, peer.name, data.x, data.y, senderTheme(data.th));
       break;
     case 'point-end':
       hideLaser(String(data.target), peer.id);
@@ -3142,13 +3142,20 @@ function sendChat() {
   addChat(state.myName, text);
 }
 
-function showReaction(target, emoji, from) {
+// O emote, a mãozinha e o risco de cada um aparecem para todos no tema de QUEM FEZ (não no de quem vê): cada mensagem
+// leva o tema de quem mandou ("th"). De uma versão antiga não vem: aí vale o meu.
+function senderTheme(th) {
+  return typeof th === 'string' && window.Themes.list.some((t) => t.id === th) ? th : window.Themes.current;
+}
+
+function showReaction(target, emoji, from, th = window.Themes.current) {
   const tile = tileByOwner(target);
   if (!tile || !tile.el.isConnected) return;
   const e = document.createElement('div');
   e.className = 'float-emoji';
+  e.dataset.fx = window.ThemeFx.base(th); // o visual da etiqueta e do jeito de subir (fx.css) também é o de quem mandou
   e.style.left = `${15 + Math.random() * 70}%`;
-  const art = window.ThemeFx.emote(window.Themes.current, emoji); // desenho do tema; sem ele, o emoji de sempre
+  const art = window.ThemeFx.emote(th, emoji); // desenho do tema de quem mandou; sem ele, o emoji de sempre
   if (art) e.innerHTML = art; else e.textContent = emoji;
   const s = document.createElement('small');
   s.textContent = from;
@@ -3190,10 +3197,10 @@ function trailLayer(tile) {
     // rastro some em 2,5 s; caneta fica INK_LIFE e só esmaece no final
     tile.trailLines = tile.trailLines.filter((s) => now - s.t < (s.life || 2500));
     const b = videoBox(tile);
-    // o tema pode ter o seu jeito de riscar (ver fx.js); sem isso, o risco de sempre
-    const themed = window.ThemeFx.drawLines(g, window.Themes.current, tile.trailLines, now,
+    // cada risco no jeito do tema de quem fez (ver fx.js); os de temas sem um jeito próprio, no risco de sempre
+    const plain = window.ThemeFx.drawEach(g, window.Themes.current, tile.trailLines, now,
       { x: b.left - r.left, y: b.top - r.top, w: b.width, h: b.height }, { pen: 4, trail: 5 });
-    for (const s of themed ? [] : tile.trailLines) {
+    for (const s of plain) {
       const age = now - s.t;
       g.globalAlpha = s.life ? Math.max(0, Math.min(1, (s.life - age) / 1200)) : Math.max(0, 1 - age / 2500);
       g.strokeStyle = s.color;
@@ -3231,17 +3238,17 @@ function drawBudget(peer, kind, n, perSec) {
 // Botão de caneta numa tela: arrastar com o botão esquerdo desenha; os traços ficam INK_LIFE
 // para todos (e no monitor de quem transmite) e depois somem. "Apagar" tira os seus na hora.
 const INK_LIFE = 8000;
-function showInk(target, fromId, name, segs) {
+function showInk(target, fromId, name, segs, th = window.Themes.current) {
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
   const tile = tileByOwner(target);
   if (tile && tile.el.isConnected && !tile.swapped) { // trocada: a imagem grande é a 2ª tela
     trailLayer(tile);
     const t = performance.now();
-    for (const [x1, y1, x2, y2] of segs) tile.trailLines.push({ x1, y1, x2, y2, color, t, life: INK_LIFE, from: fromId });
+    for (const [x1, y1, x2, y2] of segs) tile.trailLines.push({ x1, y1, x2, y2, color, t, life: INK_LIFE, from: fromId, th });
     tile.trailDraw();
   }
   if (sendToMyDesktop(target, fromId, 'ink')) {
-    deskSend('ink', { displayId: state.share.source.displayId, id: fromId, segs, color, life: INK_LIFE });
+    deskSend('ink', { displayId: state.share.source.displayId, id: fromId, segs, color, life: INK_LIFE, th });
   }
 }
 function clearInk(target, fromId) {
@@ -3286,7 +3293,7 @@ function attachPen(tile, id) {
     if (!batch.length) return;
     const segs = batch.map((sg) => sg.map((v) => Math.round(v * 10000) / 10000));
     batch = [];
-    sendRelay(null, { kind: 'ink', target: ownerKey(id), segs });
+    sendRelay(null, { kind: 'ink', target: ownerKey(id), segs, th: window.Themes.current });
   };
   tile.el.addEventListener('pointerdown', (e) => {
     if (!tile.pen || e.button !== 0 || e.target.closest('.tile-bar, .react-bar, .pen-tools, .cam-pip')) return;
@@ -3326,7 +3333,7 @@ function sendToMyDesktop(target, fromId, kind = 'hand') {
 }
 
 const frac01 = (v) => Math.min(1, Math.max(0, Number(v) || 0));
-function showLaser(target, fromId, name, x, y, drawing = false) {
+function showLaser(target, fromId, name, x, y, drawing = false, th = window.Themes.current) {
   // posição dentro da imagem (0..1); o que vem de um amigo pode ser qualquer número
   x = frac01(x); y = frac01(y);
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
@@ -3334,10 +3341,14 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
   if (tile && tile.el.isConnected && !tile.swapped) {
     tile.lasers = tile.lasers || {};
     let l = tile.lasers[fromId];
+    // quem aponta trocou de tema no meio: a mãozinha é refeita no tema novo
+    if (l && l.dataset.th !== th) { clearTimeout(l.timer); l.remove(); delete tile.lasers[fromId]; l = null; }
     if (!l) {
       l = document.createElement('div');
       l.className = 'hand';
-      const art = window.ThemeFx.hand(window.Themes.current, 34); // a mãozinha do tema; a ponta do dedo continua no ponto
+      l.dataset.th = th;
+      l.dataset.fx = window.ThemeFx.base(th);
+      const art = window.ThemeFx.hand(th, 34); // a mãozinha do tema de quem aponta; a ponta do dedo continua no ponto
       l.innerHTML = art ? art.html : HAND_SVG;
       if (art) { l.style.margin = `${-art.tip[1]}px 0 0 ${-art.tip[0]}px`; l.style.transformOrigin = `${art.tip[0]}px ${art.tip[1]}px`; }
       const tag = document.createElement('span');
@@ -3350,7 +3361,7 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
     // rastro: liga o ponto anterior a este
     if (drawing && l.lastX != null) {
       trailLayer(tile);
-      tile.trailLines.push({ x1: l.lastX, y1: l.lastY, x2: x, y2: y, color, t: performance.now() });
+      tile.trailLines.push({ x1: l.lastX, y1: l.lastY, x2: x, y2: y, color, t: performance.now(), th });
       tile.trailDraw();
     }
     l.lastX = drawing ? x : null;
@@ -3366,15 +3377,15 @@ function showLaser(target, fromId, name, x, y, drawing = false) {
   const handOk = sendToMyDesktop(target, fromId, 'hand');
   const inkOk = drawing && sendToMyDesktop(target, fromId, 'ink');
   if (handOk || inkOk) {
-    deskSend('pointer', { displayId: state.share.source.displayId, id: fromId, x, y, color, name, drawing: inkOk, noHand: !handOk });
+    deskSend('pointer', { displayId: state.share.source.displayId, id: fromId, x, y, color, name, drawing: inkOk, noHand: !handOk, th });
   }
 }
 
 // "apertar": a mão faz o gesto e sai uma ondinha no ponto
-function showPress(target, fromId, name, x, y) {
+function showPress(target, fromId, name, x, y, th = window.Themes.current) {
   x = frac01(x); y = frac01(y);
   const color = `hsl(${nameHue(name)}, 85%, 55%)`;
-  showLaser(target, fromId, name, x, y);
+  showLaser(target, fromId, name, x, y, false, th);
   const tile = tileByOwner(target);
   if (tile && tile.el.isConnected && !tile.swapped) {
     const l = tile.lasers && tile.lasers[fromId];
@@ -3382,6 +3393,7 @@ function showPress(target, fromId, name, x, y) {
     const b = videoBox(tile), er = tile.screen.getBoundingClientRect();
     const r = document.createElement('div');
     r.className = 'press-ripple';
+    r.dataset.fx = window.ThemeFx.base(th);
     r.style.setProperty('--c', color);
     r.style.left = `${b.left - er.left + x * b.width}px`;
     r.style.top = `${b.top - er.top + y * b.height}px`;
@@ -3389,7 +3401,7 @@ function showPress(target, fromId, name, x, y) {
     setTimeout(() => r.remove(), 700);
   }
   if (sendToMyDesktop(target, fromId)) {
-    deskSend('pointer', { displayId: state.share.source.displayId, id: fromId, x, y, color, name, press: true });
+    deskSend('pointer', { displayId: state.share.source.displayId, id: fromId, x, y, color, name, press: true, th });
   }
 }
 
@@ -3420,7 +3432,7 @@ function attachInteractions(tile, id) {
     b.onclick = (e) => {
       e.stopPropagation();
       const target = ownerKey(id);
-      sendRelay(null, { kind: 'react', target, emoji });
+      sendRelay(null, { kind: 'react', target, emoji, th: window.Themes.current });
       showReaction(target, emoji, state.myName);
     };
     b.ondblclick = (e) => e.stopPropagation();
@@ -3448,13 +3460,13 @@ function attachInteractions(tile, id) {
     const { x, y } = pos(e);
     const target = ownerKey(id);
     const drawing = e.shiftKey;
-    sendRelay(null, { kind: 'point', target, x, y, draw: drawing });
+    sendRelay(null, { kind: 'point', target, x, y, draw: drawing, th: window.Themes.current });
     showLaser(target, 'me', state.myName, x, y, drawing);
   };
   const press = (e) => {
     const { x, y } = pos(e);
     const target = ownerKey(id);
-    sendRelay(null, { kind: 'press', target, x, y });
+    sendRelay(null, { kind: 'press', target, x, y, th: window.Themes.current });
     showPress(target, 'me', state.myName, x, y);
   };
   tile.el.addEventListener('contextmenu', (e) => e.preventDefault());

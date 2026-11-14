@@ -26,7 +26,7 @@ Para jogar junto, assistir junto e mostrar o que você está fazendo, com vária
 - **Sobreposição:** a tela de um amigo numa janelinha sempre por cima do jogo.
 - **Assistir junto:** o "Todo mundo pronto?" conta 3, 2, 1 e dá play no vídeo na hora certa.
 - **Chat, câmera, zoom e volume por amigo** (até 300%), com o som de todos nivelado.
-- **15 temas** para mudar a cara do app, cada um com os próprios emotes, animações e jeito de desenhar.
+- **15 temas** para mudar a cara do app, cada um com os próprios emotes, animações e jeito de desenhar. O que você põe na tela de um amigo (emotes, a mãozinha, os riscos da caneta) aparece para todos no seu tema.
 
 <div align="center">
 <img src="docs/img/caneta.png" width="820" alt="Riscos, mãozinhas e emotes dos amigos em cima da tela da Bia">
@@ -78,7 +78,7 @@ Limite o FPS do jogo um pouco abaixo da taxa do monitor (por exemplo, 141 num mo
 <details>
 <summary><b>Meus amigos veem o meu tema?</b></summary>
 
-Não. O tema vale só no seu PC. Os emotes que você manda chegam para cada amigo no tema dele.
+A cara do app é só sua: cada amigo escolhe a dele. Mas os emotes, a mãozinha e os riscos da caneta que você põe na tela de alguém aparecem para todos no seu tema, não importa o tema de quem vê.
 </details>
 
 <details>

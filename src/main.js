@@ -803,13 +803,16 @@ function destroyHand(id) {
   handWins.delete(id);
 }
 
+// o tema de quem fez o emote/mãozinha/risco (vem do app; só um nome de tema)
+const fxThOf = (v) => (typeof v === 'string' && /^[a-z0-9-]{1,30}$/.test(v) ? v : null);
+
 ipcMain.on('pointer:show', (_e, p) => {
   if (!p || typeof p !== 'object') return;
   const d = displayById(p.displayId);
   // a posição vem do amigo (fração 0..1 da tela transmitida): fora disso a mãozinha iria parar em
   // outro monitor, e um número absurdo fazia a criação da janela lançar erro a cada movimento
   const frac = (v) => Math.min(1, Math.max(0, Number(v) || 0));
-  p = { ...p, x: frac(p.x), y: frac(p.y) };
+  p = { ...p, x: frac(p.x), y: frac(p.y), th: fxThOf(p.th) };
   const px = Math.round(d.bounds.x + p.x * d.bounds.width - HAND_TIP.x);
   const py = Math.round(d.bounds.y + p.y * d.bounds.height - HAND_TIP.y);
   // noHand: a pessoa escondeu as mãozinhas mas quer ver os desenhos
@@ -821,7 +824,7 @@ ipcMain.on('pointer:show', (_e, p) => {
     } else {
       h.win.setPosition(px, py);
     }
-    sendWhenReady(h.win, 'pointer', { ...p, theme: fxTheme }, true);
+    sendWhenReady(h.win, 'pointer', { ...p, theme: p.th || fxTheme }, true); // a janelinha é de um amigo só: o tema dele
     clearTimeout(h.timer);
     h.timer = setTimeout(() => destroyHand(p.id), 1500);
   } else destroyHand(p.id);
@@ -853,7 +856,7 @@ ipcMain.on('react:show', (_e, p) => {
     trailDisplay = d.id;
     trailDeadline = 0;
   }
-  sendWhenReady(trailWin, 'pointer', { react: String(p.emoji).slice(0, 8), name: String(p.name || '').slice(0, 30), color: p.color, theme: fxTheme }, true);
+  sendWhenReady(trailWin, 'pointer', { react: String(p.emoji).slice(0, 8), name: String(p.name || '').slice(0, 30), color: p.color, th: fxThOf(p.th), theme: fxTheme }, true);
   trailDeadline = Math.max(trailDeadline, Date.now() + 3000);
   clearTimeout(trailTimer);
   trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, trailDeadline - Date.now());
@@ -874,7 +877,7 @@ ipcMain.on('ink:show', (_e, p) => {
     trailDisplay = d.id;
     trailDeadline = 0;
   }
-  sendWhenReady(trailWin, 'pointer', { inkSegs: p.segs, color: p.color, life: p.life, id: p.id, theme: fxTheme }, true);
+  sendWhenReady(trailWin, 'pointer', { inkSegs: p.segs, color: p.color, life: p.life, id: p.id, th: fxThOf(p.th), theme: fxTheme }, true);
   trailDeadline = Math.max(trailDeadline, Date.now() + (Number(p.life) || 8000) + 500);
   clearTimeout(trailTimer);
   trailTimer = setTimeout(() => { if (trailWin && !trailWin.isDestroyed()) trailWin.destroy(); trailWin = null; }, trailDeadline - Date.now());

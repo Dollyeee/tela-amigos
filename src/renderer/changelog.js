@@ -13,6 +13,16 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.71',
+    title: 'Seus emotes no seu tema',
+    items: [
+      'Agora os **emotes**, a **mãozinha** e os **riscos da caneta** que você põe na tela de um amigo aparecem para todos no **seu** tema, não importa o tema de quem vê. Mandou um emote no Gibi? Todo mundo vê o estouro de quadrinho.',
+      'Vale também no monitor de quem transmite, por cima do jogo.',
+      'Quem ainda não atualizou continua vendo no tema dele até atualizar.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.70',
     title: 'Salas favoritas',
     items: [

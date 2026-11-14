@@ -29,11 +29,12 @@
   const classic = hand.innerHTML;
   let theme = null;
   window.pointerApi.onPointer((p) => {
-    // a mãozinha sai no desenho do tema de quem está neste PC (ver fx.js)
+    // a mãozinha sai no desenho do tema de quem aponta (o processo principal manda; sem ele, o deste PC; ver fx.js)
     const t = String(p.theme || 'classico');
     if (t !== theme) {
       theme = t;
       document.documentElement.dataset.theme = t;
+      hand.dataset.fx = tag.dataset.fx = window.ThemeFx.base(t);
       const art = window.ThemeFx.hand(t, 44);
       hand.innerHTML = art ? art.html : classic;
       // a ponta do dedo fica sempre em 60,50 na janelinha: é onde o processo principal põe o ponto apontado
@@ -47,6 +48,7 @@
       hand.classList.remove('pressing'); void hand.offsetWidth; hand.classList.add('pressing');
       const r = document.createElement('div');
       r.className = 'ripple';
+      r.dataset.fx = hand.dataset.fx || '';
       document.body.appendChild(r);
       setTimeout(() => r.remove(), 700);
     }

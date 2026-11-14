@@ -361,6 +361,26 @@ async function pageA() {
       else check('quem codifica a transmissão adaptativa: placa ligada no Chromium, sem aviso', !!sh && sh.gpuEnc === 'enabled' && !sh.soft, got);
     }
 
+    // ---------------------------------------------------------------- 4c) emote, mãozinha e risco no tema de QUEM FEZ
+    {
+      const cur = window.Themes.current;
+      check('tema de quem fez: tema que existe vale; desconhecido ou ausente (versão antiga) vira o meu',
+        senderTheme('gibi') === 'gibi' && senderTheme('tema-que-nao-existe') === cur && senderTheme(undefined) === cur);
+      const sent = [];
+      const realSend = sendRelay;
+      sendRelay = (to, msg) => { sent.push(msg); };
+      try {
+        const btn = meTile && meTile.el.querySelector('.react-bar button');
+        if (btn) btn.click();
+        check('tema de quem fez: o emote que eu mando leva o meu tema', sent.some((m) => m.kind === 'react' && m.th === cur), sent.map((m) => `${m.kind}:${m.th}`).join(' '));
+      } finally { sendRelay = realSend; }
+      if (meTile) meTile.el.querySelectorAll('.float-emoji').forEach((e) => e.remove());
+      const now = performance.now();
+      const plain = window.ThemeFx.drawEach(document.createElement('canvas').getContext('2d'), 'classico',
+        [{ x1: 0, y1: 0, x2: 1, y2: 1, color: '#f00', t: now, th: 'gibi' }, { x1: 0, y1: 0, x2: 1, y2: 1, color: '#f00', t: now }], now, { x: 0, y: 0, w: 10, h: 10 }, { pen: 4, trail: 5 });
+      check('tema de quem fez: cada risco no tema dele (o de tema sem risco próprio fica com o de sempre)', plain.length === 1 && !plain[0].th);
+    }
+
     // ---------------------------------------------------------------- 5) caneta depois de a tela sair da página
     if (meTile && meTile.el.isConnected) {
       // a janela escondida do teste não desenha quadros: o desenho do app passa a andar por temporizador

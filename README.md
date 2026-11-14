@@ -28,7 +28,7 @@ English · [Português](README.pt-BR.md)
 - **Overlay:** keep a friend's screen in a small window always on top of your game.
 - **Watch together:** "Todo mundo pronto?" (everyone ready?) counts down 3, 2, 1 and hits play on the video at the right moment.
 - **Chat, webcam, zoom and per-friend volume** (up to 300%), with everyone's audio leveled.
-- **15 themes** to change the look of the app, each with its own emotes, animations and drawing style.
+- **15 themes** to change the look of the app, each with its own emotes, animations and drawing style. What you put on a friend's screen (emotes, the pointing hand, pen strokes) shows up for everyone in your theme.
 
 <div align="center">
 <img src="docs/img/caneta.png" width="820" alt="Friends' strokes, pointing hands and emotes on top of Bia's screen">
@@ -80,7 +80,7 @@ Cap your game's FPS a little below your monitor's refresh rate (for example, 141
 <details>
 <summary><b>Do my friends see my theme?</b></summary>
 
-No. The theme only applies on your PC. The emotes you send show up for each friend in their own theme.
+The look of the app is yours alone: each friend picks their own. But the emotes, the pointing hand and the pen strokes you put on someone's screen show up for everyone in your theme, whatever theme they're using.
 </details>
 
 <details>

@@ -2,8 +2,11 @@
 // e o risco da caneta e do rastro. Este arquivo serve à janela principal e às janelas que ficam por cima do
 // monitor de quem transmite (pointer.html e hand.html), por isso não depende do app.js nem do themes.js.
 //
-// O que viaja entre os amigos não muda (o emoji, a posição, os traços): cada um desenha do jeito do tema
-// que escolheu. No visual clássico nada daqui é usado (emoji do Windows, mãozinha e risco de sempre).
+// Cada coisa aparece para todos no tema de QUEM FEZ (pedido de 2026-11-14: "os emojis do meu tema apareçam para os
+// amigos no meu tema, n importando o tema deles"): o emote, a mãozinha e o risco viajam com o tema de quem mandou
+// ("th"); de uma versão antiga não vem, e aí vale o tema de quem vê. O visual de cada peça no fx.css segue a marca
+// data-fx (o tema-base de quem fez) da própria peça, não o tema da página. No Clássico nada daqui é usado (emoji do
+// Windows, mãozinha e risco de sempre).
 (() => {
   // os seis emotes do app, pelo que significam
   const KIND = { '😂': 'laugh', '🔥': 'fire', '👍': 'like', '😮': 'wow', '💀': 'skull', '❤️': 'heart', '❤': 'heart' };
@@ -373,6 +376,8 @@
   const light = (color) => { const m = /hsl\(\s*(\d+)/.exec(color || ''); return m ? `hsl(${m[1]}, 100%, 88%)` : '#ffffff'; };
 
   window.ThemeFx = {
+    // o tema-base (a marca data-fx de cada peça): "varanda-noite" -> "varanda"
+    base,
     // desenho do emote no tema (texto de SVG), ou null para usar o emoji de sempre
     emote(theme, emoji) {
       const draw = EMOTES[base(theme)];
@@ -427,6 +432,19 @@
       g.globalAlpha = 1;
       g.setLineDash([]);
       return true;
+    },
+    // Como drawLines, mas cada traço no tema de quem o fez (s.th; sem ele, "theme"). Devolve os traços que ficam com o
+    // risco de sempre (o tema deles não tem um próprio), para quem chamou desenhar.
+    drawEach(g, theme, segs, now, box, widths) {
+      const byTheme = new Map();
+      for (const s of segs) {
+        const t = base(s.th || theme);
+        if (!byTheme.has(t)) byTheme.set(t, []);
+        byTheme.get(t).push(s);
+      }
+      const plain = [];
+      for (const [t, list] of byTheme) if (!this.drawLines(g, t, list, now, box, widths)) plain.push(...list);
+      return plain;
     },
   };
 })();
