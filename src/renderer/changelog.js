@@ -13,6 +13,15 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.70',
+    title: 'Salas favoritas',
+    items: [
+      'Na lista de salas da tela de entrada, clique na **estrela** de uma sala para favoritar: as favoritas ficam no topo e continuam na lista mesmo fechadas, prontas para entrar quando abrirem.',
+      'Ajuda quem está em mais de uma rede do Radmin (ou num grupo grande) e vê várias salas ao mesmo tempo. Para tirar, é só clicar na estrela de novo.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.69',
     title: 'Quatro temas novos e a tela de escolher tema',
     text: 'Chegaram o Cyberpunk, o Gibi, a Taverna e o Disquete. E agora, ao clicar em "Tema", abre esta tela com a prévia de todos: clique num para experimentar.',

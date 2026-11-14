@@ -539,6 +539,15 @@ input::placeholder { color: #5d6376; }
 .rooms li { background: #0e1016; border-color: var(--line-soft); border-radius: 11px; transition: border-color .15s; }
 .rooms li:hover { border-color: #343a4b; }
 .rooms .empty-rooms { border-color: var(--line); }
+/* salas favoritas: a estrela na frente de cada sala (igual em todos os temas; dourada quando marcada) */
+.rooms .room-fav { display: grid; place-items: center; flex: none; width: 26px; height: 26px; margin: 0 -4px 0 -4px; border-radius: 6px; color: var(--muted);
+  cursor: pointer; opacity: .6; transition: opacity .12s, color .12s, transform .12s; }
+.rooms .room-fav svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.rooms li:hover .room-fav, .rooms .room-fav:focus-visible { opacity: 1; }
+.rooms .room-fav:hover { color: #f5b400; transform: scale(1.15); }
+.rooms .room-fav.on { opacity: 1; color: #f5b400; }
+.rooms .room-fav.on svg { fill: currentColor; stroke: #8a6400; stroke-width: 1.2; }
+.rooms .room-fav:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 1px; }
 
 /* ---------- barra de cima ---------- */
 .topbar { height: 56px; gap: 14px; background: rgba(11, 12, 17, .92); border-bottom-color: var(--line-soft); }

@@ -403,13 +403,45 @@ function joinRoom(ip) {
   $('#btn-join').click();
 }
 
+// Salas favoritas: a estrela na frente de cada sala da lista. As favoritas ficam no topo e continuam na lista mesmo
+// fechadas ("favorita · não encontrada agora"), até tirar a estrela. Para quem está em mais de uma rede do Radmin (a
+// procura acha as salas de todas) ou num grupo grande e vê várias salas abertas ao mesmo tempo. Guardadas neste PC.
+function favRooms() {
+  try { const l = JSON.parse(localStorage.getItem('favRooms') || '[]'); return Array.isArray(l) ? l.filter((r) => r && r.ip) : []; } catch { return []; }
+}
+function toggleFavRoom(ip, hostName) {
+  const list = favRooms();
+  const i = list.findIndex((r) => r.ip === ip);
+  if (i >= 0) list.splice(i, 1);
+  else list.push({ ip, hostName: hostName || ip, at: Date.now() });
+  localStorage.setItem('favRooms', JSON.stringify(list.slice(-30)));
+  renderRooms();
+}
+const STAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.55 5.2 5.75.84-4.15 4.05.98 5.72L12 16.7l-5.13 2.7.98-5.72L3.7 9.64l5.75-.84z"/></svg>';
+
 function renderRooms() {
   const ul = $('#rooms');
   ul.innerHTML = '';
   const seen = new Set();
-  const row = (title, sub, ip, offline, closeLabel, names) => {
+  const favs = favRooms();
+  const favIps = new Set(favs.map((r) => r.ip));
+  const row = (title, sub, ip, offline, closeLabel, names, hostName) => {
     const li = document.createElement('li');
     if (offline) li.classList.add('offline');
+    const fav = favIps.has(ip);
+    li.classList.toggle('fav', fav);
+    // (não é <button>: cada tema veste os botões da lista do seu jeito, e a estrela é igual em todos)
+    const star = document.createElement('span');
+    star.className = `room-fav${fav ? ' on' : ''}`;
+    star.setAttribute('role', 'button');
+    star.setAttribute('aria-pressed', fav ? 'true' : 'false');
+    star.tabIndex = 0;
+    star.title = fav ? 'Tirar dos favoritos' : 'Favoritar: a sala fica no topo da lista, mesmo quando estiver fechada';
+    star.innerHTML = STAR_SVG;
+    const toggle = (e) => { e.stopPropagation(); toggleFavRoom(ip, hostName || title); };
+    star.onclick = toggle;
+    star.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); } };
+    li.appendChild(star);
     const pile = document.createElement('span');
     pile.className = 'room-pile theme-only';
     li.style.setProperty('--h', nameHue((names && names[0]) || title));
@@ -442,15 +474,30 @@ function renderRooms() {
     }
     ul.appendChild(li);
   };
+  // o nome de quem hospeda uma favorita pode ter mudado: guarda o de agora
+  let renamed = false;
   for (const r of discovered) {
+    const f = favs.find((x) => x.ip === r.ip);
+    if (f && r.hostName && f.hostName !== r.hostName) { f.hostName = r.hostName; renamed = true; }
+  }
+  if (renamed) localStorage.setItem('favRooms', JSON.stringify(favs));
+  // abertas agora, as favoritas primeiro; depois as favoritas fechadas; depois as recentes
+  const open = [...discovered].sort((a, b) => Number(favIps.has(b.ip)) - Number(favIps.has(a.ip)));
+  for (const r of open) {
     seen.add(r.ip);
     const who = r.members ? `${r.members} na sala: ${r.names.join(', ')}` : 'ninguém na sala ainda';
-    row(`Sala de ${r.hostName}`, [who, r.ip], r.ip, false, '', r.names && r.names.length ? r.names : [r.hostName]);
+    row(`Sala de ${r.hostName}`, [who, r.ip], r.ip, false, '', r.names && r.names.length ? r.names : [r.hostName], r.hostName);
+  }
+  for (const r of favs) {
+    if (seen.has(r.ip)) continue;
+    seen.add(r.ip);
+    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, ['favorita', `código ${r.ip}`], r.ip, false, '', null, r.hostName);
+    else row(`Sala de ${r.hostName}`, ['favorita · não encontrada agora', r.ip], r.ip, true, '', null, r.hostName);
   }
   for (const r of recentRooms()) {
     if (seen.has(r.ip)) continue;
-    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, ['recente', `código ${r.ip}`], r.ip, false, 'Fechar');
-    else row(`Sala de ${r.hostName}`, ['recente · não encontrada agora', r.ip], r.ip, true, 'Remover');
+    if (isOnlineCode(r.ip)) row(`Sala online de ${r.hostName}`, ['recente', `código ${r.ip}`], r.ip, false, 'Fechar', null, r.hostName);
+    else row(`Sala de ${r.hostName}`, ['recente · não encontrada agora', r.ip], r.ip, true, 'Remover', null, r.hostName);
   }
   if (!ul.children.length) {
     const li = document.createElement('li');

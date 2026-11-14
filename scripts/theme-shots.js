@@ -117,6 +117,8 @@ async function page(CFG) {
     if (window.paintMyName) window.paintMyName(); // alguns temas dão oi pelo nome
     // nada guardado de outra vez que este teste rodou (a sala de teste ficava na lista de recentes)
     localStorage.removeItem('recentRooms');
+    // a sala de Bia favorita (fica no topo, estrela acesa) e uma favorita fechada (a de Duda)
+    localStorage.setItem('favRooms', JSON.stringify([{ ip: '26.87.140.12', hostName: 'Bia' }, { ip: '26.31.7.205', hostName: 'Duda' }]));
     localStorage.removeItem('hostIp');
     $('#host-ip').value = '';
     for (const t of themes) {

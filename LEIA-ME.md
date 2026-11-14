@@ -15,6 +15,8 @@ Depois disso o app **se atualiza sozinho** (ou clique em "Procurar atualização
 2. Uma pessoa clica em **Hospedar sala**. A sala fica aberta em segundo plano: dá para fechar/reiniciar
    o app sem derrubar ninguém. **Fechar sala** encerra para todos.
 3. Os outros veem a sala em **Salas abertas** e clicam em **Entrar** (ou digitam o IP `26.x.x.x`).
+   A **estrela** na frente de cada sala a favorita (v1.0.70): as favoritas ficam no topo e continuam na lista mesmo
+   fechadas, até tirar a estrela. Útil em mais de uma rede do Radmin, quando aparecem salas de vários grupos.
 4. Na primeira vez, o Windows pergunta sobre o firewall para quem hospeda: marque **redes públicas e privadas**.
 
 **Sem Radmin (sala online):** uma pessoa clica em **Criar sala online** e manda o código de 6 letras/números

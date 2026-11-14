@@ -154,6 +154,28 @@ async function pageA() {
       T.set(keep);
     }
 
+    // ---------------------------------------------------------------- 0d) salas favoritas (a estrela na lista de salas)
+    {
+      const keep = { fav: localStorage.getItem('favRooms'), recent: localStorage.getItem('recentRooms'), disc: discovered };
+      localStorage.removeItem('favRooms'); localStorage.removeItem('recentRooms');
+      discovered = [{ ip: '26.1.1.1', hostName: 'Ana', members: 1, names: ['Ana'] }, { ip: '26.2.2.2', hostName: 'Beto', members: 2, names: ['Beto', 'Caio'] }];
+      renderRooms();
+      const titles = () => [...document.querySelectorAll('#rooms li .room-title')].map((x) => x.textContent).join('|');
+      check('favoritas: sem favorita, a ordem é a da procura', titles() === 'Sala de Ana|Sala de Beto', titles());
+      [...document.querySelectorAll('#rooms li')][1].querySelector('.room-fav').click();
+      check('favoritas: a estrela põe a sala no topo e fica guardada', titles() === 'Sala de Beto|Sala de Ana' && /26\.2\.2\.2/.test(localStorage.getItem('favRooms') || '') &&
+        document.querySelector('#rooms li .room-fav').classList.contains('on'), titles());
+      discovered = [discovered[0]];
+      renderRooms();
+      const closed = [...document.querySelectorAll('#rooms li')].find((l) => /Beto/.test(l.textContent));
+      check('favoritas: fechada, continua na lista com a estrela', !!closed && closed.classList.contains('offline') && /favorita/.test(closed.textContent) && !!closed.querySelector('.room-fav.on'),
+        closed ? closed.textContent : 'sumiu');
+      closed.querySelector('.room-fav').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      check('favoritas: tirar a estrela (também pelo teclado) tira a sala fechada da lista', !/Beto/.test(titles()) && !/26\.2\.2\.2/.test(localStorage.getItem('favRooms') || ''), titles());
+      for (const [k, v] of [['favRooms', keep.fav], ['recentRooms', keep.recent]]) { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }
+      discovered = keep.disc; renderRooms();
+    }
+
     // ---------------------------------------------------------------- 0b) Troca de tema com a animação de instalação
     {
       const T = window.Themes, root = document.documentElement;
