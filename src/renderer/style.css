@@ -728,7 +728,7 @@ html:is([data-theme="classico"], :not([data-theme])) :is(.theme-only, .enh-seg, 
    Só usa as cores do tema (--panel, --line, --accent...), então acompanha qualquer tema.
    ===================================================================================== */
 /* dentro da sala o rodapé é só a versão e a atualização; "Novidades" fica na tela de entrada */
-#room:not(.hidden) ~ .app-version #btn-news { display: none; }
+#room:not(.hidden) ~ .app-version #btn-news, #room:not(.hidden) ~ .app-version #btn-tour { display: none; }
 .news-card { width: min(880px, 94vw); }
 .news-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 20px; }
 .news-entry + .news-entry { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
@@ -759,3 +759,51 @@ html:is([data-theme="classico"], :not([data-theme])) :is(.theme-only, .enh-seg, 
 .theme-card .news-themes { margin: 4px 0 6px; }
 .news-list { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; padding-left: 20px; font-size: 13.5px; line-height: 1.45; }
 .news-list li::marker { color: var(--accent-2); }
+
+/* ---------- foto de perfil (foto.js) ---------- */
+/* a foto cobre a inicial; a bolinha do tema (forma, borda, sombra, recorte) continua em volta dela */
+.av-photo { position: absolute; inset: 0; z-index: 0; border-radius: inherit; background: center / cover no-repeat; pointer-events: none; }
+.avatar.has-photo { color: transparent; }
+.avatar > .status { z-index: 1; }
+/* o botão com a minha bolinha: clique escolhe a foto */
+.photo-btn { position: relative; display: inline-grid; place-items: center; flex: none; width: auto; height: auto; min-width: 0; min-height: 0;
+  margin: 0; padding: 0; border: none; border-radius: 50%; background: none; box-shadow: none; clip-path: none; transform: none; }
+.photo-btn:hover, .photo-btn:active { background: none; box-shadow: none; transform: none; }
+.photo-btn .avatar { width: 30px; height: 30px; font-size: 13px; transition: box-shadow .15s; }
+.photo-btn:hover .avatar, .photo-btn:focus-visible .avatar { box-shadow: 0 0 0 2px var(--accent); }
+.photo-btn:focus-visible { outline: none; }
+/* sem foto: um "+" no canto convida a pôr uma */
+.photo-btn:not(.has)::after { content: '+'; position: absolute; right: -4px; bottom: -4px; z-index: 1; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); color: #fff; font: 700 13px/15px "Segoe UI", sans-serif; text-align: center; box-shadow: 0 0 0 2px var(--panel); }
+.lobby-card > .field { position: relative; }
+#lobby-photo { position: absolute; right: 6px; bottom: 5px; z-index: 2; }
+.lobby-card > .field > #name { padding-right: 46px; }
+.opt-photo { display: inline-flex; align-items: center; gap: 10px; }
+.opt-photo .photo-btn .avatar { width: 26px; height: 26px; font-size: 12px; }
+.opt-tour-row .link-btn { font-size: 12px; }
+
+/* ---------- tamanho da interface (Opções e "Escolher tema") ---------- */
+.zoom-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.modal-foot .zoom-pick span { flex: none; }
+.zoom-pick select { font-size: 12px; padding: 3px 8px; }
+.opt-zoom-row select { font-size: 12px; padding: 3px 8px; border-radius: 8px; }
+/* fora de 100% os botões do Windows (minimizar/maximizar/fechar) não mudam de tamanho com o resto: o espaço
+   guardado para eles no topo acompanha, em todos os temas */
+html.zoom-x .topbar { padding-right: calc(150px / var(--zoom, 1)) !important; }
+html.zoom-x .window-drag { right: calc(150px / var(--zoom, 1)); }
+
+/* ---------- tour da primeira vez (tour.js): cores e letras do tema (tema-janelas.css) ---------- */
+.tour { position: fixed; inset: 0; z-index: 2147483000; }
+.tour-spot { position: fixed; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 200vmax var(--j-dim, rgba(8, 10, 20, .45)), 0 0 0 200vmax rgba(0, 0, 0, .3), inset 0 0 0 2px var(--j-sel, var(--accent)); /* --j-sel: sempre uma cor (o --j-primary da Sessão é um degradê) */
+  transition: left .25s, top .25s, width .25s, height .25s; }
+.tour-tip { position: fixed; width: min(340px, calc(100vw - 24px)); padding: 16px 18px 14px; user-select: none;
+  background: var(--j-panel, var(--panel)); color: var(--j-panel-fg, var(--text)); border: 1px solid var(--j-panel-line, var(--line));
+  border-radius: var(--j-panel-radius, 12px); box-shadow: var(--j-panel-shadow, 0 10px 30px rgba(0, 0, 0, .45));
+  font-size: 13.5px; font-weight: 400; line-height: 1.45; letter-spacing: 0; text-transform: none; text-align: left; } /* a letra do texto é a do tema (a do body); o título usa a de nomes */
+.tour-title { display: block; margin-bottom: 6px; font: var(--j-name, 600 15px "Segoe UI", sans-serif); font-size: 16px; line-height: 1.2;
+  text-transform: var(--j-case, none); letter-spacing: var(--j-ls, 0); }
+.tour-text { margin: 0 0 14px; }
+.tour-foot { display: flex; align-items: center; gap: 8px; }
+.tour-count { flex: 1; font-size: 12px; opacity: .7; }
+.tour-foot button { height: auto; min-height: 0; margin: 0; padding: 6px 12px; font-size: 13px; line-height: 1.2; } /* altura pelo texto (o Terminal fixa 20 px nos botões) */

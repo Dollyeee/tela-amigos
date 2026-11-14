@@ -670,3 +670,12 @@ html[data-theme="terminal"] {
   .hist-tip { border: 1px solid var(--gd); border-radius: 0; background: var(--bg); color: var(--g); font-size: 11.5px; }
 }
 @keyframes term-cursor { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* a foto num quadradinho verde de monitor antigo, antes do nome; o quadrado da cor do estado continua */
+:where(html[data-theme="terminal"]) {
+  #people .avatar .av-photo { display: none; }
+  #people li:has(.avatar.has-photo) .person-name::before { content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px;
+    background: linear-gradient(var(--g), var(--g)), var(--photo) center / cover; background-blend-mode: multiply, normal; }
+  .photo-btn .avatar { border-radius: 0; }
+}

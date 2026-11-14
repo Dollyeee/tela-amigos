@@ -256,3 +256,8 @@ html[data-theme="cyberpunk"] {
   .news-title { font: 700 18px/1.2 var(--cp); letter-spacing: .04em; text-transform: uppercase; }
   .news-list li::marker { color: var(--vt); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+:where(html[data-theme="cyberpunk"]) {
+  .photo-btn .avatar { border-radius: 0; clip-path: var(--cut-s); }
+}

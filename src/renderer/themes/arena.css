@@ -427,3 +427,11 @@ html[data-theme="arena"] {
   .nettest-body, .hist-body { padding: 16px 26px; }
   .hist-tip { border: none; border-radius: 0; background: rgba(14, 15, 18, .96); box-shadow: 0 0 0 1px var(--line); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* na escalação, a figurinha do jogador no lugar do número; o traço na cor da pessoa continua */
+:where(html[data-theme="arena"]) {
+  #people .avatar .av-photo { display: none; }
+  #people li:has(.avatar.has-photo)::before { content: ''; justify-self: start; width: 28px; height: 32px; margin-left: 2px; background: var(--photo) center / cover; transform: skewX(-12deg); }
+  .photo-btn .avatar { border-radius: 0; }
+}

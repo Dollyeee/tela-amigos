@@ -26,6 +26,7 @@ Para jogar junto, assistir junto e mostrar o que você está fazendo, com vária
 - **Sobreposição:** a tela de um amigo numa janelinha sempre por cima do jogo.
 - **Assistir junto:** o "Todo mundo pronto?" conta 3, 2, 1 e dá play no vídeo na hora certa.
 - **Chat, câmera, zoom e volume por amigo** (até 300%), com o som de todos nivelado.
+- **Foto de perfil e tamanho da interface:** a sua foto aparece para os amigos no lugar da inicial, e dá para deixar tudo maior ou menor (de 80% a 150%).
 - **15 temas** para mudar a cara do app, cada um com os próprios emotes, animações e jeito de desenhar. O que você põe na tela de um amigo (emotes, a mãozinha, os riscos da caneta) aparece para todos no seu tema.
 
 <div align="center">
@@ -40,6 +41,8 @@ Para jogar junto, assistir junto e mostrar o que você está fazendo, com vária
    - **Radmin VPN** (a melhor qualidade): todos na mesma rede do Radmin. Uma pessoa clica em **Hospedar sala**; os outros veem a sala em **Salas abertas** e clicam em **Entrar**. Na primeira vez, quem hospeda libera o firewall do Windows (marque redes públicas e privadas).
    - **Sala online** (sem VPN): uma pessoa clica em **Criar sala online** e manda o código de 6 letras; os outros digitam o código e entram.
 3. Clique em **Compartilhar tela**, escolha a tela ou a janela, e pronto.
+
+Na primeira vez que você abre o app, um tour rápido mostra onde fica cada coisa. **Como usar**, no rodapé da tela de entrada, mostra de novo.
 
 <div align="center">
 <img src="docs/img/entrada.png" width="720" alt="A tela de entrada: o seu nome, hospedar uma sala ou entrar numa das salas abertas">

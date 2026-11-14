@@ -11,6 +11,7 @@
 //   --cenas=a,b       só estas cenas (o fim do nome do arquivo, ex.: --cenas=2-sala-foco,1c-novidades)
 //   --so-entrada      para depois das cenas da tela de entrada (não entra na sala)
 //   --tempo=<min>     tempo máximo da cópia de teste (padrão: 2 min + 1 min por tema)
+//   --zoom=0.8        tamanho da interface (Opções; padrão 1 = 100%)
 // Saída: design/capturas/<tema>-<n>-<cena>.png (janela de 1280 x 800).
 // Rodar depois de mexer em src/renderer/themes/*.css, no themes.js ou no style.css.
 const { spawn } = require('child_process');
@@ -68,6 +69,8 @@ async function page(CFG) {
   const paintQ = typeof paintPersonQuality === 'function' ? paintPersonQuality : () => {};
   try {
     for (const k of ['clipSys', 'mediactl', 'gamehide', 'autoMeasure', 'autoJoin', 'sideOpts']) localStorage.setItem(k, '0');
+    // o tamanho da interface fica guardado no perfil de teste: sempre o pedido (ou 100%)
+    if (window.native.uiZoom) { const z = await window.native.uiZoom(CFG.zoom || 1); if (typeof paintZoom === 'function') paintZoom(z); }
     // sem animações: a mesma tela dá sempre a mesma captura (dá para comparar duas versões ponto a ponto)
     const still = document.createElement('style');
     still.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; }';
@@ -115,6 +118,29 @@ async function page(CFG) {
     const rooms = () => renderRooms();
     $('#name').value = 'Tuca';
     if (window.paintMyName) window.paintMyName(); // alguns temas dão oi pelo nome
+    // fotos de perfil de mentira (desenhos de bicho, não rostos): a minha, a da Bia e a do Léo; o Rafa fica com a inicial
+    const demoPhoto = (emoji, a, b) => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 160;
+      const g = c.getContext('2d');
+      const gr = g.createLinearGradient(0, 0, 160, 160);
+      gr.addColorStop(0, a); gr.addColorStop(1, b);
+      g.fillStyle = gr; g.fillRect(0, 0, 160, 160);
+      g.font = '100px "Segoe UI Emoji"'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(emoji, 80, 92);
+      return c.toDataURL('image/webp', 0.86);
+    };
+    if (window.Foto) {
+      window.Foto.setMine(demoPhoto('🐼', '#a8ecd0', '#3a8f6b'));
+      window.Foto.setFriend('Bia', demoPhoto('🦊', '#ffe0a8', '#e8743b'));
+      window.Foto.setFriend('Léo', demoPhoto('🐸', '#c9e8ff', '#3f7fd1'));
+    }
+    // o tour da primeira vez: mostra o passo n (conta a partir de 1) da parte pedida
+    const tourAt = async (which, n) => {
+      window.Tour.start(which);
+      for (let i = 1; i < n; i++) (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await sleep(350);
+    };
     // nada guardado de outra vez que este teste rodou (a sala de teste ficava na lista de recentes)
     localStorage.removeItem('recentRooms');
     // a sala de Bia favorita (fica no topo, estrela acesa) e uma favorita fechada (a de Duda)
@@ -130,6 +156,14 @@ async function page(CFG) {
       $('#my-room').classList.add('hidden');
       $('#btn-host').textContent = 'Hospedar sala';
       await shot(`${t}-1-entrada`);
+      if (window.Tour && (want(`${t}-1e-tour`) || want(`${t}-1f-tour-fim`))) {
+        await tourAt('entrada', 1);
+        await shot(`${t}-1e-tour`);
+        window.Tour.stop();
+        await tourAt('entrada', 5);
+        await shot(`${t}-1f-tour-fim`);
+        window.Tour.stop();
+      }
       if (open) { $('#my-room').classList.remove('hidden'); $('#btn-host').textContent = hostText; await shot(`${t}-1b-entrada-sala-aberta`); }
       // a tela de novidades (o que mudou em cada versão): o começo e o fim da rolagem
       if (window.News && (want(`${t}-1c-novidades`) || want(`${t}-1d-novidades-fim`))) {
@@ -262,6 +296,17 @@ async function page(CFG) {
       await shot(`${t}-5-opcoes`);
       $('#room').classList.remove('opts-open');
       $('#side-opts').open = false;
+      if (window.Tour && (want(`${t}-5b-tour-sala`) || want(`${t}-5c-tour-telas`) || want(`${t}-5d-tour-opcoes`))) {
+        await tourAt('sala', 1);
+        await shot(`${t}-5b-tour-sala`);
+        window.Tour.stop();
+        await tourAt('sala', 2);
+        await shot(`${t}-5c-tour-telas`);
+        window.Tour.stop();
+        await tourAt('sala', 4);
+        await shot(`${t}-5d-tour-opcoes`);
+        window.Tour.stop();
+      }
       // janela de compartilhar, com duas telas de mentira
       await openShareModal();
       sources = src; sourcesLoaded = { screen: true, window: true }; selectedSource = src[0];
@@ -379,7 +424,8 @@ async function page(CFG) {
   const file = path.join(dir, 'pagina.js');
   const cfg = { themes: THEMES, out: OUT.replace(/\\/g, '/'), scenes: scenes(), prefix: PREFIX,
     only: opt('cenas').split(',').map((s) => s.trim()).filter(Boolean), lobbyOnly: process.argv.includes('--so-entrada'),
-    evalCode: opt('eval') ? fs.readFileSync(path.resolve(opt('eval')), 'utf8') : '', evalRoom: process.argv.includes('--eval-sala') };
+    evalCode: opt('eval') ? fs.readFileSync(path.resolve(opt('eval')), 'utf8') : '', evalRoom: process.argv.includes('--eval-sala'),
+    zoom: Number(opt('zoom')) || 1 };
   const evalFn = cfg.evalCode ? `window.__shotsEval = async () => (${cfg.evalCode}\n);\n` : '';
   fs.writeFileSync(file, `${evalFn}(${page})(${JSON.stringify(cfg)});\n`);
   const server = await createSignalingServer(PORT);

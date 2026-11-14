@@ -370,3 +370,12 @@ html[data-theme="neon"] {
   #btn-start-share { height: 46px; padding: 0 26px; font-size: 18px; }
   .hist-tip { border: none; border-radius: 12px; background: rgba(11, 10, 19, .96); box-shadow: 0 0 0 1.5px var(--off); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* a foto num círculo de neon na cor da pessoa, antes do nome (a bolinha do tema é só o aviso de conexão) */
+:where(html[data-theme="neon"]) {
+  #people .avatar .av-photo { display: none; }
+  #people li:has(.avatar.has-photo) .person-name::before { content: ''; display: inline-block; width: 26px; height: 26px; margin-right: 10px; vertical-align: -5px; border-radius: 50%;
+    background: var(--photo) center / cover; box-shadow: 0 0 0 1.5px hsl(var(--h, 320) 100% 62%), 0 0 12px hsl(var(--h, 320) 100% 62%); }
+  .photo-btn .avatar.has-photo { box-shadow: 0 0 0 1.5px var(--accent), 0 0 10px var(--accent); }
+}

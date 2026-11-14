@@ -28,6 +28,7 @@ English · [Português](README.pt-BR.md)
 - **Overlay:** keep a friend's screen in a small window always on top of your game.
 - **Watch together:** "Todo mundo pronto?" (everyone ready?) counts down 3, 2, 1 and hits play on the video at the right moment.
 - **Chat, webcam, zoom and per-friend volume** (up to 300%), with everyone's audio leveled.
+- **Profile photo and interface size:** your photo shows up for your friends in place of your initial, and the whole interface can be made bigger or smaller (80% to 150%).
 - **15 themes** to change the look of the app, each with its own emotes, animations and drawing style. What you put on a friend's screen (emotes, the pointing hand, pen strokes) shows up for everyone in your theme.
 
 <div align="center">
@@ -42,6 +43,8 @@ English · [Português](README.pt-BR.md)
    - **Radmin VPN** (best quality): everyone on the same Radmin network. One person clicks **Hospedar sala** (host a room); the others see it under **Salas abertas** (open rooms) and click **Entrar** (join). The first time, whoever hosts allows the app through the Windows firewall (tick both public and private networks).
    - **Online room** (no VPN): one person clicks **Criar sala online** (create an online room) and sends the 6-character code; the others type the code and join.
 3. Click **Compartilhar tela** (share screen), pick a screen or a window, and you're live.
+
+The first time you open the app, a short tour points out where everything is. **Como usar** (how to use), at the bottom of the start screen, shows it again.
 
 <div align="center">
 <img src="docs/img/entrada.png" width="720" alt="The start screen: your name, host a room or join one of the open rooms">

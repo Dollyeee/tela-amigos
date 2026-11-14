@@ -13,6 +13,18 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.72',
+    title: 'Foto de perfil, tamanho da interface e um tour',
+    items: [
+      '**Foto de perfil:** clique na bolinha ao lado do seu nome, na tela de entrada (ou em **Opções → Foto de perfil**), e escolha uma imagem. Ela aparece para os amigos no lugar da bolinha com a inicial, na lista de quem está na sala (e, em vários temas, também no chat e no nome das telas). Cada tema mostra do seu jeito: figurinha na Arena, retrato na Sessão, adesivo no Toca-fitas, pixels no Fliperama... Botão direito na bolinha tira a foto.',
+      '**Tamanho da interface:** em **Opções** (ou na janela de escolher tema) dá para deixar tudo maior ou menor, de 80% a 150%. Bom para monitor grande ou tela de notebook. Vale só no seu PC.',
+      '**Tour:** quem instala o app pela primeira vez ganha uns balõezinhos mostrando onde fica cada coisa. Para ver: **Como usar**, no rodapé da tela de entrada, ou **Opções → Tour do app**, na sala.',
+      'Amigo que ainda não atualizou não vê as fotos até atualizar.',
+      '**Correção:** amigo sem conexão direta com você (por exemplo, com uma VPN como o Cloudflare WARP ligada) só chega pelo servidor de vídeo. Quando o servidor ficava instável, o app pausava ele por 5 minutos e a tela desse amigo ficava preta. Agora quem só chega pelo servidor continua nele. E a conexão com um amigo que ficava parada sem nem começar agora se refaz sozinha.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.71',
     title: 'Seus emotes no seu tema',
     items: [

@@ -46,6 +46,8 @@
       <label class="field">
         <span>Seu nome</span>
         <input id="name" maxlength="30" placeholder="Como os amigos vão te ver">
+        <!-- foto de perfil (foto.js): clique escolhe, botão direito tira -->
+        <button id="lobby-photo" class="photo-btn" type="button" title="Foto de perfil: clique para escolher (botão direito tira)"></button>
       </label>
 
       <div class="lobby-actions">
@@ -177,10 +179,13 @@
           <summary>Opções</summary>
           <div class="opt-group theme-row">Aparência</div>
           <label class="sound-toggle theme-row opt-theme-row" title="A cara do app neste PC. Cada amigo escolhe a sua; não muda nada para os outros."><span>Tema</span><select id="opt-theme"></select></label>
+          <label class="sound-toggle opt-theme-row opt-zoom-row" title="Aumenta ou diminui tudo no app: letras, botões e telas. Só neste PC."><span>Tamanho da interface</span><select id="opt-zoom"></select></label>
+          <div class="sound-toggle opt-theme-row opt-photo-row" title="Aparece para os amigos no lugar da bolinha com a sua inicial"><span>Foto de perfil</span><span class="opt-photo"><button id="opt-photo-clear" class="link-btn hidden" type="button">Tirar</button><button id="opt-photo" class="photo-btn" type="button" title="Escolher foto"></button></span></div>
           <div class="opt-group">Geral</div>
           <label class="sound-toggle switch"><span>Sons de aviso</span><input type="checkbox" id="opt-sounds"></label>
           <label class="sound-toggle switch" title="O app abre junto com o Windows, só no ícone da bandeja (perto do relógio)"><span>Abrir com o Windows</span><input type="checkbox" id="opt-autostart"></label>
           <label class="sound-toggle switch" title="Ao abrir, entra sozinho na última sala (quem hospeda reabre a própria sala)"><span>Entrar sozinho na última sala</span><input type="checkbox" id="opt-autojoin"></label>
+          <div class="sound-toggle opt-theme-row opt-tour-row" title="Os balõezinhos que mostram onde fica cada coisa na sala"><span>Tour do app</span><button id="btn-tour-room" class="link-btn" type="button">Ver de novo</button></div>
           <div class="opt-group">Telas dos amigos</div>
           <label class="sound-toggle switch" title="Mede o volume de cada tela e aumenta sozinho quem está baixo (até 4x), sem abaixar ninguém. Um limitador evita estourar."><span>Nivelar volume das telas</span><input type="checkbox" id="opt-leveler"></label>
           <label class="sound-toggle switch" title="Com um jogo em tela cheia aberto, as telas dos amigos ganham ~0,15 s de buffer para não engasgarem (o app também fica com prioridade maior na placa de vídeo)"><span>Telas lisas enquanto jogo</span><input type="checkbox" id="opt-gamebuffer"></label>
@@ -358,6 +363,7 @@
       <div id="theme-body" class="nettest-body news-body"></div>
       <footer class="modal-foot">
         <span class="muted">Clique para experimentar: muda na hora e só neste PC (cada amigo usa o seu).</span>
+        <label class="zoom-pick" title="Aumenta ou diminui tudo no app: letras, botões e telas. Só neste PC."><span>Tamanho da interface</span><select id="theme-zoom"></select></label>
         <button id="theme-ok" class="primary">Pronto</button>
       </footer>
     </div>
@@ -385,6 +391,7 @@
   </div>
   <div class="app-version">
     <span id="app-version"></span>
+    <button id="btn-tour" class="link-btn" title="Balõezinhos que mostram onde fica cada coisa">Como usar</button>
     <button id="btn-news" class="link-btn" title="O que mudou em cada versão do app">Novidades</button>
     <button id="btn-check-update" class="link-btn">Procurar atualização</button>
     <label class="theme-pick theme-row" title="A cara do app neste PC. Cada amigo escolhe a sua."><span>Tema</span><select id="theme-pick"></select></label>
@@ -402,6 +409,8 @@
   <script src="tema-escolha.js"></script>
   <script src="news.js"></script>
   <script src="vida.js"></script>
+  <script src="foto.js"></script>
+  <script src="tour.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

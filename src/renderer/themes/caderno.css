@@ -379,3 +379,10 @@ html[data-theme="caderno"] {
   .nettest-table td, .nettest-table th { border-color: #c9dcf2; }
   .hist-tip { border: none; border-radius: 0; background: var(--note); color: var(--text); box-shadow: 2px 3px 0 rgba(0, 0, 0, .12); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* foto colada no caderno: borda branca e um pouco torta */
+:where(html[data-theme="caderno"]) {
+  :is(#people, .chat-msg, .room-pile, .photo-btn) .avatar.has-photo { box-shadow: 0 0 0 2px #fff, 1px 2px 3px rgba(0, 0, 0, .25); transform: rotate(-3deg); }
+  .photo-btn .avatar { border-radius: 0; }
+}

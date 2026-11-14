@@ -5,6 +5,8 @@
  * sem renegociar.
  */
 const $ = (s) => document.querySelector(s);
+// instalação nova? (o nome só fica guardado ao entrar numa sala): o tour da primeira vez aparece sozinho só nela
+const NEW_USER = (() => { try { return !localStorage.getItem('name'); } catch { return false; } })();
 let SIGNAL_PORT = 47800;
 window.native.netInfo().then((i) => { SIGNAL_PORT = i.port; });
 let ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]; // a sala online manda os dela (STUN + TURN)
@@ -95,7 +97,8 @@ async function buildRendererDiag() {
   lines.push(`nome=${state.myName} id=${state.myId} sala=${state.hostIp} anfitriao=${!!state.isHost} layout=${state.layout}`);
   lines.push(`servidor de vídeo: sala=${state.sfuServer ? 'tem' : 'não tem'} opção=${localStorage.getItem('sfu') === '1' ? 'ligada' : 'desligada'} ` +
     `minhaTransmissão=${state.share && state.share.sfu ? 'pelo servidor' : '-'} motivo=${(state.share && state.share.sfuAuto && state.share.sfuAuto.why) || '-'} ` +
-    `conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}`);
+    `conexão=${window.Sfu.state()} últimoErro=${state.sfuLastErr || '-'}` +
+    (sfuPaused() ? ` pausado=${Math.ceil(((state.sfuPauseUntil || 0) - Date.now()) / 60000)}min(${state.sfuPauseSoft ? 'instável: só quem não tem conexão direta' : 'limite do mês'})` : ''));
   try { for (const l of await window.Sfu.stats()) lines.push(`  ${l}`); } catch {}
   lines.push(`config=${safeJson(state.settings)}`);
   try { const g = await window.native.gpuStatus(); lines.push(`placa no Chromium: codificar=${g.video_encode} decodificar=${g.video_decode}`); } catch {}
@@ -112,6 +115,7 @@ async function buildRendererDiag() {
     lines.push(`envio por amigo (último segundo)=${safeJson(window.NativeVideo.lastStats || {})}`);
   }
   lines.push(`jogando=${!!state.gaming} (${state.gamingExe || ''})`);
+  lines.push(`interface=${Math.round(uiZoomNow * 100)}% foto=${window.Foto.mine() ? 'sim' : 'não'}`);
   if (state.share2) lines.push(`segundaTela="${state.share2.sourceName}"`);
   for (const p of state.peers.values()) {
     lines.push('');
@@ -302,6 +306,9 @@ async function initLobby() {
   $('#name').addEventListener('input', paintMyName);
   paintMyName();
   window.paintMyName = paintMyName;
+  initPhoto();
+  initZoom();
+  $('#btn-tour').onclick = () => window.Tour.start('entrada');
   $('#host-ip').value = localStorage.getItem('hostIp') || '';
 
   $('#btn-host').onclick = async () => {
@@ -532,6 +539,73 @@ async function refreshMyRoom() {
   }
 }
 
+// ------------------------------------------------------------------ foto de perfil (foto.js)
+// na entrada vale o nome que está sendo digitado; na sala, o nome com que entrei
+const myPhotoName = () => ($('#room').classList.contains('hidden') ? $('#name').value.trim() : state.myName) || state.myName || '';
+function paintPhotoButtons() {
+  const name = myPhotoName(), src = window.Foto.mine();
+  for (const b of [$('#lobby-photo'), $('#opt-photo')]) {
+    const av = avatar(name || '?');
+    window.Foto.paint(av, name, src);
+    b.textContent = '';
+    b.appendChild(av);
+    b.classList.toggle('has', !!src);
+  }
+  $('#opt-photo-clear').classList.toggle('hidden', !src);
+}
+function initPhoto() {
+  window.Foto.bindName(myPhotoName);
+  const inRoom = () => !$('#room').classList.contains('hidden');
+  const use = (src) => {
+    if (!window.Foto.setMine(src)) return;
+    toast(inRoom() ? 'Foto de perfil trocada: os amigos da sala já veem.' : 'Foto de perfil pronta: os amigos veem quando você entrar numa sala.');
+  };
+  const choose = async () => {
+    try { const src = await window.Foto.pick(); if (src) use(src); } catch (e) { toast(e.message || 'Não consegui usar essa imagem.', 'error'); }
+  };
+  const clear = () => { if (window.Foto.setMine('')) toast('Foto de perfil tirada: volta a bolinha com a inicial.'); };
+  for (const b of [$('#lobby-photo'), $('#opt-photo')]) {
+    b.onclick = (e) => { e.preventDefault(); choose(); };
+    b.oncontextmenu = (e) => { e.preventDefault(); clear(); };
+    // arrastar uma imagem para cima da bolinha também vale
+    b.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); };
+    b.ondrop = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const f = e.dataTransfer && e.dataTransfer.files[0];
+      window.Foto.fromFile(f).then(use, (err) => toast(err.message, 'error'));
+    };
+  }
+  $('#opt-photo-clear').onclick = clear;
+  $('#name').addEventListener('input', paintPhotoButtons);
+  window.Foto.onChange(() => {
+    paintPhotoButtons();
+    for (const p of state.peers.values()) sendPhoto(p.id);
+  });
+  paintPhotoButtons();
+}
+
+// ------------------------------------------------------------------ tamanho da interface
+// zoom só da janela principal (main.js guarda e aplica); a sobreposição e as janelinhas por cima do monitor ficam em 100%
+const UI_ZOOMS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
+let uiZoomNow = 1;
+function paintZoom(z) {
+  uiZoomNow = z;
+  document.documentElement.style.setProperty('--zoom', String(z));
+  document.documentElement.classList.toggle('zoom-x', z !== 1);
+  for (const sel of [$('#opt-zoom'), $('#theme-zoom')]) sel.value = String(z);
+}
+async function setUiZoom(z) {
+  try { paintZoom(await window.native.uiZoom(z)); } catch (e) { console.warn('tamanho da interface:', e && e.message); }
+}
+function initZoom() {
+  for (const sel of [$('#opt-zoom'), $('#theme-zoom')]) {
+    sel.innerHTML = UI_ZOOMS.map((z) => `<option value="${z}">${Math.round(z * 100)}%${z === 1 ? ' (padrão)' : ''}</option>`).join('');
+    sel.onchange = () => setUiZoom(Number(sel.value));
+  }
+  paintZoom(1);
+  setUiZoom(); // sem valor: só lê o que está guardado
+}
+
 function checkName() {
   const name = $('#name').value.trim();
   if (!name) { showLobbyError('Digite seu nome.'); $('#name').focus(); return false; }
@@ -661,6 +735,7 @@ function onSignal(msg) {
         for (const p of msg.peers) createPeer(p.id, p.name);
         for (const peer of state.peers.values()) {
           sendState(peer.id);
+          sendPhoto(peer.id);
           // o que eles mandaram enquanto eu estava fora se perdeu: pede o estado de novo
           sendRelay(peer.id, { kind: 'state-req' });
           unstickNegotiation(peer);
@@ -714,6 +789,7 @@ function onSignal(msg) {
       const first = !state.sfuLimitAt || Date.now() - state.sfuLimitAt > 3600000;
       state.sfuLimitAt = Date.now();
       state.sfuPauseUntil = Date.now() + 6 * 3600000;
+      state.sfuPauseSoft = false; // limite do mês: o servidor recusa, para todo mundo
       window.Sfu.usage = { used: Number(msg.usedGb) || 0, limit: Number(msg.limitGb) || 0 };
       showSfuUsage(window.Sfu.usage);
       if (first) toast(`O limite do mês do servidor de vídeo acabou (${Math.round(msg.usedGb)} GB): as telas seguem pela conexão direta entre vocês.`, 'error');
@@ -754,8 +830,12 @@ function onRelay(from, data) {
         setRouteUse(peer, data.use, `pedido de ${peer.name}`, false);
       }
       break;
+    case 'photo': // foto de perfil do amigo ('' = ele tirou a foto); os avatares dele se refazem sozinhos
+      window.Foto.setFriend(peer.name, data.img);
+      break;
     case 'state-req': // o amigo reconectou à sala: reenvia meu estado e destrava a negociação
       sendState(from);
+      sendPhoto(from);
       unstickNegotiation(peer);
       // os meus pedidos que chegaram enquanto ele estava fora também se perderam
       if (peer.iWant) sendRelay(from, { kind: 'want', level: peer.iWant, maxH: peer.iWantH });
@@ -1017,6 +1097,7 @@ function createPeer(id, name) {
   // Se eu já estou compartilhando, começa a mandar para o novo amigo
   applySendParams(peer);
   sendState(id);
+  sendPhoto(id);
   render();
 }
 
@@ -1289,6 +1370,33 @@ async function routeWatch() {
 }
 setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000);
 
+// Conexão direta que nunca começou: os dois lados em "new" (nenhuma oferta ou candidato chegou e nada tenta de novo;
+// o vigia de tela travada ignora esse estado). Visto em 2026-11-14 entre dolle e Nuke: ficou assim mais de 20 min.
+// 20 s assim: negocia de novo (oferta nova); 45 s: refaz a conexão dos dois lados (no máx. 2 vezes por amigo; depois
+// a tela dele segue só pelo servidor de vídeo, quando a sala tem).
+const newRebuilds = new Map(); // nome -> quantas vezes refiz por isso
+function newWatch(now = Date.now()) {
+  const roomUp = !$('#room').classList.contains('hidden') && state.ws && state.ws.readyState === 1;
+  for (const peer of state.peers.values()) {
+    if (!roomUp || peer.pc.connectionState !== 'new') { peer.newSince = null; continue; }
+    if (!peer.newSince) { peer.newSince = now; peer.newStep = 0; continue; }
+    const t = now - peer.newSince;
+    if (peer.newStep < 1 && t >= 20000) {
+      peer.newStep = 1;
+      console.warn(`conexão com ${peer.name} não começou em 20 s: negociando de novo`);
+      try { peer.pc.restartIce(); } catch {}
+      negotiate(peer);
+    } else if (peer.newStep < 2 && t >= 45000 && (newRebuilds.get(peer.name) || 0) < 2) {
+      const name = peer.name;
+      if (rebuildPeer(peer.id, true)) {
+        newRebuilds.set(name, (newRebuilds.get(name) || 0) + 1);
+        console.warn(`conexão com ${name} não começou em 45 s: refeita dos dois lados`);
+      }
+    }
+  }
+}
+setInterval(() => newWatch(), 2000);
+
 // ------------------------------------------------------------------ servidor de vídeo (beta)
 // Na sala online, com a opção ligada, quem transmite pode mandar a tela UMA vez para o servidor de vídeo
 // (sfu.js) e cada amigo puxa de lá a qualidade que aguenta. Quem puxou avisa ("sfu-pull") e eu paro
@@ -1298,14 +1406,25 @@ setInterval(() => { routeWatch().catch((e) => console.warn('rota', e)); }, 2000)
 // conta de mandar uma cópia para cada um, ou quando a conexão direta com alguém que assiste caiu (sfuNeedWatch).
 function sfuWanted() { return isOnlineCode(state.hostIp) && !!state.sfuServer && localStorage.getItem('sfu') === '1'; }
 // a transmissão está (ou deve estar) indo pelo servidor agora
-function sfuInUse(share = state.share) { return !!(share && share.sfuAuto && sfuWanted() && !sfuPaused()); }
+function sfuInUse(share = state.share) { return !!(share && share.sfuAuto && sfuWanted() && !sfuPaused(viewerNoDirect())); }
 // uso do mês ao lado da opção (o limite grátis é por mês e vale para a sala toda)
 function showSfuUsage(u) {
   const sp = $('#opt-sfu') && $('#opt-sfu').parentElement.querySelector('span');
   if (sp) sp.textContent = 'Servidor de vídeo quando precisar (beta)' + (u && u.limit ? ` · ${Math.round(u.used)} de ${u.limit} GB do mês` : u ? ` · ${Math.round(u.used)} GB no mês` : '');
 }
 window.Sfu.onUsage = showSfuUsage;
-function sfuPaused() { return Date.now() < (state.sfuPauseUntil || 0); }
+// pausa do servidor: a do limite do mês vale para tudo; a de "servidor instável" (sfuPauseSoft) não vale para quem
+// só chega por ele (onlyPath: amigo sem conexão direta comigo; ver directOk)
+function sfuPaused(onlyPath = false) {
+  if (Date.now() >= (state.sfuPauseUntil || 0)) return false;
+  return !(onlyPath && state.sfuPauseSoft);
+}
+// a conexão direta com este amigo funciona? Sem ela (ex.: amigo com o Cloudflare WARP ligado, que não deixa a
+// conexão direta fechar), o servidor de vídeo é o ÚNICO caminho da tela dele: nem a pausa de 5 min do servidor
+// instável nem as 3 tentativas valem para ele (visto em 2026-11-14: a tela do Nuke ficou preta para quem pausou)
+const directOk = (peer) => peer.pc.connectionState === 'connected';
+// alguém assistindo a minha tela sem a conexão direta comigo
+const viewerNoDirect = () => [...state.peers.values()].some((p) => p.theyWant && p.theyWant !== 'off' && !directOk(p) && p.pc.connectionState !== 'closed');
 function sfuKbps(s) { return Math.min(Number(s.bitrate) || 8, Number(localStorage.getItem('sfuMaxMbps')) || 8) * 1000; } // limite: GB do mês
 
 let sfuSyncing = Promise.resolve();
@@ -1371,7 +1490,7 @@ async function sfuSyncInner() {
 //    o direto só se sobrar um amigo (ou nenhum) assistindo por 30 s, com conexão direta: aí o servidor não economiza nada.
 async function sfuNeedWatch() {
   const sh = state.share;
-  if (!sh || !sfuWanted() || sfuPaused()) return;
+  if (!sh || !sfuWanted() || sfuPaused(viewerNoDirect())) return;
   const viewers = [...state.peers.values()].filter((p) => p.theyWant && p.theyWant !== 'off' && p.pc.connectionState !== 'closed');
   const full = viewers.filter((p) => p.theyWant !== 'thumb' && p.pc.connectionState === 'connected');
   const short = !sh.sfuAuto && full.length >= 2 && (await uploadShort(sh, full));
@@ -1438,6 +1557,18 @@ async function uploadShort(sh, full) {
 }
 
 // lado de quem assiste: puxa do servidor quando o amigo transmite por lá (e eu estou vendo)
+// puxar a transmissão deste amigo pelo servidor agora? (a regra, sem rede: os testes chamam direto)
+// falhou há pouco com esta transmissão: espera (10 s, 20 s, 30 s) e desiste depois de 3 tentativas; sem conexão
+// direta não desiste (o servidor é o único caminho da tela dele) e nem a pausa de servidor instável vale
+function sfuPullWant(peer, now = Date.now()) {
+  const pub = peer.sharing ? peer.sfuPub : null;
+  if (!pub || (peer.iWant || 'full') === 'off') return false;
+  const key = `${pub.s}/${pub.v}`;
+  const f = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail : null;
+  const blocked = !!f && ((f.n >= 3 && directOk(peer)) || now - f.at < 10000 * Math.min(f.n, 3));
+  return !blocked && !sfuPaused(!directOk(peer));
+}
+
 function sfuPullSync(peer) {
   peer.sfuChain = (peer.sfuChain || Promise.resolve()).then(() => sfuPullInner(peer)).catch((e) => console.warn('servidor de vídeo (receber)', e));
 }
@@ -1448,10 +1579,7 @@ async function sfuPullInner(peer) {
   const pub = peer.sharing ? peer.sfuPub : null;
   const level = peer.iWant || 'full';
   const key = pub ? `${pub.s}/${pub.v}` : null;
-  // falhou há pouco com esta transmissão: espera (10 s, 20 s, 30 s) e desiste depois de 3 tentativas
-  const f = peer.sfuFail && peer.sfuFail.key === key ? peer.sfuFail : null;
-  const blocked = !!f && (f.n >= 3 || Date.now() - f.at < 10000 * f.n);
-  const want = !!pub && level !== 'off' && isOnlineCode(state.hostIp) && !blocked && !sfuPaused();
+  const want = isOnlineCode(state.hostIp) && sfuPullWant(peer);
   let rid = level === 'thumb' ? 'q' : peer.iWantH && peer.iWantH <= 540 ? 'h' : 'f';
   // a rede até mim não está dando conta da qualidade cheia: média por um tempo (sfuRxFeedback)
   if (rid === 'f' && Date.now() < (peer.sfuCapUntil || 0)) rid = 'h';
@@ -1482,7 +1610,10 @@ async function sfuPullInner(peer) {
     state.sfuLastErr = `receber ${peer.name}: ${e.message}`;
     console.warn(`servidor de vídeo: não deu para receber ${peer.name} (tentativa ${n}): ${e.message}`);
     if (n < 3) setTimeout(() => sfuPullSync(peer), 10000 * n + 500);
-    else toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Continuando direto.`, 'error');
+    else if (!directOk(peer)) { // o servidor é o único caminho: continua tentando (avisa uma vez só)
+      if (n === 3) toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Tentando de novo...`, 'error');
+      setTimeout(() => sfuPullSync(peer), 30500);
+    } else toast(`Não deu para receber ${peer.name} pelo servidor de vídeo (${e.message}). Continuando direto.`, 'error');
   }
 }
 
@@ -1521,7 +1652,12 @@ function sfuRecover(why, count) {
       pause = true;
       state.sfuLosses = [];
       state.sfuPauseUntil = now + 300000;
-      toast('O servidor de vídeo está instável: usando a conexão direta pelos próximos 5 minutos.', 'error');
+      state.sfuPauseSoft = true;
+      // (quem só chega pelo servidor continua nele e a pausa pode se repetir: o aviso aparece no máximo a cada 5 min)
+      if (now - (state.sfuShakyToastAt || 0) > 300000) {
+        state.sfuShakyToastAt = now;
+        toast('O servidor de vídeo está instável: usando a conexão direta pelos próximos 5 minutos.', 'error');
+      }
     } else if (state.share && state.share.sfu) toast('Conexão com o servidor de vídeo caiu: reconectando...');
   }
   for (const peer of state.peers.values()) {
@@ -1540,6 +1676,15 @@ function sfuRecover(why, count) {
     for (const peer of state.peers.values()) sfuPullSync(peer);
   };
   setTimeout(again, pause ? 300500 : 1500);
+  // pausado: quem não tem conexão direta comigo só chega pelo servidor; esses continuam sendo puxados (e, se algum
+  // deles assiste a minha tela, ela volta a ir pelo servidor)
+  if (pause) {
+    setTimeout(() => {
+      if (state.leaving || $('#room').classList.contains('hidden')) return;
+      if (viewerNoDirect()) sfuSync();
+      for (const peer of state.peers.values()) if (!directOk(peer)) sfuPullSync(peer);
+    }, 20000);
+  }
 }
 
 // Recebendo pelo servidor e nada chega há 6 s (com quem transmite capturando normalmente): recebe
@@ -1571,6 +1716,7 @@ function sfuFallback(peer) {
   sendRelay(peer.id, { kind: 'sfu-pull', on: false });
   window.Sfu.unpull(sin.key, sin.pull).catch(() => {});
   if (prevN + 1 < 3) setTimeout(() => sfuPullSync(peer), 10000 * (prevN + 1) + 500);
+  else if (!directOk(peer)) setTimeout(() => sfuPullSync(peer), 30500); // sem conexão direta: o servidor é o único caminho
 }
 
 // ---- tela do amigo parada em 0 fps (nenhum quadro novo) com ele transmitindo normalmente.
@@ -1660,6 +1806,11 @@ function removePeer(id) {
   state.hidden.delete(id);
   if (state.focusId === id) state.focusId = null;
   render();
+}
+
+// a minha foto de perfil para um amigo (foto.js; '' = sem foto)
+function sendPhoto(to) {
+  sendRelay(to, { kind: 'photo', img: window.Foto.mine() });
 }
 
 function sendState(to) {
@@ -3126,6 +3277,7 @@ function addChat(name, text, system = false) {
     b.textContent = name;
     body.append(b, document.createTextNode(text));
     div.append(av, body);
+    window.Foto.paint(av, name); // de novo, já na mensagem: ela ganha --photo para os temas
   } else div.appendChild(document.createTextNode(text));
   window.Vida.chat(div, String(system ? text : `${name} ${text}`).length);
   log.appendChild(div);
@@ -4369,6 +4521,12 @@ function enterRoom() {
   window.Helper.gameWatch(true).catch(() => {});
   // aquece o AudioHelper e a captura para o "Compartilhar" abrir rápido
   window.native.audioAvailable().then((ok) => ok && window.Helper.list()).catch(() => {});
+  paintPhotoButtons();
+  // primeira sala de uma instalação nova: o tour mostra onde fica cada coisa (só uma vez; nunca em teste)
+  setTimeout(() => {
+    if (underTest !== false || $('#room').classList.contains('hidden') || window.News.isOpen() || window.ThemePicker.isOpen()) return;
+    window.Tour.auto('sala', NEW_USER);
+  }, 1200);
 }
 
 async function leaveRoom() {
@@ -4797,7 +4955,9 @@ function setTileLabel(tile, name, text) {
   const live = document.createElement('span');
   live.className = 'live-dot';
   live.title = 'ao vivo';
-  tile.label.append(avatar(name), t, live);
+  const av = avatar(name);
+  tile.label.append(av, t, live);
+  window.Foto.paint(av, name); // de novo, já no nome da tela: ele ganha --photo para os temas
 }
 
 function showVolumeOverlay(el, v) {
@@ -5243,6 +5403,7 @@ function avatar(name) {
   el.className = 'avatar';
   el.style.background = `hsl(${h % 360}, 55%, 46%)`;
   el.textContent = (s[0] || '?').toUpperCase();
+  window.Foto.paint(el, s); // foto de perfil por cima da inicial (foto.js)
   return el;
 }
 
@@ -5312,6 +5473,7 @@ function renderPeople() {
     m.textContent = '--';
     q.append(f, m);
     li.append(av, n, q);
+    window.Foto.paint(av, avatarName || name); // de novo, já na linha: ela ganha --photo para os temas
     if (extra) li.appendChild(extra);
     ul.appendChild(li);
     if (peer) { peer.personEl = li; paintPersonQuality(peer); }
@@ -6042,6 +6204,7 @@ function initRoomUi() {
   $('#btn-options').onclick = () => {
     if ($('#room').classList.toggle('opts-open')) $('#side-opts').open = true;
   };
+  $('#btn-tour-room').onclick = () => { $('#room').classList.remove('opts-open'); window.Tour.start('sala'); };
   document.addEventListener('mousedown', (e) => {
     if ($('#room').classList.contains('opts-open') && !e.target.closest('#side-opts, .side-links, #btn-options')) $('#room').classList.remove('opts-open');
   });
@@ -6271,6 +6434,14 @@ initRoomUi();
 initUpdates();
 window.ThemePicker.init(); // "Escolher tema": a lista de tema abre a galeria
 window.News.init(); // novidades da versão: abre sozinha uma vez depois de cada atualização
+// tour da primeira vez na tela de entrada: só em instalação nova, nunca em teste nem por cima de outra janela
+window.native.testing().then((testing) => {
+  if (testing) return;
+  setTimeout(() => {
+    if (!$('#room').classList.contains('hidden') || window.News.isOpen() || window.ThemePicker.isOpen()) { if (!NEW_USER) window.Tour.auto('entrada', false); return; }
+    window.Tour.auto('entrada', NEW_USER);
+  }, 900);
+}, () => {});
 // o tema se mexe no uso (vida.js): para com jogo em tela cheia e no modo leve; o medidor de som lê as telas dos amigos
 window.Vida.init({
   gaming: () => !!state.gaming,

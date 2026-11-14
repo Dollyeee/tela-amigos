@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('native', {
   autostart: (on) => ipcRenderer.invoke('app:autostart', on),
   startedHidden: () => ipcRenderer.invoke('app:started-hidden'),
   theme: (t) => ipcRenderer.send('theme:set', t),
+  uiZoom: (z) => ipcRenderer.invoke('ui:zoom', z), // tamanho da interface (sem valor: só lê)
   focusWindow: () => ipcRenderer.invoke('window:focus'),
   trayStatus: (s) => ipcRenderer.send('tray:status', s),
   saveClip: (name, buffer) => ipcRenderer.invoke('clip:save', name, buffer),

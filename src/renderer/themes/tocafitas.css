@@ -506,3 +506,11 @@ html[data-theme="tocafitas"] {
   .hist-summary { color: var(--ink); }
   .hist-tip { border: none; border-radius: 4px; background: var(--lcd); color: var(--amber); font-family: var(--mono); box-shadow: inset 0 0 0 1px #000, 0 0 0 1px var(--edge); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* a foto vira um adesivo colado na etiqueta da fita, antes do nome */
+:where(html[data-theme="tocafitas"]) {
+  #people li:has(.avatar.has-photo) .person-name::before { content: ''; display: inline-block; width: 22px; height: 22px; margin-right: 9px; vertical-align: -3px; border-radius: 2px;
+    background: var(--photo) center / cover; box-shadow: 0 0 0 2px #fff, 0 1px 3px 2px rgba(0, 0, 0, .3); transform: rotate(-5deg); }
+  .photo-btn .avatar { border-radius: 3px; }
+}

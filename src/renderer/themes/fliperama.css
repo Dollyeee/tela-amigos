@@ -529,3 +529,11 @@ html[data-theme="fliperama"] {
   .nettest-table td, .nettest-table th { border-color: var(--nv3); }
   .hist-tip { border: none; border-radius: 0; background: var(--bk); color: var(--wh); box-shadow: var(--ring2); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* a foto em pixels grandes, como os bonequinhos (a mesma foto em 12x12, sem suavizar) */
+:where(html[data-theme="fliperama"]) {
+  .av-photo { border-radius: 0; background-image: var(--photo-px) !important; image-rendering: pixelated; }
+  :is(#people, .tile-name) .av-photo { inset: 3px; }
+  .photo-btn .avatar { border-radius: 0; }
+}

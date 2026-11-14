@@ -389,3 +389,9 @@ html[data-theme="planta"] {
   .nettest-table td, .nettest-table th { border-color: var(--ln2); }
   .hist-tip { border: none; border-radius: 0; background: var(--bp2); color: var(--text); box-shadow: 0 0 0 1px var(--ln); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* o número de cada pessoa (na lista, no chat e no nome da tela) vira a foto dela, no tom azul da planta */
+:where(html[data-theme="planta"]) {
+  :is(#people li, .chat-msg, .tile-name):has(.avatar.has-photo)::before { content: ''; background: var(--photo) center / cover; mix-blend-mode: luminosity; }
+}

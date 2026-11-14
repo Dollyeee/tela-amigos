@@ -272,3 +272,8 @@ html[data-theme="disquete"] {
   .news-theme.on .nt-name { background: #000080; color: #fff; }
   .news-theme .nt-on { color: inherit; font: 400 11px var(--ms); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+:where(html[data-theme="disquete"]) {
+  .photo-btn .avatar { border-radius: 0; }
+}

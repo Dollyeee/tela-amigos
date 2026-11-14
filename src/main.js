@@ -185,12 +185,43 @@ function savedTheme() {
 }
 // tema em uso: as janelas por cima do monitor (mãozinha, desenhos, emotes) desenham no jeito dele
 let fxTheme = String(savedTheme().id || 'classico');
+let barCss = barHeight(savedTheme().height); // altura do topo do tema, em pixels da página (antes do tamanho da interface)
+
+// Tamanho da interface (Opções): zoom só da janela principal (a sobreposição e as janelinhas por cima do
+// monitor ficam em 100%). Guardado para a janela já abrir no tamanho certo. A faixa dos botões do Windows e
+// o tamanho mínimo da janela acompanham: o app sempre tem pelo menos 900x560 "de página".
+const ZOOMS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
+const zoomFile = () => path.join(app.getPath('userData'), 'interface.json');
+function savedZoom() {
+  try { const z = Number(JSON.parse(fs.readFileSync(zoomFile(), 'utf8')).zoom); if (ZOOMS.includes(z)) return z; } catch {}
+  return 1;
+}
+let uiZoom = 1;
+const barPx = () => Math.round(barCss * uiZoom);
+function applyZoom() {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.setZoomFactor(uiZoom);
+    win.setMinimumSize(Math.round(900 * uiZoom), Math.round(560 * uiZoom));
+    win.setTitleBarOverlay({ height: barPx() });
+  } catch (e) { console.warn('tamanho da interface:', e.message); }
+}
+ipcMain.handle('ui:zoom', (_e, z) => {
+  if (z != null && ZOOMS.includes(Number(z)) && Number(z) !== uiZoom) {
+    uiZoom = Number(z);
+    applyZoom();
+    try { fs.writeFileSync(zoomFile(), JSON.stringify({ zoom: uiZoom })); } catch {}
+  }
+  return uiZoom;
+});
+
 ipcMain.on('theme:set', (_e, t) => {
   if (!t || !isColor(t.color) || !isColor(t.symbol)) return;
   fxTheme = String(t.id || 'classico').slice(0, 30);
+  barCss = barHeight(t.height);
   try {
     if (win && !win.isDestroyed()) {
-      win.setTitleBarOverlay({ color: t.color, symbolColor: t.symbol, height: barHeight(t.height) });
+      win.setTitleBarOverlay({ color: t.color, symbolColor: t.symbol, height: barPx() });
       win.setBackgroundColor(t.color);
     }
   } catch (e) { console.warn('tema da janela:', e.message); }
@@ -218,11 +249,12 @@ async function testShot(file) {
 
 function createWindow() {
   const theme = savedTheme();
+  uiZoom = savedZoom();
   win = new BrowserWindow({
     width: 1400,
     height: 860,
-    minWidth: 900,
-    minHeight: 560,
+    minWidth: Math.round(900 * uiZoom),
+    minHeight: Math.round(560 * uiZoom),
     backgroundColor: theme.color,
     title: 'Tela Amigos',
     show: !process.env.TELA_TEST_HIDDEN && !STARTED_HIDDEN, // teste sem janela; com o Windows: só na bandeja
@@ -231,12 +263,13 @@ function createWindow() {
     // barra de título integrada: o topo do app vira a área de arrastar e os botões do Windows
     // (minimizar/maximizar/fechar) ficam no canto, na cor do app
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: theme.color, symbolColor: theme.symbol, height: barHeight(theme.height) },
+    titleBarOverlay: { color: theme.color, symbolColor: theme.symbol, height: barPx() },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
+      zoomFactor: uiZoom,
     },
   });
   win.removeMenu();

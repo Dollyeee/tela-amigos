@@ -473,3 +473,11 @@ html[data-theme="sessao"] {
   .nettest-table td { border-color: var(--ln); }
   .hist-tip { border: 1px solid var(--gold3); border-radius: 0; background: #100d0a; color: var(--iv); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* quem tem foto ganha o retrato no lugar da poltrona, como no programa da peça */
+:where(html[data-theme="sessao"]) {
+  #people li:has(.avatar.has-photo)::before { content: '';
+    background: radial-gradient(circle 17px at center, transparent 14.5px, var(--gold3) 15px, var(--gold3) 16px, var(--pn) 16.5px), var(--photo) center / 32px 32px no-repeat; }
+  .photo-btn .avatar.has-photo { box-shadow: 0 0 0 1px var(--gold3); }
+}

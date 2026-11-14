@@ -68,7 +68,17 @@ function pageCommon() {
     }, 10);
     return { track: gen, stop() { clearInterval(timer); try { w.close().catch(() => {}); } catch {} try { gen.stop(); } catch {} } };
   }
-  window.T = { sleep, log, until, check, join, fakeVideo, fakeAudio };
+  // uma imagem qualquer, desenhada aqui, como se fosse escolhida no PC (para a foto de perfil)
+  async function photoFile(a, b) {
+    const c = document.createElement('canvas');
+    c.width = 300; c.height = 200;
+    const g = c.getContext('2d');
+    g.fillStyle = a; g.fillRect(0, 0, 300, 200);
+    g.fillStyle = b; g.fillRect(100, 0, 100, 200);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    return new File([blob], 'foto.png', { type: 'image/png' });
+  }
+  window.T = { sleep, log, until, check, join, fakeVideo, fakeAudio, photoFile };
 }
 
 async function pageA() {
@@ -174,6 +184,59 @@ async function pageA() {
       check('favoritas: tirar a estrela (também pelo teclado) tira a sala fechada da lista', !/Beto/.test(titles()) && !/26\.2\.2\.2/.test(localStorage.getItem('favRooms') || ''), titles());
       for (const [k, v] of [['favRooms', keep.fav], ['recentRooms', keep.recent]]) { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }
       discovered = keep.disc; renderRooms();
+    }
+
+    // ---------------------------------------------------------------- 0e) foto de perfil, tamanho da interface e tour (na entrada)
+    {
+      const F = window.Foto;
+      const src = await F.fromFile(await window.T.photoFile('#e84', '#26a'));
+      const dims = await new Promise((r) => { const im = new Image(); im.onload = () => r(`${im.width}x${im.height}`); im.onerror = () => r('?'); im.src = src; });
+      check('foto: a imagem escolhida vira um quadrado de 160x160 em WebP, pequeno para ir pela sala', F.valid(src) && src.startsWith('data:image/webp') && src.length < 40000 && dims === '160x160', `${dims} ${src.length}`);
+      let why = '';
+      try { await F.fromFile(new File(['oi'], 'a.txt', { type: 'text/plain' })); } catch (e) { why = e.message; }
+      check('foto: arquivo que não é imagem é recusado com aviso', /imagem/i.test(why), why);
+      $('#name').value = 'VIDA A';
+      $('#name').dispatchEvent(new Event('input'));
+      F.setMine('');
+      check('foto: sem foto, o botão da entrada mostra a inicial e o "+"', !$('#lobby-photo').classList.contains('has') && $('#lobby-photo .avatar').textContent.startsWith('V') && !$('#lobby-photo .av-photo'));
+      F.setMine(src);
+      check('foto: escolhida, aparece no botão da entrada e nas Opções, e fica guardada', $('#lobby-photo').classList.contains('has') && !!$('#lobby-photo .av-photo') && !!$('#opt-photo .av-photo') &&
+        !$('#opt-photo-clear').classList.contains('hidden') && localStorage.getItem('photo') === src);
+      check('foto: todo avatar com o meu nome ganha a foto', !!avatar('VIDA A').querySelector('.av-photo') && !avatar('Outro').querySelector('.av-photo'));
+      F.setFriend('Fulano', 'data:image/png;base64,AAAA")');
+      F.setFriend('Fulano', 'javascript:alert(1)');
+      check('foto: o que não é foto de verdade é ignorado', F.of('Fulano') === '');
+      // tamanho da interface
+      await setUiZoom(1);
+      await sleep(300);
+      const w0 = innerWidth;
+      await setUiZoom(1.25);
+      await sleep(400);
+      check('tamanho da interface: 125% aumenta tudo (a página fica com menos pixels de largura) e as listas mostram o valor',
+        Math.abs(innerWidth - w0 / 1.25) < 3 && document.documentElement.classList.contains('zoom-x') && $('#opt-zoom').value === '1.25' && $('#theme-zoom').value === '1.25', `${w0} -> ${innerWidth}`);
+      const z3 = await window.native.uiZoom(3);
+      check('tamanho da interface: valor fora da lista é ignorado', z3 === 1.25, String(z3));
+      await setUiZoom(1);
+      await sleep(400);
+      check('tamanho da interface: volta a 100%', Math.abs(innerWidth - w0) < 3 && !document.documentElement.classList.contains('zoom-x'), `${innerWidth}`);
+      // tour da entrada
+      const TU = window.Tour;
+      check('tour: nunca abre sozinho numa cópia de teste', !document.getElementById('tour'));
+      TU.start('entrada');
+      const cur = () => TU.current();
+      check('tour: abre no primeiro passo (o nome e a foto), com a contagem', !!cur() && cur().target === document.querySelector('.lobby-card > .field') && /^1 de \d/.test($('#tour .tour-count').textContent),
+        $('#tour .tour-count') ? $('#tour .tour-count').textContent : 'sem tour');
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+      check('tour: a seta para a direita vai para o próximo (Hospedar)', cur() && cur().target.id === 'btn-host');
+      $('#tour .tour-back').click();
+      check('tour: "Voltar" volta', cur() && cur().at === 0);
+      let n = 0;
+      while (TU.isOpen() && n++ < 10) $('#tour .tour-next').click();
+      check('tour: "Próximo" até o fim fecha no último ("Entendi")', !TU.isOpen() && !document.getElementById('tour') && n >= 4, String(n));
+      TU.start('entrada');
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      check('tour: Esc fecha', !TU.isOpen());
+      check('tour: quem já viu (ou já usava o app) não vê sozinho de novo', TU.auto('entrada', true) === false && TU.auto('sala', false) === false && TU.seen('sala'));
     }
 
     // ---------------------------------------------------------------- 0b) Troca de tema com a animação de instalação
@@ -381,6 +444,29 @@ async function pageA() {
       check('tema de quem fez: cada risco no tema dele (o de tema sem risco próprio fica com o de sempre)', plain.length === 1 && !plain[0].th);
     }
 
+    // ---------------------------------------------------------------- 4d) foto do amigo chega pela sala; tour da sala
+    {
+      const F = window.Foto;
+      await until(() => F.of('VIDA B'), 20000, 'foto do B').catch(() => {});
+      const rowB = () => [...document.querySelectorAll('#people li')].find((l) => /VIDA B/.test(l.textContent));
+      const fb = F.of('VIDA B');
+      check('foto: a do amigo chega pela sala e aparece na lista de pessoas', F.valid(fb) && !!rowB() && !!rowB().querySelector('.avatar .av-photo'));
+      onRelay(peer().id, { kind: 'photo', img: 'data:image/png;base64,AAAA")' });
+      check('foto: mensagem com algo que não é foto não muda nada', F.of('VIDA B') === fb);
+      onRelay(peer().id, { kind: 'photo', img: '' });
+      check('foto: amigo tirou a foto, volta a inicial na hora', F.of('VIDA B') === '' && !!rowB() && !rowB().querySelector('.av-photo'));
+      onRelay(peer().id, { kind: 'photo', img: fb });
+      const TU = window.Tour;
+      state.layout = 'focus'; render();
+      TU.start('sala');
+      check('tour da sala: começa em "Compartilhar tela"', !!TU.current() && TU.current().target.id === 'btn-share');
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', bubbles: true, cancelable: true }));
+      check('tour da sala: as teclas da sala esperam o tour acabar (G não troca para a grade)', state.layout === 'focus', state.layout);
+      TU.stop();
+      check('tour da sala: fecha sem sobrar nada na tela', !document.getElementById('tour'));
+      state.layout = 'grid'; render();
+    }
+
     // ---------------------------------------------------------------- 5) caneta depois de a tela sair da página
     if (meTile && meTile.el.isConnected) {
       // a janela escondida do teste não desenha quadros: o desenho do app passa a andar por temporizador
@@ -541,6 +627,51 @@ async function pageA() {
         await stopShare();
         sfuWanted = realWanted;
         Object.assign(S, real);
+      }
+    }
+
+    // ---------------------------------------------------------------- 7e) amigo que só chega pelo servidor de vídeo
+    // (2026-11-14: o Nuke, com o Cloudflare WARP ligado, sem conexão direta com ninguém. O servidor ficou instável para
+    // quem assistia, entrou na pausa de 5 min e a tela dele ficou preta; e a conexão direta parou em "new" para sempre)
+    {
+      const now = Date.now(), keep = { until: state.sfuPauseUntil, soft: state.sfuPauseSoft };
+      const fake = (st, extra = {}) => ({ name: 'Nuke', sharing: true, sfuPub: { s: 's1', v: 'v1', a: null, n: 3 }, iWant: 'full', pc: { connectionState: st }, ...extra });
+      try {
+        state.sfuPauseUntil = now + 60000; state.sfuPauseSoft = true;
+        check('só pelo servidor: pausa de servidor instável vale para quem tem conexão direta, não para quem só chega por ele',
+          sfuPaused() && !sfuPaused(true) && !sfuPullWant(fake('connected')) && sfuPullWant(fake('connecting')) && sfuPullWant(fake('new')));
+        state.sfuPauseSoft = false;
+        check('só pelo servidor: a pausa do limite do mês vale para todo mundo', sfuPaused(true) && !sfuPullWant(fake('connecting')));
+        state.sfuPauseUntil = 0;
+        const tres = { sfuFail: { key: 's1/v1', n: 3, at: now - 40000 } };
+        check('só pelo servidor: depois de 3 falhas, quem tem conexão direta fica nela; sem ela, tenta de novo',
+          !sfuPullWant(fake('connected', tres)) && sfuPullWant(fake('connecting', tres)));
+        check('só pelo servidor: falhou agora há pouco, espera antes de tentar de novo', !sfuPullWant(fake('connecting', { sfuFail: { key: 's1/v1', n: 1, at: now - 2000 } })));
+        check('só pelo servidor: sem transmissão, ou sem querer ver, não puxa', !sfuPullWant(fake('connecting', { sharing: false })) && !sfuPullWant(fake('connecting', { iWant: 'off' })));
+      } finally { state.sfuPauseUntil = keep.until; state.sfuPauseSoft = keep.soft; }
+      // conexão direta parada em "new": tudo síncrono (o amigo de mentira não fica na lista entre um intervalo e outro)
+      const realRebuild = rebuildPeer;
+      const rebuilt = [];
+      let restarts = 0;
+      const stuck = { id: 'parado', name: 'Parado', pc: { connectionState: 'new', signalingState: 'closed', restartIce() { restarts++; } } };
+      rebuildPeer = (id) => { rebuilt.push(id); return true; };
+      state.peers.set(stuck.id, stuck);
+      try {
+        const t0 = Date.now();
+        newWatch(t0); newWatch(t0 + 10000);
+        const at10 = restarts + rebuilt.length;
+        newWatch(t0 + 21000);
+        const at21 = { restarts, rebuilt: rebuilt.length };
+        newWatch(t0 + 46000);
+        check('conexão parada em "new": 20 s negocia de novo, 45 s refaz dos dois lados (antes ficava assim para sempre)',
+          at10 === 0 && at21.restarts === 1 && at21.rebuilt === 0 && rebuilt.length === 1 && rebuilt[0] === 'parado', `${at10} ${JSON.stringify(at21)} ${rebuilt.length}`);
+        stuck.pc.connectionState = 'connected';
+        newWatch(t0 + 50000);
+        check('conexão parada em "new": conectou, o vigia esquece', stuck.newSince === null);
+      } finally {
+        state.peers.delete(stuck.id);
+        rebuildPeer = realRebuild;
+        newRebuilds.delete('Parado');
       }
     }
 
@@ -712,7 +843,10 @@ async function pageB() {
     check('"entrar sozinho na última sala" entra sem clique' + (already ? ' (já ao abrir o app)' : ''), joined);
     localStorage.setItem('autoJoin', '0');
     if (!joined) { $('#name').value = 'VIDA B'; checkName(); joinRoom('127.0.0.1'); await until(() => !$('#room').classList.contains('hidden'), 15000, 'entrar na sala'); }
+    window.Foto.setMine(await window.Foto.fromFile(await window.T.photoFile('#3a8', '#fd4'))); // a foto do B vai para o A (ele confere)
     await until(() => /fim-a/.test($('#chat-log').textContent), 170000, 'A terminar');
+    const rowA = [...document.querySelectorAll('#people li')].find((l) => /VIDA A/.test(l.textContent));
+    check('foto: a do A chegou no B e aparece na lista de pessoas', window.Foto.valid(window.Foto.of('VIDA A')) && !!rowA && !!rowA.querySelector('.av-photo'));
     if (window.SW_MODE) check('placa sem codificar: o amigo recebe o motivo (para o indicador dele)', sawSw === 'placa', String(sawSw));
     else check('placa codificando: o amigo não recebe aviso de processador', sawSw === null, String(sawSw));
     log('B OK');

@@ -388,3 +388,12 @@ html[data-theme="galeria-noite"] {
   .nettest-table td, .nettest-table th { border-color: var(--line); }
   .hist-tip { border: none; border-radius: 0; background: var(--paper); color: var(--text); box-shadow: var(--shadow-lg); }
 }
+
+/* ---------- foto de perfil (foto.js; v1.0.72) ---------- */
+/* a foto como um quadrinho emoldurado antes do nome; o ponto depois do nome continua dizendo quem está ao vivo */
+:where(html[data-theme^="galeria"]) {
+  #people .avatar .av-photo { display: none; }
+  #people li:has(.avatar.has-photo) .person-name::before { content: ''; display: inline-block; width: 24px; height: 24px; margin-right: 10px; vertical-align: -4px;
+    border: 2px solid var(--paper); background: var(--photo) center / cover; box-shadow: 0 0 0 1px var(--text); }
+  .photo-btn .avatar { border-radius: 0; }
+}
