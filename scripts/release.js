@@ -60,7 +60,10 @@ const files = ['latest.yml', `TelaAmigos-Setup-${pkg.version}.exe`, `TelaAmigos-
 
 let exists = true;
 try { out(`gh release view ${tag} --json name`); } catch { exists = false; }
-if (!exists) run(`gh release create ${tag} --title ${pkg.version} --notes "Tela Amigos ${pkg.version}" --latest`);
+// o texto da versão no GitHub é o das Novidades (scripts/release-notes.js)
+const notes = require('./release-notes').notesFile(pkg.version);
+if (!exists) run(`gh release create ${tag} --title ${pkg.version} --notes-file "${notes}" --latest`);
+else run(`gh release edit ${tag} --notes-file "${notes}"`);
 for (let attempt = 1; attempt <= 3; attempt++) {
   try {
     run(`gh release upload ${tag} ${files.map((n) => `"dist/${n}"`).join(' ')} --clobber`);
