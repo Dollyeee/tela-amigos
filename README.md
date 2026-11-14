@@ -4,95 +4,99 @@
 
 # Tela Amigos
 
-**Compartilhe a tela com os amigos em 1080p a 60 fps, direto de PC para PC.**<br>
-Para jogar junto, assistir junto e mostrar o que você está fazendo, com várias telas ao mesmo tempo.
+**Share your screen with friends in 1080p at 60 fps, straight from PC to PC.**<br>
+For playing together, watching together and showing what you're up to, with several screens at once.
 
-[![Baixar para Windows](https://img.shields.io/github/v/release/Dollyeee/tela-amigos?label=Baixar%20para%20Windows&style=for-the-badge&color=6c5cff)](https://github.com/Dollyeee/tela-amigos/releases/latest)
+[![Download for Windows](https://img.shields.io/github/v/release/Dollyeee/tela-amigos?label=Download%20for%20Windows&style=for-the-badge&color=6c5cff)](https://github.com/Dollyeee/tela-amigos/releases/latest)
 
-<img src="docs/img/sala.png" width="900" alt="Uma sala do Tela Amigos: a tela da Bia em destaque, as do Rafa e do Léo em miniatura, a lista de quem está na sala e o chat ao lado">
+English · [Português](README.pt-BR.md)
+
+<img src="docs/img/sala.png" width="900" alt="A Tela Amigos room: Bia's screen in focus, Rafa's and Léo's as thumbnails, the people in the room and the chat on the side">
 
 </div>
 
-## O que dá para fazer
+> The app's interface is in Brazilian Portuguese.
 
-- **Todo mundo transmite ao mesmo tempo.** Uma tela em destaque e as outras em miniatura, ou todas lado a lado na grade.
-- **Imagem de verdade:** 1080p a 60 fps (ou a resolução do seu monitor), codificada na placa de vídeo em H.264, H.265 ou AV1, com o som do jogo ou do PC. O som do Discord fica de fora, para não dar eco.
-- **Direto de PC para PC**, pela rede do **Radmin VPN** (ou Hamachi, Tailscale, rede local) ou por uma **sala online** com código, sem VPN nenhuma.
-- **Se adapta à internet de cada amigo:** quem tem a rede fraca recebe uma versão mais leve, sem puxar a qualidade dos outros para baixo.
-- **Desenhe, aponte e reaja** em cima da tela do amigo. Ele vê os riscos, a mãozinha e os emotes no próprio monitor, por cima do jogo, sem aparecer na transmissão.
-- **Salve um clipe** dos últimos 30 segundos, grave sem limite de tempo ou tire uma foto da tela de qualquer um.
-- **Sobreposição:** a tela de um amigo numa janelinha sempre por cima do jogo.
-- **Assistir junto:** o "Todo mundo pronto?" conta 3, 2, 1 e dá play no vídeo na hora certa.
-- **Chat, câmera, zoom e volume por amigo** (até 300%), com o som de todos nivelado.
-- **15 temas** para mudar a cara do app, cada um com os próprios emotes, animações e jeito de desenhar.
+## What it does
+
+- **Everyone can stream at the same time.** One screen in focus and the others as thumbnails, or all of them side by side in a grid.
+- **Real image quality:** 1080p at 60 fps (or your monitor's resolution), encoded on the graphics card in H.264, H.265 or AV1, with the sound of your game or PC. Discord's audio is left out, so there's no echo.
+- **Straight from PC to PC**, over a **Radmin VPN** network (or Hamachi, Tailscale, your local network) or through an **online room** with a code, no VPN needed.
+- **Adapts to each friend's connection:** someone on a weak network gets a lighter version, without dragging everyone else's quality down.
+- **Draw, point and react** on top of a friend's screen. They see the strokes, the pointing hand and the emotes on their own monitor, over the game, without any of it showing up in the stream.
+- **Save a clip** of the last 30 seconds, record with no time limit, or take a snapshot of anyone's screen.
+- **Overlay:** keep a friend's screen in a small window always on top of your game.
+- **Watch together:** "Todo mundo pronto?" (everyone ready?) counts down 3, 2, 1 and hits play on the video at the right moment.
+- **Chat, webcam, zoom and per-friend volume** (up to 300%), with everyone's audio leveled.
+- **15 themes** to change the look of the app, each with its own emotes, animations and drawing style.
 
 <div align="center">
-<img src="docs/img/caneta.png" width="820" alt="Riscos, mãozinhas e emotes dos amigos em cima da tela da Bia">
+<img src="docs/img/caneta.png" width="820" alt="Friends' strokes, pointing hands and emotes on top of Bia's screen">
 </div>
 
-## Começar
+## Getting started
 
-1. **Baixe** o `TelaAmigos-Setup-x.y.z.exe` em [Releases](https://github.com/Dollyeee/tela-amigos/releases/latest) e abra. Ele instala só para o seu usuário, sem pedir administrador, e depois **se atualiza sozinho**.
-   > O instalador não tem assinatura digital paga, então o Windows pode mostrar "O Windows protegeu o computador". Clique em **Mais informações → Executar assim mesmo** (só na instalação).
-2. **Entre numa sala**, de um destes jeitos:
-   - **Radmin VPN** (a melhor qualidade): todos na mesma rede do Radmin. Uma pessoa clica em **Hospedar sala**; os outros veem a sala em **Salas abertas** e clicam em **Entrar**. Na primeira vez, quem hospeda libera o firewall do Windows (marque redes públicas e privadas).
-   - **Sala online** (sem VPN): uma pessoa clica em **Criar sala online** e manda o código de 6 letras; os outros digitam o código e entram.
-3. Clique em **Compartilhar tela**, escolha a tela ou a janela, e pronto.
+1. **Download** `TelaAmigos-Setup-x.y.z.exe` from [Releases](https://github.com/Dollyeee/tela-amigos/releases/latest) and run it. It installs just for your user, with no admin rights, and then **updates itself**.
+   > The installer isn't signed with a paid certificate, so Windows may show "Windows protected your PC". Click **More info → Run anyway** (only when installing).
+2. **Join a room**, in one of these ways:
+   - **Radmin VPN** (best quality): everyone on the same Radmin network. One person clicks **Hospedar sala** (host a room); the others see it under **Salas abertas** (open rooms) and click **Entrar** (join). The first time, whoever hosts allows the app through the Windows firewall (tick both public and private networks).
+   - **Online room** (no VPN): one person clicks **Criar sala online** (create an online room) and sends the 6-character code; the others type the code and join.
+3. Click **Compartilhar tela** (share screen), pick a screen or a window, and you're live.
 
 <div align="center">
-<img src="docs/img/entrada.png" width="720" alt="A tela de entrada: o seu nome, hospedar uma sala ou entrar numa das salas abertas">
+<img src="docs/img/entrada.png" width="720" alt="The start screen: your name, host a room or join one of the open rooms">
 </div>
 
-## Temas
+## Themes
 
-Clique em **Tema**, no rodapé da tela de entrada ou em **Opções**, e escolha. Muda na hora e só no seu PC: cada amigo usa o que quiser.
+Click **Tema**, at the bottom of the start screen or in **Opções** (options), and pick one. It changes right away and only on your PC: each friend uses whichever they like.
 
 <div align="center">
-<img src="docs/img/temas.png" width="820" alt="A tela de escolher tema, com a prévia dos 15 temas">
+<img src="docs/img/temas.png" width="820" alt="The theme picker, previewing all 15 themes">
 <br><br>
-<img src="docs/img/temas-exemplos.png" width="820" alt="A mesma sala nos temas Cyberpunk, Gibi, Taverna e Disquete">
+<img src="docs/img/temas-exemplos.png" width="820" alt="The same room in the Cyberpunk, Gibi, Taverna and Disquete themes">
 </div>
 
-## Perguntas
+## FAQ
 
 <details>
-<summary><b>Preciso de uma placa de vídeo boa?</b></summary>
+<summary><b>Do I need a good graphics card?</b></summary>
 
-Ajuda bastante: a imagem é codificada na placa (NVIDIA, AMD ou Intel), quase sem pesar no jogo. Sem ela, o processador faz esse trabalho. Funciona, mas pesa mais, e o app avisa quando isso acontece.
+It helps a lot: the image is encoded on the graphics card (NVIDIA, AMD or Intel), with almost no impact on your game. Without one, the processor does the work. It still works, but it's heavier, and the app tells you when that happens.
 </details>
 
 <details>
-<summary><b>Funciona em qual sistema?</b></summary>
+<summary><b>Which systems does it run on?</b></summary>
 
-Windows 10 e 11, de 64 bits.
+Windows 10 and 11, 64-bit.
 </details>
 
 <details>
-<summary><b>O jogo engasga quando eu transmito. O que faço?</b></summary>
+<summary><b>My game stutters when I stream. What can I do?</b></summary>
 
-Limite o FPS do jogo um pouco abaixo da taxa do monitor (por exemplo, 141 num monitor de 144 Hz). A placa fica com folga e a transmissão e o jogo ficam lisos.
+Cap your game's FPS a little below your monitor's refresh rate (for example, 141 on a 144 Hz monitor). The graphics card gets some headroom and both the stream and the game run smoothly.
 </details>
 
 <details>
-<summary><b>Meus amigos veem o meu tema?</b></summary>
+<summary><b>Do my friends see my theme?</b></summary>
 
-Não. O tema vale só no seu PC. Os emotes que você manda chegam para cada amigo no tema dele.
+No. The theme only applies on your PC. The emotes you send show up for each friend in their own theme.
 </details>
 
 <details>
-<summary><b>Por onde passa a minha tela?</b></summary>
+<summary><b>Where does my screen go?</b></summary>
 
-Pelo Radmin, direto do seu PC para o de cada amigo, sem servidor no meio. Na sala online o vídeo também vai direto pela internet; pelo servidor da sala passam as mensagens de conexão (quem entrou, o chat). Se você ligar a opção **"Servidor de vídeo quando precisar"**, a sua tela pode passar por um servidor de vídeo quando o seu upload não dá conta de mandar uma cópia para cada amigo.
+Over Radmin, straight from your PC to each friend's, with no server in between. In an online room the video also goes directly over the internet; only the connection messages (who joined, the chat) go through the room server. If you turn on **"Servidor de vídeo quando precisar"** (video server when needed), your screen may go through a video server when your upload can't keep up with sending a copy to each friend.
 </details>
 
 <details>
-<summary><b>Deu problema. E agora?</b></summary>
+<summary><b>Something went wrong. Now what?</b></summary>
 
-Clique em **Enviar diagnóstico**. O app gera um arquivo na Área de Trabalho com tudo o que ajuda a achar o problema; mande para quem cuida do app.
+Click **Enviar diagnóstico** (send diagnostics). The app saves a file to your Desktop with everything that helps track the problem down; send it to whoever looks after the app.
 </details>
 
-## Como funciona
+## How it works
 
-O app é feito em Electron e usa WebRTC para levar o vídeo e o som. Um programa auxiliar em C# captura a tela pelo próprio Windows (Windows Graphics Capture ou DXGI), codifica na placa de vídeo pelo Media Foundation e captura o som de cada programa separado. A sala pelo Radmin é um servidor pequeno que roda no PC de quem hospeda; a sala online e o servidor de vídeo opcional rodam na Cloudflare.
+The app is built with Electron and uses WebRTC to carry video and audio. A helper program written in C# captures the screen through Windows itself (Windows Graphics Capture or DXGI), encodes it on the graphics card through Media Foundation, and captures each program's audio separately. A Radmin room is a small server running on the host's PC; online rooms and the optional video server run on Cloudflare.
 
-O detalhe de cada recurso e como desenvolver estão no [LEIA-ME](LEIA-ME.md). O que mudou em cada versão está em [Releases](https://github.com/Dollyeee/tela-amigos/releases).
+Every feature in detail, and how to build the app, is in the [LEIA-ME](LEIA-ME.md) (in Portuguese). What changed in each version is under [Releases](https://github.com/Dollyeee/tela-amigos/releases).

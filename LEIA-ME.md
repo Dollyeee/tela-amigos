@@ -160,7 +160,7 @@ Requer Node.js, .NET 10 SDK e `gh` logado.
 número que a versão vai ter e em linguagem de quem usa o app. É o que a tela de novidades mostra aos amigos; sem ela o
 release para logo no começo (`--no-notes` publica assim mesmo: nessa versão a tela não abre).
 O mesmo texto vira a descrição da versão na página de Releases do GitHub (`scripts/release-notes.js`; `node scripts/release-notes.js --atualizar` reescreve as versões antigas que têm Novidades). A página inicial do
-repositório é o `README.md`, com as imagens em `docs/img` (`capa.png` é a imagem de prévia do link, que se põe à mão
+repositório é o `README.md` (em inglês; em português: `README.pt-BR.md`), com as imagens em `docs/img` (`capa.png` é a imagem de prévia do link, que se põe à mão
 em Settings → Social preview).
 
 Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada vez):
