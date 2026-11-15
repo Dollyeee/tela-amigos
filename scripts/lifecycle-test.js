@@ -164,6 +164,31 @@ async function pageA() {
       T.set(keep);
     }
 
+    // ---------------------------------------------------------------- 0f) botão "Opções" (Taverna: abria um clique sim, outro não)
+    {
+      const keep = window.Themes.current, det = $('#side-opts'), room = $('#room'), bo = $('#btn-options');
+      const keepOpen = det.open;
+      window.Themes.set('taverna');
+      det.open = false;
+      bo.click();
+      const a1 = det.open;
+      bo.click();
+      const a2 = det.open;
+      det.open = true; // aberta pela própria lista
+      bo.click();
+      const a3 = det.open;
+      bo.click();
+      check('opções (tema sem painel, Taverna): o botão abre e fecha a lista da barra lateral, mesmo depois de mexer nela pela própria lista',
+        a1 === true && a2 === false && a3 === false && det.open === true && !room.classList.contains('opts-open'), [a1, a2, a3, det.open].join(','));
+      window.Themes.set('fliperama');
+      bo.click();
+      const p1 = room.classList.contains('opts-open') && det.open;
+      bo.click();
+      check('opções (tema com painel, Fliperama): o botão abre e fecha o painel', p1 && !room.classList.contains('opts-open'));
+      window.Themes.set(keep);
+      det.open = keepOpen;
+    }
+
     // ---------------------------------------------------------------- 0d) salas favoritas (a estrela na lista de salas)
     {
       const keep = { fav: localStorage.getItem('favRooms'), recent: localStorage.getItem('recentRooms'), disc: discovered };

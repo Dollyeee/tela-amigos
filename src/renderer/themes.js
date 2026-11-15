@@ -9,11 +9,14 @@
   // barH: altura da faixa desses botões, quando o topo do tema não tem os 56 px de sempre
   // barLobby / barLobbyH: o mesmo só para a tela de entrada, quando ela tem outro fundo que a sala
   // place: peças que mudam de lugar (seletor -> seletor de destino); voltam para casa nos outros temas
+  // optsPanel: o botão "Opções" abre um painel próprio do tema (o CSS dele usa #room.opts-open); sem isso, o botão
+  // abre e fecha a lista "Opções" da barra lateral
   // tile: como cada tela é arrumada por dentro (ver tileSetup)
   // text: rótulos com outro nome no tema (seletor -> texto); só títulos e legendas, nunca botões.
   //       "seletor@atributo" troca um atributo (ex.: o texto de exemplo de um campo)
   // Varanda tem duas versões (dia e noite) com o mesmo desenho: só as cores mudam (ver themes/varanda.css)
   const VARANDA = {
+    optsPanel: true, // Opções num painel próprio (#room.opts-open)
     place: { '.top-actions': '#stage', '#btn-options': '.side-links' },
     tile: { frame: [20, 20] },
     text: {
@@ -27,12 +30,14 @@
   };
   // a Galeria e a versão dela com a parede escura (galeria-noite) arrumam as peças do mesmo jeito
   const GALERIA = {
+    optsPanel: true, // Opções num painel próprio (#room.opts-open)
     tile: { badgeInBar: true, frame: [26, 70] },
     text: { '#my-slot span': 'a compartilhar' },
   };
   const THEMES = [
     { id: 'classico', name: 'Clássico', bar: ['#0e0f13', '#c9cdd8'] },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'arena', name: 'Arena', bar: ['#0e0f12', '#c8ccd6'],
       place: { '.top-actions': '#dock' },
       tile: { badgeInBar: true },
@@ -41,6 +46,7 @@
     { id: 'varanda', name: 'Varanda', bar: ['#dfeee2', '#17362b'], ...VARANDA },
     { id: 'varanda-noite', name: 'Varanda (noite)', bar: ['#10261e', '#e9f5ec'], ...VARANDA },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'neon', name: 'Neon', bar: ['#0b0a13', '#f4f0ff'],
       place: { '.top-actions': '#dock' },
       tile: { frame: [10, 10] },
@@ -49,6 +55,7 @@
     { id: 'galeria', name: 'Galeria', bar: ['#ffffff', '#121212'], ...GALERIA },
     { id: 'galeria-noite', name: 'Galeria (noite)', bar: ['#131312', '#ecebe6'], ...GALERIA },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'caderno', name: 'Caderno', bar: ['#fdfcf6', '#3d3d3d'],
       place: { '.top-actions': '#stage' },
       tile: { badgeInBar: true, frame: [24, 54] },
@@ -59,6 +66,7 @@
       },
     },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'planta', name: 'Planta', bar: ['#1d4fb0', '#f4f8ff'],
       place: { '.top-actions': '.sidebar' },
       tile: { badgeInBar: true, frame: [30, 62] },
@@ -72,6 +80,7 @@
       },
     },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'terminal', name: 'Terminal', bar: ['#050a07', '#3fdc86'], barH: 36,
       place: { '#btn-options': '#side-opts' },
       tile: { frame: [22, 56] },
@@ -85,6 +94,7 @@
       },
     },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'sessao', name: 'Sessão', bar: ['#080706', '#b9ad97'], barH: 40,
       place: { '.top-actions': '#stage' },
       tile: { badgeInBar: true, frame: [20, 64] },
@@ -96,6 +106,7 @@
       },
     },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'fliperama', name: 'Fliperama', bar: ['#15123a', '#f7f5ff'],
       // os botões da sala ficam ao lado da tela; compartilhar (e, no ar, trocar, parar, 2ª tela e ajustes) mora no
       // "lugar da sua tela", na fileira de baixo; a contagem de pessoas sobe para o placar
@@ -111,6 +122,7 @@
       },
     },
     {
+      optsPanel: true, // Opções num painel próprio (#room.opts-open)
       id: 'tocafitas', name: 'Toca-fitas', bar: ['#efe1c4', '#2b1c13'], barH: 64, barLobby: ['#2b1c13', '#efe1c4'], barLobbyH: 40,
       tile: { badgeInBar: true, frame: [20, 86] },
       text: {

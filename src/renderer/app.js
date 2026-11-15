@@ -6200,9 +6200,19 @@ function initRoomUi() {
       if (key) el.textContent = key; else el.parentNode.classList.add('hidden'); // outro programa ficou com o atalho
     }
   }).catch(() => {});
-  // temas em que as opções abrem num painel (o botão "Opções" só existe neles)
+  // botão "Opções" (alguns temas): nos temas com painel próprio (optsPanel, themes.js) abre e fecha o painel; nos
+  // outros (Taverna, Gibi, Cyberpunk, Disquete) abre e fecha a lista "Opções" da barra lateral. Antes ele só trocava a
+  // marca do painel: nesses temas, depois de fechar a lista pela própria lista (ou abrir com ela já aberta), um clique
+  // sim, outro não, nada abria
+  const optsPanel = () => { const t = window.Themes.list.find((x) => x.id === window.Themes.current); return !!(t && t.optsPanel); };
   $('#btn-options').onclick = () => {
-    if ($('#room').classList.toggle('opts-open')) $('#side-opts').open = true;
+    const room = $('#room'), det = $('#side-opts');
+    if (optsPanel()) {
+      if (room.classList.toggle('opts-open')) det.open = true;
+    } else {
+      room.classList.remove('opts-open');
+      det.open = !det.open;
+    }
   };
   $('#btn-tour-room').onclick = () => { $('#room').classList.remove('opts-open'); window.Tour.start('sala'); };
   document.addEventListener('mousedown', (e) => {

@@ -13,6 +13,14 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.73',
+    title: 'Botão Opções sem falhar',
+    items: [
+      'Nos temas **Taverna**, **Gibi**, **Cyberpunk** e **Disquete**, o botão **Opções** lá em cima às vezes não abria nada (um clique sim, outro não). Agora ele abre e fecha a lista de opções sempre.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.72',
     title: 'Foto de perfil, tamanho da interface e um tour',
     items: [
