@@ -492,6 +492,152 @@ async function pageA() {
       state.layout = 'grid'; render();
     }
 
+    // ---------------------------------------------------------------- 4e) captura travada no jogo: refaz só a captura
+    // (2026-11-22, o Doge: reiniciar a captura inteira travou a placa ao desligar o encoder, e a 2ª vez já ia para o
+    // Chromium, tela preta no jogo; o Tarrasque: captura chegando e o encoder sem entregar nada, sem ninguém perceber)
+    {
+      if (!state.share || !state.share.native) { setOpts('native', '720', 30); selectedSource = src; await startShare(); }
+      const sh0 = state.share;
+      const recaps = [], recovers = [];
+      const realRecover = recoverShare;
+      let recapFails = false;
+      window.__testRecapture = async (mode) => { recaps.push(mode); if (recapFails) throw new Error('falha de teste'); return mode === 'other' ? 'dxgi' : 'wgc'; };
+      recoverShare = async (reason, forceChromium) => { recovers.push([reason, !!forceChromium]); };
+      const keepGame = [state.gaming, state.gamingExe];
+      capStalls.length = 0; encStalls.length = 0;
+      const stall = async () => { // 0 fps com o jogo aberto por mais de 6 s
+        const z = { fps: 30, captureFps: 0 };
+        captureStallWatch(z); capZero.since -= 7000; captureStallWatch(z);
+        await sleep(30);
+      };
+      try {
+        state.gaming = true; state.gamingExe = 'rdr2.exe';
+        await stall();
+        check('captura travada no jogo, 1ª vez: refaz só a captura (o encoder e a transmissão continuam)',
+          recaps.join() === 'same' && recovers.length === 0 && state.share === sh0 && sh0.capture === 'wgc', `${recaps} ${JSON.stringify(recovers)}`);
+        await stall();
+        check('2ª vez em até 3 min: refaz pelo outro método do Windows (ainda sem Chromium)',
+          recaps.join() === 'same,other' && recovers.length === 0 && sh0.capture === 'dxgi', `${recaps} ${JSON.stringify(recovers)}`);
+        await stall();
+        check('3ª vez: aí sim a captura do Chromium', recovers.length === 1 && recovers[0][1] === true && recaps.length === 2, JSON.stringify(recovers));
+        recovers.length = 0; recapFails = true;
+        await stall();
+        check('refazer a captura não deu: reinicia a transmissão como antes', recovers.length === 1 && recovers[0][1] === false, JSON.stringify(recovers));
+        // programas que ficam em tela cheia sem desenhar o tempo todo
+        const notGames = ['steamwebhelper.exe', 'whatsapp.root.exe', 'WhatsApp.exe', 'Tela Amigos.exe'].filter((exe) => { state.gamingExe = exe; return gameDrawing(); });
+        state.gamingExe = 'rdr2.exe';
+        check('Steam e WhatsApp em tela cheia não contam como jogo', notGames.length === 0 && gameDrawing(), notGames.join());
+        // codificador parado com a captura chegando (o caso do Tarrasque)
+        recovers.length = 0; encStalls.length = 0;
+        const silent = { fps: 0, captureFps: 44.5, kbps: 0, convOk: false };
+        encoderStallWatch(silent); encZero.since -= 3000; encoderStallWatch(silent);
+        check('codificador parado: espera 6 s antes de agir', recovers.length === 0);
+        encZero.since -= 4000; encoderStallWatch(silent);
+        check('codificador parado há 6 s: reinicia a transmissão (encoder novo)', recovers.length === 1 && recovers[0][1] === false && /codificador/.test(recovers[0][0]), JSON.stringify(recovers));
+        encoderStallWatch(silent); encZero.since -= 7000; encoderStallWatch(silent);
+        check('codificador parado de novo em até 3 min: captura do Chromium', recovers.length === 2 && recovers[1][1] === true, JSON.stringify(recovers));
+        recovers.length = 0;
+        encoderStallWatch({ fps: 30, captureFps: 44 }); encoderStallWatch({ fps: 0, captureFps: 0 });
+        check('tela parada (nada capturado) ou encoder entregando: o vigia do codificador não age', encZero === null && recovers.length === 0);
+      } finally {
+        recoverShare = realRecover;
+        delete window.__testRecapture;
+        [state.gaming, state.gamingExe] = keepGame;
+        capStalls.length = 0; encStalls.length = 0; capZero = null; encZero = null;
+      }
+    }
+
+    // ---------------------------------------------------------------- 4f) placa de captura (console, outro PC)
+    // Para o Windows a placa é uma câmera: só o Chromium abre (mesmo com "Nativa" escolhida) e o som vem da
+    // entrada de som da placa, sem o tratamento de voz do microfone. Aqui tudo é de mentira (nenhum aparelho).
+    {
+      const card = { id: 'device:placa1', type: 'device', deviceId: 'placa1', groupId: '', name: 'USB3.0 HD Video' };
+      const inputs = [{ deviceId: 'a1', groupId: '', name: 'Digital Audio Interface (USB3.0 HD Audio)' }, { deviceId: 'mic', groupId: 'gm', name: 'Microfone (Realtek(R) Audio)' }];
+      const realGum = navigator.mediaDevices.getUserMedia, realHelperStart = window.HelperAudio.start;
+      const calls = [];
+      let failVideo = null, failAudio = null, helperStarts = 0, prevCardTrack = null, prevEndedAtReopen = null;
+      navigator.mediaDevices.getUserMedia = async (c) => {
+        calls.push(c);
+        if (c.audio) {
+          if (failAudio) { const e = failAudio; failAudio = null; throw e; }
+          const a = fakeAudio(); fakes.push(a); return new MediaStream([a.track]);
+        }
+        if (failVideo) { const e = failVideo; failVideo = null; throw e; }
+        if (prevCardTrack) prevEndedAtReopen = prevCardTrack.readyState === 'ended';
+        const v = fakeVideo('#264'); fakes.push(v); prevCardTrack = v.track; return new MediaStream([v.track]);
+      };
+      window.HelperAudio.start = async () => { helperStarts++; throw new Error('teste: o som do PC não pode ser capturado'); };
+      const keepAudioSetting = state.settings.audio;
+      try {
+        // qual entrada de som é da placa
+        const pick = (s, list) => { const r = cardAudioInput(s, list); return r ? r.deviceId : null; };
+        check('som da placa: acha a entrada pelo nome ("USB3.0 HD Video" -> "Digital Audio Interface (USB3.0 HD Audio)")', pick(card, inputs) === 'a1', pick(card, inputs));
+        check('som da placa: o mesmo aparelho para o Chromium (groupId) vale mais que o nome', pick({ ...card, groupId: 'gm' }, inputs) === 'mic');
+        check('som da placa: Elgato ("Game Capture HD60 S+")', pick({ ...card, name: 'Game Capture HD60 S+' }, [inputs[1], { deviceId: 'el', groupId: '', name: 'Game Capture HD60 S+ Audio' }]) === 'el');
+        check('som da placa: nome genérico ("USB Video") não pega o microfone', pick({ ...card, name: 'USB Video' }, [inputs[1]]) === null);
+        // escolher a placa no modal troca o som para a entrada dela; voltar para uma tela devolve o de antes
+        $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option><option value="all-except">Todo o som</option>' +
+          inputs.map((d) => `<option value="in:${d.deviceId}">Entrada: ${d.name}</option>`).join('');
+        state.audioInputs = inputs; audioBeforeCard = null;
+        $('#opt-audio').value = 'all-except';
+        selectedSource = card; applyCardAudio();
+        const onCard = $('#opt-audio').value;
+        selectedSource = src; applyCardAudio();
+        check('modal: escolher a placa troca o som para a entrada dela e voltar para uma tela devolve o som de antes',
+          onCard === 'in:a1' && $('#opt-audio').value === 'all-except', onCard + ' -> ' + $('#opt-audio').value);
+
+        // transmitir a placa com "Nativa" escolhida
+        setOpts('native', '720', 30);
+        $('#opt-audio').value = 'in:a1';
+        selectedSource = card; calls.length = 0;
+        const nBefore = nativeCalls.length;
+        await startShare();
+        const vc = (calls.find((c) => c.video) || {}).video || {}, ac = (calls.find((c) => c.audio) || {}).audio || {};
+        check('placa: abre pelo Chromium, nunca pela captura nativa', !!state.share && !state.share.native && state.share.source === card && nativeCalls.length === nBefore,
+          'share=' + !!state.share + ' nativas=' + (nativeCalls.length - nBefore));
+        check('placa: pede a placa certa no tamanho/FPS escolhidos', vc.deviceId && vc.deviceId.exact === 'placa1' && vc.width.max === 1280 && vc.height.max === 720 && vc.frameRate.ideal === 30, JSON.stringify(vc));
+        check('placa: o som é a entrada dela, sem cancelar eco/ruído nem nivelar', ac.deviceId && ac.deviceId.exact === 'a1' && ac.echoCancellation === false && ac.noiseSuppression === false &&
+          ac.autoGainControl === false && !!state.share.audio && state.share.audioIn && helperStarts === 0, JSON.stringify(ac) + ' helper=' + helperStarts);
+        check('placa: o som escolhido fica guardado com a placa (a próxima tela continua com o som de sempre)',
+          state.settings.audio === keepAudioSetting && (state.settings.cardAudio || {}).placa1 === 'in:a1' && state.share.settings.audio === 'in:a1',
+          state.settings.audio + ' / ' + JSON.stringify(state.settings.cardAudio));
+        // reinício da mesma transmissão (Ajustes, rede...): solta a placa antes de abrir de novo
+        const sh1 = state.share, a1 = sh1.audio;
+        await startShare({ keep: true });
+        check('placa: reiniciar solta a imagem e o som de antes e abre de novo com o mesmo som',
+          !!state.share && state.share !== sh1 && prevEndedAtReopen === true && a1.readyState === 'ended' && state.share.audioIn && state.share.audio.readyState === 'live',
+          'soltou antes=' + prevEndedAtReopen + ' somAntigo=' + a1.readyState);
+        // parar: a placa e a entrada de som são soltas (outro programa pode usar)
+        const sh2 = state.share;
+        await stopShare();
+        check('placa: parar solta a placa e a entrada de som', !state.share && sh2.video.readyState === 'ended' && sh2.audio.readyState === 'ended');
+        // placa ocupada (OBS aberto com ela)
+        clearToasts();
+        failVideo = new DOMException('Could not start video source', 'NotReadableError');
+        selectedSource = card; await startShare();
+        check('placa ocupada por outro programa: não entra no ar e diz para fechar o OBS', !state.share && toasts().some((t) => /placa de captura/.test(t) && /OBS/.test(t)), toasts().join(' | '));
+        // a entrada de som não abre: a imagem vai mesmo assim, e quem assiste vê o motivo
+        clearToasts();
+        failAudio = new DOMException('Could not start audio source', 'NotReadableError');
+        selectedSource = card; await startShare();
+        check('entrada de som da placa não abriu: a imagem vai sem som, com aviso', !!state.share && !state.share.audio && /entrada de som/.test(state.share.audioWhy) && toasts().some((t) => /Áudio indisponível/.test(t)),
+          state.share ? state.share.audioWhy : 'sem transmissão');
+        // placa desligada do USB no meio
+        clearToasts();
+        state.share.video.dispatchEvent(new Event('ended'));
+        await until(() => !state.share, 3000, 'parar quando a placa sai').catch(() => {});
+        check('placa desligada no meio: a transmissão para e avisa', !state.share && toasts().some((t) => /placa de captura parou/.test(t)), toasts().join(' | '));
+      } finally {
+        navigator.mediaDevices.getUserMedia = realGum;
+        window.HelperAudio.start = realHelperStart;
+        if (state.share) await stopShare();
+        state.settings.audio = keepAudioSetting; delete state.settings.cardAudio; saveSettings();
+        state.audioInputs = []; audioBeforeCard = null;
+        $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option>'; $('#opt-audio').value = 'none';
+        setOpts('native', '720', 30); selectedSource = src; await startShare(); // volta como estava (transmitindo a tela de teste)
+      }
+    }
+
     // ---------------------------------------------------------------- 5) caneta depois de a tela sair da página
     if (meTile && meTile.el.isConnected) {
       // a janela escondida do teste não desenha quadros: o desenho do app passa a andar por temporizador

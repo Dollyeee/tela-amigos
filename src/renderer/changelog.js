@@ -13,6 +13,19 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.74',
+    title: 'Placa de captura sem OBS e tela preta no jogo resolvida',
+    items: [
+      '**Placa de captura** (console, outro PC): a janela de compartilhar ganhou a aba **Placa de captura**. Escolha a placa e ela vai ao ar como uma tela, sem precisar abrir o OBS. O som da placa vai junto: o app já escolhe a entrada de som dela em **Áudio** (se não acertar, escolha "Entrada: nome da placa"). Feche o OBS antes, porque muita placa só funciona num programa por vez.',
+      '**PC com vídeo do processador e placa de vídeo** (como Ryzen 7600 + RTX): o app às vezes capturava pela placa do processador, que é fraca e não pega jogo em tela cheia. Agora ele usa a placa em que o monitor está ligado.',
+      '**A imagem sumiu ao entrar no jogo:** o app refaz só a captura, sem desligar o codificador da placa (era desligar e religar o codificador que às vezes travava a placa e só voltava reiniciando o app). Se não voltar, tenta o outro jeito de capturar do Windows. Só depois disso vai para a captura de reserva, que dá tela preta em muito jogo.',
+      '**Se a placa travar mesmo assim,** o app abre um codificador novo e a captura pela placa volta sozinha, sem precisar reiniciar o app.',
+      '**Tela parada para os amigos sem aviso:** a captura chegava e o codificador não entregava nada. Agora o app percebe em poucos segundos e religa sozinho.',
+      'O Steam e o WhatsApp em tela cheia não contam mais como jogo (faziam o app reiniciar a captura à toa).',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.73',
     title: 'Botão Opções sem falhar',
     items: [

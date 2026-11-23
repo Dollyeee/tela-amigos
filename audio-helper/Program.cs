@@ -115,6 +115,39 @@ static class Program
         }, null, 2000, 2000);
     }
 
+    /// O comando de vídeo em andamento passou para outra etapa: o tempo de "placa travada" conta de novo a partir daqui
+    /// (desligar a captura antiga e abrir a nova são esperas separadas; somadas passavam dos 12 s sem nada travado).
+    static void VideoPhase(string what)
+    {
+        videoBusyWhat = what;
+        if (Volatile.Read(ref videoBusySince) != 0) Volatile.Write(ref videoBusySince, Stopwatch.GetTimestamp());
+    }
+
+    // Desligar o encoder pode ficar preso dentro do driver da placa (o Doge, 2026-11-22: "parar o encoder" preso para
+    // sempre, e a captura pela placa só voltava reiniciando o app). Desliga cada captura numa thread própria e espera
+    // até 7 s: presa além disso, ela fica para trás (os objetos dela vazam) e a fila de vídeo segue livre; o próximo
+    // início abre um encoder novo. (O som não passa por aqui: continua normal.)
+    const int DisposeWaitMs = 7000;
+    static int abandonedVideo;
+    static void DisposeVideos(params VideoStreamer?[] list)
+    {
+        var threads = new List<Thread>();
+        foreach (var v in list)
+        {
+            if (v == null) continue;
+            var t = new Thread(() => { try { v.Dispose(); } catch { } }) { IsBackground = true, Name = "video-dispose" };
+            t.Start();
+            threads.Add(t);
+        }
+        long end = Environment.TickCount64 + DisposeWaitMs;
+        bool stuck = false;
+        foreach (var t in threads) if (!t.Join((int)Math.Max(0, end - Environment.TickCount64))) stuck = true;
+        if (!stuck) return;
+        int n = Interlocked.Increment(ref abandonedVideo);
+        Console.Error.WriteLine($"[video] encoder preso ao desligar ({VideoStreamer.CurrentStep}): deixado para trás ({n})");
+        SendJson(new { type = "warn", message = $"A placa de vídeo não soltou o encoder em {DisposeWaitMs / 1000} s (etapa: {VideoStreamer.CurrentStep}): ele ficou para trás e a captura segue com um encoder novo ({n}ª vez)" });
+    }
+
     /// Põe um comando de vídeo na fila. Se a placa já está travada, responde erro na hora
     /// (quiet: comandos sem resposta, como bitrate/keyframe, só são descartados).
     static void VideoCmd(int? id, string what, Action run, bool quiet = false)
@@ -142,6 +175,8 @@ static class Program
         // podia sair deslocado. (-4 = "por monitor, versão 2"; antes de qualquer outra chamada.)
         try { if (!SetProcessDpiAwarenessContext(new IntPtr(-4))) SetProcessDPIAware(); }
         catch { try { SetProcessDPIAware(); } catch { } }
+        // teste da ordem das placas (sem placa nenhuma, casos de mentira): imprime e sai
+        if (Environment.GetCommandLineArgs().Contains("--selftest-order")) { Console.Out.WriteLine(VideoStreamer.SelfTestOrder()); return; }
         StartWriter();
         StartVideoWorker();
         SendJson(new { type = "ready" });
@@ -212,10 +247,14 @@ static class Program
                         var vid = id;
                         VideoCmd(id, "iniciar a captura", () =>
                         {
-                            videoLight?.Dispose();
-                            videoLight = null;
-                            video?.Dispose();
-                            video = null;
+                            if (video != null || videoLight != null)
+                            {
+                                VideoPhase("parar a captura anterior");
+                                DisposeVideos(videoLight, video);
+                                videoLight = null;
+                                video = null;
+                            }
+                            VideoPhase("iniciar a captura");
                             var v = new VideoStreamer(vfps, vkbps, vcodec);
                             try { v.Start(target, vmaxW, vmaxH); }
                             catch { v.Dispose(); throw; }
@@ -233,6 +272,7 @@ static class Program
                             video = v;
                             videoLight = lv;
                             SendJson(new { id = vid, type = "video-started", width = v.Width, height = v.Height, encoder = v.EncoderName, codec = v.Codec, minQp = v.MinQp,
+                                adapter = v.AdapterName, capture = v.CaptureMode,
                                 light = lv != null, lightWidth = lv?.Width ?? 0, lightHeight = lv?.Height ?? 0, lightError = lightErr });
                         });
                         break;
@@ -243,11 +283,25 @@ static class Program
                         var vid = id;
                         VideoCmd(id, "parar a captura", () =>
                         {
-                            videoLight?.Dispose();
+                            DisposeVideos(videoLight, video);
                             videoLight = null;
-                            video?.Dispose();
                             video = null;
                             SendJson(new { id = vid, type = "video-stopped" });
+                        });
+                        break;
+                    }
+                    case "video-recapture":
+                    {
+                        // refaz só a captura, com o encoder ligado (ver VideoStreamer.Recapture)
+                        string rmode = root.TryGetProperty("mode", out var rm) && rm.GetString() == "other" ? "other" : "same";
+                        var vid = id;
+                        VideoCmd(id, "refazer a captura", () =>
+                        {
+                            var v = video ?? throw new Exception("a captura nativa não está ligada");
+                            string method = v.Recapture(rmode);
+                            string? lightErr = null;
+                            try { videoLight?.Recapture(rmode); } catch (Exception lex) { lightErr = lex.Message; }
+                            SendJson(new { id = vid, type = "video-recaptured", method, lightError = lightErr });
                         });
                         break;
                     }

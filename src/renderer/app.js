@@ -102,7 +102,8 @@ async function buildRendererDiag() {
   try { for (const l of await window.Sfu.stats()) lines.push(`  ${l}`); } catch {}
   lines.push(`config=${safeJson(state.settings)}`);
   try { const g = await window.native.gpuStatus(); lines.push(`placa no Chromium: codificar=${g.video_encode} decodificar=${g.video_decode}`); } catch {}
-  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}" nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} pisoQP=${s.minQp || 'sem'} modoLeve=${!!state.lightMode}` +
+  lines.push(`transmitindo=${!!s}${s ? ` fonte="${s.sourceName}"${s.source && s.source.type === 'device' ? ` (placa de captura ${cardMode(s.video)})` : ''} nativo=${s.native} direto=${s.direct} ${s.width}x${s.height} encoder=${s.encoder} placa=${s.adapter || '-'}` +
+    ` captura=${(s.native && state.nativeStats && state.nativeStats.capture) || s.capture || '-'} pisoQP=${s.minQp || 'sem'} modoLeve=${!!state.lightMode}` +
     ` codificacao=${s.direct ? 'helper' : s.encSeen || '?'}${s.soft ? ` NO PROCESSADOR (${s.soft})` : ''}` : ''}`);
   if (s && s.direct) {
     lines.push(`versão leve: ${s.videoLight ? `ligada ${s.lightKbps} kb/s; recebem: ${[...state.peers.values()].filter((p) => p.sendLayer === 1).map((p) => `${p.name}${Date.now() < (p.weakUntil || 0) ? ' (rede fraca)' : ''}`).join(', ') || 'ninguém'}`
@@ -155,11 +156,11 @@ async function buildRendererDiag() {
     lines.push('', '===== áudio =====');
     if (l.type === 'error') lines.push(`helper NÃO respondeu à lista de programas (${l.message})`);
     else {
-      lines.push(`helper respondeu em ${ms} ms · opção de som="${state.settings.audio}" · enviando som=${!!(state.share && state.share.audio)}`);
+      lines.push(`helper respondeu em ${ms} ms · opção de som="${state.settings.audio}" · enviando som=${!!(state.share && state.share.audio)}${state.share && state.share.audioIn ? ' (entrada de som, sem o auxiliar)' : ''}`);
       lines.push(`programas com som aberto: ${(l.apps || []).map((a) => `${a.name} [${a.exe} pid ${a.pid}${a.discord ? ' DISCORD' : ''}]`).join(' · ') || 'nenhum'}`);
       lines.push(`saídas de som: ${(l.devices || []).map((d) => `${d.name}${d.isDefault ? ' (padrão)' : ''}${d.self ? ' [o app toca aqui]' : ''}`).join(' · ') || '?'}`);
     }
-    if (state.share && state.share.audio) {
+    if (state.share && state.share.audio && !state.share.audioIn) {
       const m = await window.Helper.mixerApps();
       lines.push(`capturando agora: ${m.type === 'error' ? 'sem resposta' : (m.apps || []).map((a) => `${a.name} [${a.exe} pid ${a.pid}]`).join(' · ') || 'nada'}`);
     }
@@ -2204,24 +2205,94 @@ async function openShareModal(second = false) {
   window.Themes.paintRanges();
   $('#btn-start-share').textContent = state.pickSecond ? 'Transmitir como 2ª tela' : state.share ? 'Trocar' : 'Compartilhar';
   selectedSource = null;
+  audioBeforeCard = null;
+  // placa de captura só na tela principal (a 2ª tela é captura de tela/janela)
+  $('#share-modal .tabs [data-tab="device"]').classList.toggle('hidden', state.pickSecond);
+  if (state.pickSecond && sourceTab === 'device') {
+    sourceTab = 'screen';
+    document.querySelectorAll('#share-modal .tabs .seg').forEach((x) => x.classList.toggle('active', x.dataset.tab === 'screen'));
+  }
   updateRegionUi();
   $('#btn-start-share').disabled = true;
-  sourcesLoaded = { screen: false, window: false };
+  sourcesLoaded = { screen: false, window: false, device: false };
   renderSources();
   // janelas só quando a aba "Janelas" for aberta (gerar as miniaturas delas é o mais pesado)
   await Promise.all([loadSources(sourceTab), loadAudioOptions()]);
 }
 
-let sourcesLoaded = { screen: false, window: false };
+let sourcesLoaded = { screen: false, window: false, device: false };
 const sourcesLoading = {};
 async function loadSources(type) {
   if (sourcesLoading[type]) return sourcesLoading[type];
-  sourcesLoading[type] = window.native.captureSources(type);
+  sourcesLoading[type] = type === 'device' ? listCaptureDevices() : window.native.captureSources(type);
   let list;
-  try { list = await sourcesLoading[type]; } finally { sourcesLoading[type] = null; }
+  try { list = await sourcesLoading[type]; } catch (e) { console.warn('lista de fontes', type, e && e.message); list = []; } finally { sourcesLoading[type] = null; }
   sources = [...sources.filter((x) => x.type !== type), ...list];
   sourcesLoaded[type] = true;
   renderSources();
+}
+
+// Placas de captura (console, outro PC) e câmeras: para o Windows a placa é uma câmera. Sem miniatura:
+// abrir a placa só para mostrar a imagem tiraria ela do programa que estiver usando (OBS) e demora.
+// (o Chromium põe o modelo do USB no fim do nome, ex.: "USB3.0 HD Video (534d:2109)")
+const deviceLabel = (l) => String(l || '').replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').trim();
+async function listCaptureDevices() {
+  const all = await navigator.mediaDevices.enumerateDevices();
+  return all.filter((d) => d.kind === 'videoinput' && d.deviceId).map((d, i) => ({
+    id: `device:${d.deviceId}`, type: 'device', deviceId: d.deviceId, groupId: d.groupId || '',
+    name: deviceLabel(d.label) || `Placa de captura ${i + 1}`,
+  }));
+}
+
+// Entradas de som (a da placa de captura, microfones, "line in"). "Padrão"/"Comunicação" são apelidos
+// do Windows para uma das outras: ficam de fora para a mesma entrada não aparecer duas vezes.
+async function listAudioInputs() {
+  const all = await navigator.mediaDevices.enumerateDevices();
+  return all.filter((d) => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+    .map((d, i) => ({ deviceId: d.deviceId, groupId: d.groupId || '', name: deviceLabel(d.label) || `Entrada ${i + 1}` }));
+}
+
+// A entrada de som que é da mesma placa: o Chromium já junta as duas no mesmo groupId quando
+// reconhece o aparelho; senão, pelo nome (ex.: "USB3.0 HD Video" e "Digital Audio Interface (USB3.0 HD Audio)")
+const GENERIC_WORDS = new Set(['video', 'vídeo', 'audio', 'áudio', 'usb', 'hd', 'capture', 'captura', 'device', 'dispositivo', 'interface',
+  'digital', 'line', 'linha', 'input', 'entrada', 'microphone', 'microfone', 'mic', 'de', 'do', 'da', 'the', 'game', 'camera', 'câmera', 'cam', 'webcam']);
+function cardAudioInput(src, inputs = state.audioInputs || []) {
+  if (!src || src.type !== 'device') return null;
+  if (src.groupId) {
+    const same = inputs.find((a) => a.groupId && a.groupId === src.groupId);
+    if (same) return same;
+  }
+  const words = (s) => String(s).toLowerCase().split(/[^a-z0-9.áéíóúâêôãõç+-]+/).filter((w) => w.length > 1 && !GENERIC_WORDS.has(w));
+  const mine = new Set(words(src.name));
+  let best = null, bestN = 0;
+  for (const a of inputs) {
+    const n = words(a.name).filter((w) => mine.has(w)).length;
+    if (n > bestN) { best = a; bestN = n; }
+  }
+  return best;
+}
+
+// Escolher a placa já troca o "Áudio" para a entrada de som dela (o som do console chega por ali, não
+// pelo som do PC). A escolha feita para cada placa fica guardada; voltar para uma tela devolve o som de antes.
+let audioBeforeCard = null;
+function applyCardAudio() {
+  if (state.pickSecond) return;
+  const sel = $('#opt-audio');
+  const has = (v) => !!v && [...sel.options].some((o) => o.value === v);
+  const src = selectedSource;
+  if (src && src.type === 'device') {
+    if (audioBeforeCard === null) audioBeforeCard = sel.value;
+    const saved = (state.settings.cardAudio || {})[src.deviceId];
+    const match = cardAudioInput(src);
+    const v = has(saved) ? saved : match ? `in:${match.deviceId}` : null;
+    if (has(v)) sel.value = v;
+  } else if (audioBeforeCard !== null) {
+    if (sel.value.startsWith('in:') && has(audioBeforeCard)) sel.value = audioBeforeCard;
+    audioBeforeCard = null;
+  } else return;
+  window.Themes.syncSelects();
+  updateAudioNote();
+  paintShareSum();
 }
 
 function renderSources() {
@@ -2229,7 +2300,10 @@ function renderSources() {
   box.innerHTML = '';
   const list = sources.filter((x) => x.type === sourceTab);
   if (!sourcesLoaded[sourceTab] && !list.length) box.innerHTML = '<p class="muted pad">Carregando...</p>';
-  else if (!list.length) box.innerHTML = '<p class="muted pad">Nada encontrado.</p>';
+  else if (!list.length && sourceTab === 'device') {
+    box.innerHTML = '<p class="muted pad">Nenhuma placa de captura ou câmera encontrada. Confira se a placa está ligada no USB ' +
+      '(no OBS ela aparece em "Dispositivo de captura de vídeo").</p>';
+  } else if (!list.length) box.innerHTML = '<p class="muted pad">Nada encontrado.</p>';
   for (const src of list) {
     const el = document.createElement('button');
     el.className = 'source';
@@ -2254,8 +2328,8 @@ function renderSources() {
       sz.textContent = `${src.size.width} × ${src.size.height}`;
       label.appendChild(sz);
     }
-    if (src.type === 'window') {
-      // janelas: só ícone + nome (sem miniatura = rápido e não pesa na transmissão)
+    if (src.type === 'window' || src.type === 'device') {
+      // janelas e placas de captura: só ícone + nome (sem miniatura = rápido e não pesa na transmissão)
       el.classList.add('window');
       if (!src.icon) {
         const ph = document.createElement('div');
@@ -2275,6 +2349,7 @@ function renderSources() {
       $('#btn-start-share').disabled = false;
       renderSources();
       updateRegionUi();
+      applyCardAudio();
     };
     el.ondblclick = () => startFromModal();
     box.appendChild(el);
@@ -2317,9 +2392,16 @@ async function loadAudioOptions() {
     sel.appendChild(o);
   };
   add('none', 'Sem áudio');
+  // entradas de som (a da placa de captura): o Chromium abre sozinho, não precisa do AudioHelper
+  const addInputs = async () => {
+    state.audioInputs = await listAudioInputs().catch(() => []);
+    for (const d of state.audioInputs) add(`in:${d.deviceId}`, `Entrada: ${d.name}`);
+  };
   if (!available) {
-    $('#share-note').textContent = 'AudioHelper.exe não encontrado: compartilhamento de áudio indisponível.';
+    await addInputs();
+    $('#share-note').textContent = 'AudioHelper.exe não encontrado: só dá para mandar o som de uma entrada (ex.: a da placa de captura).';
     sel.value = 'none';
+    applyCardAudio();
     return;
   }
   add('all-except', 'Todo o som do PC, exceto Discord');
@@ -2336,10 +2418,12 @@ async function loadAudioOptions() {
     state.audioDevices = res.devices || [];
     for (const d of state.audioDevices) add(`dev:${d.id}`, `Saída: ${d.name}${d.isDefault ? ' (padrão)' : ''}`);
   }
+  await addInputs();
   const saved = state.settings.audio;
   sel.value = [...sel.options].some((o) => o.value === saved) ? saved : 'all-except';
-  sel.onchange = updateAudioNote;
+  sel.onchange = () => { updateAudioNote(); paintShareSum(); };
   updateAudioNote();
+  applyCardAudio(); // a placa foi escolhida antes de a lista de som terminar
   paintShareSum();
 }
 
@@ -2348,8 +2432,18 @@ function updateAudioNote() {
   if (state.pickSecond) return;
   const v = $('#opt-audio').value;
   const dev = v.startsWith('dev:') ? (state.audioDevices || []).find((d) => `dev:${d.id}` === v) : null;
+  const input = v.startsWith('in:') ? (state.audioInputs || []).find((d) => `in:${d.deviceId}` === v) : null;
+  const card = selectedSource && selectedSource.type === 'device';
   const note = $('#share-note');
-  if (dev && (dev.self || dev.isDefault)) {
+  const obs = 'Se o OBS (ou outro programa) estiver usando a placa, feche ele antes. ';
+  if (card && input) {
+    note.textContent = `${obs}Som: o que chega pela entrada "${input.name}".`;
+  } else if (card) {
+    note.textContent = obs + (v === 'none' ? 'Vai sem som.'
+      : 'O som do console chega pela entrada de som da placa: escolha "Entrada: (nome da placa)" em Áudio para os amigos ouvirem.');
+  } else if (input) {
+    note.textContent = `Vai o som que entra em "${input.name}". Se for o seu microfone, os amigos ouvem a sua voz também por aqui.`;
+  } else if (dev && (dev.self || dev.isDefault)) {
     note.textContent = `Atenção: o som deste app (telas dos amigos) ${dev.self ? 'toca' : 'pode tocar'} em "${dev.name}" e voltaria para eles como eco. ` +
       'No Sonar/Voicemeeter, mande o Tela Amigos para outro canal (ex.: Chat ou Media) e deixe só o jogo nessa saída.';
   } else if (dev) {
@@ -2367,9 +2461,13 @@ function readSettings() {
   s.mode = $('#opt-mode').value;
   s.codec = $('#opt-codec').value;
   s.bitrate = Number($('#opt-bitrate').value);
-  s.audio = $('#opt-audio').value;
+  const audio = $('#opt-audio').value;
+  const card = selectedSource && selectedSource.type === 'device' ? selectedSource.deviceId : '';
+  // o som escolhido para a placa fica guardado com a placa (a próxima tela continua com o som de sempre)
+  if (card) s.cardAudio = { ...Object.fromEntries(Object.entries(s.cardAudio || {}).slice(-7)), [card]: audio };
+  else s.audio = audio;
   saveSettings();
-  return { ...s };
+  return { ...s, audio };
 }
 
 // botão/duplo clique do modal: tela principal ou 2ª tela (conforme o modal foi aberto)
@@ -2408,11 +2506,53 @@ async function cancelStart(tried, stream) {
     try { await window.Helper.videoStop(); } catch {}
   }
   try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch {}
+  try { if (tried.input) tried.input.stop(); } catch {}
   if (tried.audio) {
     try { await window.HelperAudio.stop(); } catch {}
     try { await window.Helper.audioStop(); } catch {}
   }
   $('#btn-start-share').disabled = false;
+}
+
+// Formato em que a placa está mandando (diagnóstico)
+function cardMode(track) {
+  try { const v = track.getSettings(); return `${v.width}x${v.height} ${Math.round(v.frameRate || 0)} fps`; } catch { return '?'; }
+}
+
+// Erro ao abrir a placa de captura (ou a entrada de som dela) em palavras de gente
+function cardError(e) {
+  const name = (e && e.name) || '', msg = (e && e.message) || String(e);
+  if (name === 'NotReadableError' || name === 'TrackStartError' || /could not start|device in use/i.test(msg)) {
+    return 'ela está sendo usada por outro programa. Feche o OBS (ou o programa que estiver com a placa) e tente de novo. ' +
+      'Se nada estiver usando: Configurações do Windows > Privacidade > Câmera > deixe os apps da área de trabalho usarem a câmera';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') {
+    return 'ela não foi encontrada. Confira se continua ligada no USB e abra a aba "Placa de captura" de novo';
+  }
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return 'o Windows não deixou. Em Configurações > Privacidade > Câmera (e Microfone, para o som), deixe os apps da área de trabalho usarem';
+  }
+  return msg;
+}
+
+// Som de uma entrada (a da placa de captura) do jeito que vem: sem o tratamento de voz do microfone
+// (cancelar eco/ruído e nivelar o volume estragariam música e o som do jogo)
+async function openAudioInput(deviceId) {
+  const st = await navigator.mediaDevices.getUserMedia({
+    video: false,
+    audio: {
+      deviceId: { exact: deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+      channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 },
+    },
+  });
+  return st.getAudioTracks()[0];
+}
+
+// Para o som que a transmissão manda: a entrada aberta pelo Chromium ou a captura do AudioHelper
+async function stopShareAudio(sh) {
+  if (!sh || !sh.audio) return;
+  if (sh.audioIn) { try { sh.audio.stop(); } catch {} return; }
+  await window.HelperAudio.stop();
 }
 
 async function startShareInner(overrides) {
@@ -2450,9 +2590,15 @@ async function startShareInner(overrides) {
   // pelo servidor de vídeo: a nativa direta manda a imagem da placa UMA vez para o servidor (como o
   // Discord); a adaptativa manda 3 qualidades feitas pelo Chromium
   const direct = settings.engine === 'native-direct';
+  // placa de captura: é uma câmera para o Windows, só o Chromium abre (a captura nativa é de tela)
+  const card = src.type === 'device';
   let stream, video, preview, nativeInfo = null;
-  const tried = { native: false, audio: false }; // o que este início chegou a pedir ao helper
-  if (settings.engine.startsWith('native') && state.nativeStuck) {
+  // o que este início chegou a pedir ao helper (input: a entrada de som aberta pelo Chromium)
+  const tried = { native: false, audio: false, input: null };
+  if (card) {
+    // trocar para a mesma placa: solta a imagem de antes primeiro (aberta duas vezes ela ficaria no formato da primeira)
+    if (old && !old.native && old.source && old.source.deviceId === src.deviceId) old.stream.getVideoTracks().forEach((t) => t.stop());
+  } else if (settings.engine.startsWith('native') && state.nativeStuck) {
     toast(`A placa de vídeo travou na captura nativa (${state.nativeStuck}). Usando a captura do Chromium até reiniciar o app.`, 'error');
   } else if (settings.engine.startsWith('native') && (await window.native.audioAvailable())) {
     try {
@@ -2516,7 +2662,12 @@ async function startShareInner(overrides) {
   }
   if (!video) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
+      const fps = Number(settings.fps) || 60;
+      stream = await navigator.mediaDevices.getUserMedia(card ? {
+        audio: false,
+        // o melhor modo da placa que cabe na resolução/FPS escolhidos (acima disso o Chromium reduz)
+        video: { deviceId: { exact: src.deviceId }, width: { ideal: maxW, max: maxW }, height: { ideal: maxH, max: maxH }, frameRate: { ideal: fps, max: fps } },
+      } : {
         audio: false,
         video: {
           mandatory: {
@@ -2529,7 +2680,7 @@ async function startShareInner(overrides) {
         },
       });
     } catch (e) {
-      toast(`Não foi possível capturar: ${e.message}`, 'error');
+      toast(card ? `Não deu para abrir a placa de captura: ${cardError(e)}.` : `Não foi possível capturar: ${e.message}`, 'error');
       $('#btn-start-share').disabled = false;
       // a captura anterior já foi parada: não deixa um "ao vivo" com imagem congelada
       if (state.share) await stopShare();
@@ -2542,29 +2693,36 @@ async function startShareInner(overrides) {
   if (gen !== shareGen) { await cancelStart(tried, stream); return; }
 
   let audio = null, audioErr = '';
+  const audioIn = settings.audio.startsWith('in:'); // entrada de som (a da placa de captura): aberta pelo Chromium
   if (settings.audio !== 'none') {
     try {
-      tried.audio = true;
-      if (state.share && state.share.audio) await window.HelperAudio.stop();
-      const [mode, pid, device] = settings.audio.startsWith('app:')
-        ? ['app', Number(settings.audio.slice(4)), undefined]
-        : settings.audio.startsWith('dev:') ? ['device', 0, settings.audio.slice(4)]
-        : ['all-except', 0, undefined];
-      audio = await window.HelperAudio.start(mode, pid, device);
-      sendStoredGains(); // volumes do mixer guardados
+      if (state.share && state.share.audio) await stopShareAudio(state.share);
+      if (audioIn) {
+        audio = tried.input = await openAudioInput(settings.audio.slice(3));
+      } else {
+        tried.audio = true;
+        const [mode, pid, device] = settings.audio.startsWith('app:')
+          ? ['app', Number(settings.audio.slice(4)), undefined]
+          : settings.audio.startsWith('dev:') ? ['device', 0, settings.audio.slice(4)]
+          : ['all-except', 0, undefined];
+        audio = await window.HelperAudio.start(mode, pid, device);
+        sendStoredGains(); // volumes do mixer guardados
+      }
     } catch (e) {
-      console.warn('áudio da transmissão:', e.message);
-      audioErr = e.message;
-      toast(`Áudio indisponível: ${e.message}`, 'error');
+      const msg = audioIn ? `a entrada de som não abriu (${cardError(e)})` : e.message;
+      console.warn('áudio da transmissão:', msg);
+      audioErr = msg;
+      toast(`Áudio indisponível: ${msg}`, 'error');
     }
   } else if (state.share && state.share.audio) {
-    await window.HelperAudio.stop();
+    await stopShareAudio(state.share);
   }
   // "Parar"/"Sair" enquanto a captura abria: desfaz em vez de entrar no ar
   if (gen !== shareGen) { await cancelStart(tried, stream); return; }
 
   state.share = {
     stream, video, audio, settings, preview,
+    audioIn: !!(audio && audioIn),       // o som é uma entrada aberta pelo Chromium (não vem do AudioHelper)
     // a versão leve da direta (2ª qualidade): a trilha vazia da camada 1, quando o helper abriu o segundo encoder
     videoLight: nativeInfo && direct && nativeInfo.light ? nativeInfo.lightTrack : null,
     lightKbps: nativeInfo && direct && nativeInfo.light ? lightKbps(nativeInfo.codec) : 0,
@@ -2575,6 +2733,8 @@ async function startShareInner(overrides) {
     width: nativeInfo ? nativeInfo.width : 0,
     height: nativeInfo ? nativeInfo.height : 0,
     encoder: nativeInfo ? nativeInfo.encoder : '',
+    adapter: nativeInfo ? nativeInfo.adapter || '' : '', // placa de vídeo da captura (diagnóstico)
+    capture: nativeInfo ? nativeInfo.capture || '' : '', // método da captura: wgc / dxgi (muda ao refazer)
     minQp: nativeInfo ? nativeInfo.minQp || 0 : 0, // piso de qualidade aceito pelo encoder (0 = sem)
     codec: nativeInfo && direct ? nativeInfo.codec : null, // 'hevc' / 'h264' na "Nativa direta"
     autoDirect: !!settings.autoDirect, // trocada sozinha para direta (não troca de novo)
@@ -2594,7 +2754,12 @@ async function startShareInner(overrides) {
   markSendingCodec(state.share.direct ? (state.share.codec === 'hevc' ? 'h265' : state.share.codec)
     : settings.codec === 'auto' ? (window.Sdp.hasH265() && !window.Sdp.sendBad('H265') ? 'h265' : 'h264') : String(settings.codec));
 
-  if (!nativeInfo) video.onended = () => stopShare(); // janela fechada, etc.
+  if (card) {
+    video.onended = () => { // placa desligada do USB (ou o Windows entregou ela a outro programa)
+      toast('A placa de captura parou de mandar imagem (desconectada do USB?). A transmissão parou.', 'error');
+      stopShare();
+    };
+  } else if (!nativeInfo) video.onended = () => stopShare(); // janela fechada, etc.
 
   if (!state.order.includes('me')) state.order.unshift('me');
   $('#share-modal').classList.add('hidden');
@@ -3162,7 +3327,8 @@ async function refreshMixer() {
   clearTimeout(mixerTimer);
   const panel = $('#adjust-panel'), box = $('#mixer'), list = $('#mixer-list');
   if (panel.classList.contains('hidden')) return;
-  const sharingAudio = !!(state.share && state.share.audio);
+  // (a entrada de som da placa não passa pelo mixer: ele mexe no volume de cada programa do PC)
+  const sharingAudio = !!(state.share && state.share.audio && !state.share.audioIn);
   box.classList.toggle('hidden', !sharingAudio);
   if (!sharingAudio) return;
   let apps = [];
@@ -4230,7 +4396,7 @@ setInterval(() => { healthLoop().catch(() => {}); }, 2000);
 
 // eventos do AudioHelper (estatísticas e fim da captura nativa)
 function onHelperEvent(msg) {
-  if (msg.type === 'video-stats') { state.nativeStats = msg; captureStallWatch(msg); }
+  if (msg.type === 'video-stats') { state.nativeStats = msg; captureStallWatch(msg); encoderStallWatch(msg); }
   else if (msg.type === 'video-ended' && state.share && state.share.native) {
     toast('A janela compartilhada foi fechada.');
     stopShare();
@@ -4252,7 +4418,7 @@ function onHelperEvent(msg) {
   if (msg.type === 'helper-exit') console.warn(`AudioHelper fechou (código ${msg.code})`);
   if (msg.type === 'warn') {
     console.warn(`AudioHelper: ${msg.message}`); // ex.: falha ao capturar o som de um jogo
-    if (/saída de som escolhida/.test(msg.message) && state.share && state.share.audio) toast(`Som: ${msg.message}`, 'error');
+    if (/saída de som escolhida/.test(msg.message) && state.share && state.share.audio && !state.share.audioIn) toast(`Som: ${msg.message}`, 'error');
   }
   if (msg.type === 'helper-exit') state.nativeStuck = ''; // helper novo: a placa pode funcionar de novo
   if (msg.type === 'video-stuck') {
@@ -4264,7 +4430,7 @@ function onHelperEvent(msg) {
   }
   if ((msg.type === 'video-error' || msg.type === 'helper-exit') && state.share && state.share.native) {
     recoverShare(msg.type === 'video-error' ? msg.message : 'o auxiliar de captura fechou');
-  } else if (msg.type === 'helper-exit' && state.share && state.share.audio) {
+  } else if (msg.type === 'helper-exit' && state.share && state.share.audio && !state.share.audioIn) {
     // Captura do Chromium com o som pelo auxiliar: o som acabou junto com ele. Antes ficava mudo sem
     // aviso, e os amigos continuavam vendo o controle de volume como se houvesse som.
     const sh = state.share;
@@ -4418,8 +4584,8 @@ async function recoverShare(reason, forceChromium = false) {
 
 // Captura nativa em 0 fps com um jogo aberto: o jogo desenha o tempo todo, então 0 quadros é
 // captura travada (placa de vídeo reiniciou, jogo em tela cheia exclusiva...). Antes a tela ficava
-// parada para todo mundo até parar e transmitir de novo. 6 s assim: reinicia a captura; travou de
-// novo em até 3 min: passa para a captura do Chromium (outro método do Windows) e sugere sem bordas.
+// parada para todo mundo até parar e transmitir de novo. 6 s assim: refaz a captura (ver captureFail:
+// só a captura, depois o outro método do Windows, por último a captura do Chromium e a dica de sem bordas).
 // (Sem jogo aberto, 0 fps pode ser só a tela parada: aí não faz nada.)
 let capZero = null; // { share, since }
 const capStalls = [];
@@ -4428,7 +4594,9 @@ const capStalls = [];
 // página parada = nenhum quadro novo, sem nada estar travado. Antes, pausar um filme em tela cheia
 // por 6 s reiniciava a captura, e pausar de novo em até 3 min jogava a transmissão para a captura
 // do Chromium (com aviso de erro) pelo resto dela.
-const NOT_A_GAME = /^(chrome|msedge|firefox|opera|brave|vivaldi|arc|zen|librewolf|waterfox|thorium|chromium|browser|iexplore|vlc|mpc-hc|mpc-hc64|mpc-be|mpc-be64|mpv|mpvnet|potplayer|potplayer64|potplayermini|potplayermini64|wmplayer|stremio|kodi|plex|discord|spotify)\.exe$/i;
+// (Steam em tela cheia e WhatsApp maximizado também: no PC do Doge, 2026-11-22, a janela parada do Steam fazia o app
+// "reiniciar a captura travada" à toa, e foi num desses reinícios que a placa travou)
+const NOT_A_GAME = /^(chrome|msedge|firefox|opera|brave|vivaldi|arc|zen|librewolf|waterfox|thorium|chromium|browser|iexplore|vlc|mpc-hc|mpc-hc64|mpc-be|mpc-be64|mpv|mpvnet|potplayer|potplayer64|potplayermini|potplayermini64|wmplayer|stremio|kodi|plex|discord|spotify|steamwebhelper|steam|whatsapp|whatsapp\.root|telegram|ms-teams|teams|slack|explorer|applicationframehost|msedgewebview2|tela amigos)\.exe$/i;
 function gameDrawing() { return !!state.gaming && !NOT_A_GAME.test(state.gamingExe || ''); }
 function captureStallWatch(st) {
   const sh = state.share;
@@ -4439,15 +4607,63 @@ function captureStallWatch(st) {
   capZero = null;
   captureFail(`0 fps com o jogo aberto (${state.gamingExe || '?'})`);
 }
-// 1ª falha: reinicia a captura nativa; 2ª em até 3 min: captura do Chromium
+// 1ª falha: refaz SÓ a captura, com o encoder ligado; 2ª em até 3 min: refaz pelo outro método do Windows; 3ª: captura
+// do Chromium (e sugere sem bordas). Antes a 1ª já desligava e religava o encoder junto, e foi isso que travou a placa
+// do Doge (2026-11-22: "a placa travou ao parar a captura", a captura pela placa só voltava reiniciando o app); e a 2ª
+// ia direto para o Chromium, que mostra tela preta em muito jogo de tela cheia.
 function captureFail(reason) {
   const now = Date.now();
   while (capStalls.length && now - capStalls[0] > 180000) capStalls.shift();
   capStalls.push(now);
-  const again = capStalls.length > 1;
-  console.warn(`captura travada: ${reason}; ${again ? 'trocando para a captura do Chromium' : 'reiniciando a captura'}`);
-  if (again) capStalls.length = 0;
-  recoverShare(reason.replace(/ \(.*\)$/, ''), again);
+  const n = capStalls.length;
+  console.warn(`captura travada: ${reason}; ${n >= 3 ? 'trocando para a captura do Chromium' : n === 2 ? 'refazendo a captura pelo outro método' : 'refazendo a captura'}`);
+  if (n >= 3) {
+    capStalls.length = 0;
+    recoverShare(reason.replace(/ \(.*\)$/, ''), true);
+    return;
+  }
+  recaptureShare(reason, n === 1 ? 'same' : 'other');
+}
+
+// Refaz só a captura (NativeVideo.recapture); se não der (janela fechou, helper sem resposta...), reinicia a
+// transmissão inteira como antes.
+async function recaptureShare(reason, mode) {
+  const sh = state.share;
+  if (recovering || !sh || !sh.native) return;
+  recovering = true;
+  let ok = false;
+  try {
+    const method = await (window.__testRecapture || window.NativeVideo.recapture)(mode);
+    ok = true;
+    if (state.share === sh) sh.capture = method;
+    console.warn(`captura refeita (${mode === 'other' ? 'outro método' : 'mesmo método'}): ${method}`);
+  } catch (e) {
+    console.warn(`refazer a captura não deu (${e.message}): reiniciando a transmissão`);
+  } finally {
+    recovering = false;
+  }
+  if (!ok && state.share === sh) recoverShare(reason.replace(/ \(.*\)$/, ''));
+}
+
+// A captura chega e o encoder não entrega nada: a imagem para para todo mundo (o Tarrasque, 2026-11-22: 44 quadros
+// capturados e 0 codificados por segundo durante minutos, sem aviso, porque o vigia acima só olha a captura). 6 s
+// assim: reinicia a transmissão (encoder novo); de novo em até 3 min: captura do Chromium.
+let encZero = null; // { share, since }
+const encStalls = [];
+function encoderStallWatch(st) {
+  const sh = state.share;
+  if (!sh || !sh.native || recovering || (st.captureFps || 0) < 5 || (st.fps || 0) > 0) { encZero = null; return; }
+  const now = Date.now();
+  if (!encZero || encZero.share !== sh) { encZero = { share: sh, since: now }; return; }
+  if (now - encZero.since < 6000) return;
+  encZero = null;
+  while (encStalls.length && now - encStalls[0] > 180000) encStalls.shift();
+  encStalls.push(now);
+  const again = encStalls.length > 1;
+  if (again) encStalls.length = 0;
+  console.warn(`codificador parado: a captura chega (${st.captureFps} quadros/s) e nada sai${st.convOk === false ? ' (a conversão da imagem está falhando)' : ''}; ` +
+    `${again ? 'trocando para a captura do Chromium' : 'reiniciando a transmissão'}`);
+  recoverShare('o codificador parou de entregar imagens', again);
 }
 // A captura nativa começou mas nunca entregou nenhuma imagem (o som vai, o vídeo não: tela preta
 // para todo mundo). 10 s sem nenhum quadro: trata como captura travada.
@@ -4479,7 +4695,7 @@ async function stopShare() {
   if (state.pickSecond) { state.pickSecond = false; $('#share-modal').classList.add('hidden'); $('#share-modal').classList.remove('second'); }
   if (share.native) await window.NativeVideo.stop();
   else share.stream.getTracks().forEach((t) => t.stop());
-  if (share.audio) await window.HelperAudio.stop();
+  await stopShareAudio(share);
   sfuSync();
   for (const peer of state.peers.values()) {
     peer.sfuPulling = false;
@@ -5651,7 +5867,7 @@ function paintShareSum() {
     row('sai em', `${size} · ${$('#opt-fps').value} fps`),
     row('codec', codec, codecNote),
     row('som', $('#opt-audio').value === 'all-except' ? 'PC inteiro, sem Discord' : optText('#opt-audio') || 'sem áudio'),
-    row('área', !src ? '--' : src.type !== 'screen' ? 'só a janela' : src.crop ? `${Math.round(src.crop.w * 100)}% × ${Math.round(src.crop.h * 100)}% da tela` : 'tela inteira'),
+    row('área', !src ? '--' : src.type === 'device' ? 'imagem da placa' : src.type !== 'screen' ? 'só a janela' : src.crop ? `${Math.round(src.crop.w * 100)}% × ${Math.round(src.crop.h * 100)}% da tela` : 'tela inteira'),
   );
 }
 
@@ -6342,6 +6558,25 @@ function initRoomUi() {
       renderSources();
       if (!sourcesLoaded[sourceTab]) loadSources(sourceTab);
     };
+  });
+  // placa ligada/desligada com a janela de compartilhar aberta: a lista e as entradas de som se atualizam
+  let devTimer = null;
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    clearTimeout(devTimer);
+    devTimer = setTimeout(async () => {
+      if ($('#share-modal').classList.contains('hidden')) return;
+      if (sourcesLoaded.device || sourceTab === 'device') loadSources('device');
+      if (state.pickSecond) return;
+      const sel = $('#opt-audio'), keep = sel.value;
+      await loadAudioOptions();
+      const card = selectedSource && selectedSource.type === 'device';
+      if ([...sel.options].some((o) => o.value === keep) && (!card || keep.startsWith('in:') || keep === 'none')) {
+        sel.value = keep;
+        window.Themes.syncSelects();
+        updateAudioNote();
+        paintShareSum();
+      }
+    }, 600);
   });
   document.querySelectorAll('.layout-switch .seg').forEach((b) => {
     b.onclick = () => { state.layout = b.dataset.layout; render(); };

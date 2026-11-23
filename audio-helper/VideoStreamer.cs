@@ -69,6 +69,8 @@ sealed unsafe class VideoStreamer : IDisposable
     public int Width { get; private set; }
     public int Height { get; private set; }
     public string EncoderName { get; private set; } = "";
+    /// <summary>Placa de vídeo em que a captura e a conversão rodam (aparece no diagnóstico).</summary>
+    public string AdapterName { get; private set; } = "";
     /// <summary>Piso de QP aceito pelo encoder (0 = sem piso).</summary>
     public int MinQp { get; private set; }
 
@@ -111,7 +113,7 @@ sealed unsafe class VideoStreamer : IDisposable
         try { return ApiInformation.IsPropertyPresent("Windows.Graphics.Capture.GraphicsCaptureSession", "IsBorderRequired"); }
         catch { return false; }
     }
-    public string CaptureMode => useDd ? "dxgi" : "wgc";
+    public string CaptureMode => testPatternBlocks > 0 ? "pattern" : useDd ? "dxgi" : "wgc";
 
     // conversão
     ID3D11VideoProcessorEnumerator? vpEnum;
@@ -183,7 +185,7 @@ sealed unsafe class VideoStreamer : IDisposable
         // Tenta cada combinação (encoder, placa) até uma funcionar. Em PCs com vídeo integrado
         // ativo, a "primeira placa" do Windows pode ser a integrada enquanto o encoder é o da
         // NVIDIA/AMD: misturar as duas dá E_FAIL ("erro não especificado").
-        var attempts = BuildAttempts();
+        var attempts = BuildAttempts(TargetMonitor(target));
         if (attempts.Count == 0) throw new Exception($"Nenhum encoder {CodecLabel} por hardware encontrado na placa de vídeo");
         var errors = new List<string>();
         foreach (var (encIndex, adapter) in attempts)
@@ -194,10 +196,17 @@ sealed unsafe class VideoStreamer : IDisposable
                 if (errors.Count == 0 && Environment.GetEnvironmentVariable("TELA_TEST_FAILFIRST") == "1")
                     throw new Exception("falha simulada (teste)");
                 StartWith(encIndex, adapter, target, maxW, maxH);
+                AdapterName = adapter.Desc;
                 // só agora (o diagnóstico cria instâncias temporárias que não podem roubar o aviso)
                 droppedHandler = () => { dropUntilKey = true; forceKey = true; };
                 if (light) Program.OnVideoDroppedLight = droppedHandler; else Program.OnVideoDropped = droppedHandler;
-                if (errors.Count > 0) Say(new { type = "warn", message = $"Captura nativa funcionou na tentativa {errors.Count + 1}: {adapter.Desc}" });
+                // (com o motivo de cada tentativa que falhou: antes o diagnóstico só dizia o número da que deu certo)
+                if (errors.Count > 0)
+                {
+                    string why = string.Join(" | ", errors);
+                    if (why.Length > 600) why = why[..600] + "...";
+                    Say(new { type = "warn", message = $"Captura nativa funcionou na tentativa {errors.Count + 1}: {adapter.Desc} (antes: {why})" });
+                }
                 return;
             }
             catch (Exception ex)
@@ -216,11 +225,13 @@ sealed unsafe class VideoStreamer : IDisposable
         var v = new VideoStreamer(60, 1000);
         var adapters = ListAdapters();
         var encoders = v.ListEncoders();
+        var primary = MonitorFromPoint(new POINT { x = 0, y = 0 }, 1 /*MONITOR_DEFAULTTOPRIMARY*/);
         return new
         {
             adapters = adapters.Select(a => new { a.Desc, vendor = $"{a.VendorId:X4}", vramMB = a.Vram / 1048576, luid = a.Luid }),
             encoders = encoders.Select(e => new { e.Index, e.Name, vendor = $"{e.VendorId:X4}", luid = e.Luid }),
-            attempts = v.BuildAttempts().Select(t => $"{encoders[t.encIndex].Name} + {t.adapter.Desc}"),
+            monitorOn = MonitorOwnerLuid(primary), // LUID da placa em que o monitor principal está ligado
+            attempts = v.BuildAttempts(primary).Select(t => $"{encoders[t.encIndex].Name} + {t.adapter.Desc}"),
             hevcEncoders = new VideoStreamer(60, 1000, "hevc").ListEncoders().Select(e => e.Name),
             av1Encoders = new VideoStreamer(60, 1000, "av1").ListEncoders().Select(e => e.Name),
         };
@@ -280,14 +291,34 @@ sealed unsafe class VideoStreamer : IDisposable
         return arr;
     }
 
-    /// Ordem das tentativas: encoder + placa com o mesmo LUID; depois placas do mesmo fabricante
-    /// (a com mais memória primeiro); por último qualquer combinação.
-    List<(int encIndex, AdapterInfo adapter)> BuildAttempts()
+    List<(int encIndex, AdapterInfo adapter)> BuildAttempts(IntPtr hmon) => OrderAttempts(ListAdapters(), ListEncoders(), MonitorOwnerLuid(hmon));
+
+    /// Placa dedicada: 1 GB ou mais de memória própria (o vídeo integrado do processador informa bem menos).
+    const ulong DedicatedMinVram = 1UL << 30;
+
+    /// Ordem das tentativas (encoder, placa):
+    /// 0) a placa em que o monitor transmitido está ligado, quando ela é dedicada, com os encoders dela (mesmo LUID;
+    ///    depois os do mesmo fabricante). Num PC com o vídeo integrado do processador ligado, o encoder da integrada
+    ///    aparecia primeiro e a captura ia para ela (o Doge, 2026-11-22: RTX 4070 SUPER + a Radeon do Ryzen; jogo em
+    ///    tela cheia dava 0 quadros capturados e a integrada travou ao desligar o encoder). Notebook com a tela ligada
+    ///    na integrada: esta regra não vale e fica a ordem de sempre;
+    /// 1) encoder + placa com o mesmo LUID;
+    /// 2) placas do mesmo fabricante do encoder (a com mais memória primeiro);
+    /// 3) qualquer combinação.
+    static List<(int encIndex, AdapterInfo adapter)> OrderAttempts(List<AdapterInfo> adapterList, List<EncoderInfo> encoders, long ownerLuid)
     {
-        var adapters = ListAdapters().OrderByDescending(a => a.Vram).ToList();
-        var encoders = ListEncoders();
+        var adapters = adapterList.OrderByDescending(a => a.Vram).ToList();
         var attempts = new List<(int, AdapterInfo)>();
         void Add(int e, AdapterInfo a) { if (!attempts.Any(x => x.Item1 == e && x.Item2.Luid == a.Luid)) attempts.Add((e, a)); }
+        var owner = ownerLuid == 0 ? null : adapters.FirstOrDefault(a => a.Luid == ownerLuid);
+        if (owner != null && owner.Vram >= DedicatedMinVram)
+        {
+            foreach (var e in encoders.Where(e => e.Luid == owner.Luid)) Add(e.Index, owner);
+            foreach (var e in encoders.Where(e => e.Luid == 0 && e.VendorId == owner.VendorId)) Add(e.Index, owner);
+            // (e as outras dedicadas antes da integrada: no PC do Doge a RTX aparece duas vezes para o Windows)
+            foreach (var e in encoders.Where(e => e.VendorId != 0))
+                foreach (var a in adapters.Where(a => a.Vram >= DedicatedMinVram && a.VendorId == e.VendorId)) Add(e.Index, a);
+        }
         foreach (var e in encoders.Where(e => e.Luid != 0))
             foreach (var a in adapters.Where(a => a.Luid == e.Luid)) Add(e.Index, a);
         foreach (var e in encoders.Where(e => e.VendorId != 0))
@@ -295,6 +326,68 @@ sealed unsafe class VideoStreamer : IDisposable
         foreach (var e in encoders)
             foreach (var a in adapters) Add(e.Index, a);
         return attempts;
+    }
+
+    /// LUID da placa em que o monitor está ligado (0 = não achou).
+    static long MonitorOwnerLuid(IntPtr hmon)
+    {
+        if (hmon == IntPtr.Zero) return 0;
+        try
+        {
+            using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
+            for (uint i = 0; factory.EnumAdapters1(i, out var a).Success; i++)
+            {
+                using (a)
+                {
+                    for (uint j = 0; a.EnumOutputs(j, out IDXGIOutput? o).Success; j++)
+                    {
+                        using (o)
+                        {
+                            if (o!.Description.Monitor != hmon) continue;
+                            var d = a.Description1;
+                            return ((long)d.Luid.HighPart << 32) | d.Luid.LowPart;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { Log("placa do monitor: " + ex.Message); }
+        return 0;
+    }
+
+    /// Monitor do alvo (a janela: o monitor em que ela está).
+    static IntPtr TargetMonitor(VideoTarget target)
+    {
+        IntPtr hwnd = target.Type == "window" ? new IntPtr(target.Hwnd) : IntPtr.Zero;
+        return hwnd != IntPtr.Zero
+            ? MonitorFromWindow(hwnd, 2)
+            : MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2);
+    }
+
+    /// Teste da ordem (AudioHelper.exe --selftest-order): casos de mentira, sem placa nenhuma; imprime JSON.
+    public static string SelfTestOrder()
+    {
+        const ulong GB = 1UL << 30;
+        string Run(List<AdapterInfo> ads, List<EncoderInfo> encs, long owner) =>
+            string.Join(" ; ", OrderAttempts(ads, encs, owner).Select(t => $"{encs[t.encIndex].Name}+{t.adapter.Desc}"));
+        // o PC do Doge: Radeon integrada (encoders AMD primeiro na lista do Windows) + RTX dedicada (duas vezes, LUIDs
+        // diferentes), monitor na RTX
+        var doge = new List<AdapterInfo> { new(1, 0x10DE, "RTX", 12 * GB), new(2, 0x1002, "Radeon", 485UL << 20), new(3, 0x10DE, "RTX-b", 12 * GB) };
+        var dogeEnc = new List<EncoderInfo> { new(0, "AMD", 0, 0x1002), new(1, "AMD2", 0, 0x1002), new(2, "NV", 0, 0x10DE) };
+        // notebook: tela na Intel integrada, NVIDIA dedicada
+        var note = new List<AdapterInfo> { new(10, 0x8086, "Intel", 128UL << 20), new(11, 0x10DE, "RTX", 6 * GB) };
+        var noteEnc = new List<EncoderInfo> { new(0, "QSV", 0, 0x8086), new(1, "NV", 0, 0x10DE) };
+        // uma placa só
+        var one = new List<AdapterInfo> { new(20, 0x10DE, "RTX", 8 * GB) };
+        var oneEnc = new List<EncoderInfo> { new(0, "NV", 0, 0x10DE) };
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            doge = Run(doge, dogeEnc, 1),
+            dogeOther = Run(doge, dogeEnc, 3),
+            dogeUnknown = Run(doge, dogeEnc, 0),
+            notebook = Run(note, noteEnc, 10),
+            single = Run(one, oneEnc, 20),
+        });
     }
 
     void StartWith(int encIndex, AdapterInfo adapter, VideoTarget target, int maxW, int maxH)
@@ -413,9 +506,7 @@ sealed unsafe class VideoStreamer : IDisposable
     void StartCapture(VideoTarget target)
     {
         IntPtr hwnd = target.Type == "window" ? new IntPtr(target.Hwnd) : IntPtr.Zero;
-        IntPtr hmon = hwnd != IntPtr.Zero
-            ? MonitorFromWindow(hwnd, 2)
-            : MonitorFromPoint(new POINT { x = target.X, y = target.Y }, 2);
+        IntPtr hmon = TargetMonitor(target);
 
         // teste: em vez de capturar, gera uma imagem com movimento (o que está na tela de quem roda o
         // teste não muda o resultado). TELA_TEST_PATTERN = blocos novos por quadro (mais = mais pesado)
@@ -462,6 +553,67 @@ sealed unsafe class VideoStreamer : IDisposable
         }
         StartWgc(hwnd, hmon);
         Log("captura: Windows Graphics Capture");
+    }
+
+    // ---------------------------------------------------------------- refazer só a captura
+    /// Jogo em tela cheia e a captura do Windows parou de entregar imagens: refaz SÓ a captura, com o encoder ligado
+    /// (desligar e religar o encoder era o que travava a placa no PC do Doge, 2026-11-22). Enquanto isso o encoder
+    /// segue com a última imagem. mode "same": o mesmo método de novo; "other": troca WGC <-> duplicação da área de
+    /// trabalho (se o outro não abrir, volta ao de antes). Devolve o método que ficou ("wgc", "dxgi" ou "pattern").
+    public string Recapture(string mode)
+    {
+        var target = tgt ?? throw new Exception("a captura não está ligada");
+        if (!running) throw new Exception("a captura não está ligada");
+        IntPtr hwnd = target.Type == "window" ? new IntPtr(target.Hwnd) : IntPtr.Zero;
+        IntPtr hmon = TargetMonitor(target);
+        if (hwnd != IntPtr.Zero && !IsWindow(hwnd)) throw new Exception("a janela escolhida não existe mais");
+        Interlocked.Increment(ref recaptures);
+        if (testPatternBlocks > 0)
+        {
+            ReleaseDd(); // (para o padrão de teste também)
+            StartPattern();
+            forceKey = true;
+            return "pattern";
+        }
+        bool wasDd = useDd;
+        StopCaptureOnly();
+        bool wantDd = mode == "other" ? !wasDd : wasDd;
+        Exception? first = null;
+        foreach (bool dd in new[] { wantDd, !wantDd })
+        {
+            try
+            {
+                if (dd) StartDuplication(hmon, hwnd); else StartWgc(hwnd, hmon);
+                useDd = dd;
+                forceKey = true;
+                Log($"captura refeita ({mode}): {CaptureMode}");
+                return CaptureMode;
+            }
+            catch (Exception ex)
+            {
+                first ??= ex;
+                Log($"refazer a captura por {(dd ? "dxgi" : "wgc")}: {ex.Message}");
+                if (dd) ReleaseDd(); else StopWgcOnly();
+            }
+        }
+        throw new Exception($"não deu para refazer a captura ({first?.Message})");
+    }
+    int recaptures;
+
+    /// Para a captura (WGC ou duplicação) sem mexer no encoder nem nas texturas: a última imagem continua valendo.
+    void StopCaptureOnly()
+    {
+        if (useDd) ReleaseDd(); else StopWgcOnly();
+    }
+
+    void StopWgcOnly()
+    {
+        try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch { }
+        try { if (closedItem != null) closedItem.Closed -= OnItemClosed; } catch { }
+        closedItem = null;
+        try { session?.Dispose(); } catch { }
+        try { framePool?.Dispose(); } catch { }
+        session = null!; framePool = null!; item = null!;
     }
 
     // ---------------------------------------------------------------- padrão de teste
@@ -812,7 +964,32 @@ sealed unsafe class VideoStreamer : IDisposable
                 toneMapper.ResetSource();
                 toneMapper.Process(latest, latestW, latestH); // cria a textura SDR do novo tamanho
             }
-            CreateProcessor();
+            vpPending = true;
+        }
+        // Conversão (VideoProcessor) para o tamanho novo. Se falhava, ficava sem conversão PARA SEMPRE: a captura seguia
+        // chegando e o encoder não recebia nada (o Tarrasque, 2026-11-22: 44 quadros capturados e 0 codificados por
+        // segundo, a tela dele parada para todo mundo e sem aviso nenhum). Agora tenta de novo a cada meio segundo,
+        // avisa, e depois de 5 s desiste com erro (o app reinicia a captura).
+        if (vpPending && clock.ElapsedTicks >= vpRetryAt)
+        {
+            try
+            {
+                if (testVpFail > 0) { testVpFail--; throw new Exception("falha simulada (teste)"); }
+                CreateProcessor();
+                vpPending = false;
+                if (vpFailSince != 0) Log("conversão da imagem voltou");
+                vpFailSince = 0;
+            }
+            catch (Exception ex)
+            {
+                vpRetryAt = clock.ElapsedTicks + Stopwatch.Frequency / 2;
+                if (vpFailSince == 0)
+                {
+                    vpFailSince = clock.ElapsedTicks;
+                    Say(new { type = "warn", message = $"A conversão da imagem falhou ({latestW}x{latestH} {desc.Format}): {ex.Message}. Tentando de novo." });
+                }
+                else if (clock.ElapsedTicks - vpFailSince > Stopwatch.Frequency * 5) Fail($"a conversão da imagem falhou ({latestW}x{latestH}: {ex.Message})");
+            }
         }
         context.CopyResource(latest, tex);
         contentW = Math.Min(cw, latestW);
@@ -825,6 +1002,12 @@ sealed unsafe class VideoStreamer : IDisposable
     }
 
     // ================================================================ conversão (VideoProcessor)
+    bool vpPending;       // a conversão precisa ser (re)criada para o tamanho atual da captura
+    long vpRetryAt;       // (clock.ElapsedTicks) próxima tentativa depois de uma falha
+    long vpFailSince;     // (clock.ElapsedTicks) desde quando está falhando; 0 = ok
+    // teste: TELA_TEST_VPFAIL=n faz as n primeiras criações da conversão falharem (n grande = nunca volta)
+    static int testVpFail = int.TryParse(Environment.GetEnvironmentVariable("TELA_TEST_VPFAIL"), out var vf) ? vf : 0;
+
     void CreateOutputTextures()
     {
         for (int i = 0; i < Ring; i++)
@@ -1434,10 +1617,16 @@ sealed unsafe class VideoStreamer : IDisposable
             encodeMs = frames > 0 ? Math.Round(lat / frames, 2) : 0,
             width = Width,
             height = Height,
+            capture = CaptureMode,    // método da captura agora (muda ao refazer)
+            convOk = !vpPending,      // false: a conversão da imagem está falhando (ver OnCapturedTexture)
+            recaptures,
         });
     }
 
     // ================================================================ fim
+    static readonly bool testHangStop = Environment.GetEnvironmentVariable("TELA_TEST_HANGSTOP") == "1";
+    static int hangStopUsed;
+
     public void Dispose()
     {
         running = false;
@@ -1445,6 +1634,8 @@ sealed unsafe class VideoStreamer : IDisposable
         if (droppedHandler != null && Program.OnVideoDroppedLight == droppedHandler) Program.OnVideoDroppedLight = null;
         CurrentStep = "parar o encoder";
         bool tickDone = tickThread == null || tickThread.Join(3000);
+        // teste: TELA_TEST_HANGSTOP=1 faz a primeira parada do encoder ficar presa para sempre (como a placa do Doge)
+        if (testHangStop && !light && Interlocked.Exchange(ref hangStopUsed, 1) == 0) Thread.Sleep(Timeout.Infinite);
         // (cada chamada no seu try: com o encoder em erro, um aviso recusado pulava o Shutdown, que é
         //  o que solta a thread de eventos; aí eram 3 s de espera e os objetos da placa ficavam presos)
         try { encoder?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero); } catch { }

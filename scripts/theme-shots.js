@@ -186,6 +186,9 @@ async function page(CFG) {
     loadSources = async () => {};         // nada de capturar miniaturas das telas de verdade
     loadAudioOptions = async () => {};    // nem de olhar os programas que tocam som
     refreshMixer = async () => {};
+    // os amigos de mentira nunca conectam: o vigia de "conexão que não começou" (v1.0.72) refazia todos depois de
+    // 45 s e as telas deles sumiam no meio das capturas (com todos os temas a sala passa disso)
+    newWatch = () => {};
     const Q = { 901: { fps: 60, ms: 14, level: 'good', short: '', mb: 16.4 }, 902: { fps: 58, ms: 23, level: 'warn', short: 'rede', mb: 9.8 }, 903: { fps: 60, ms: 31, level: 'good', short: '', mb: 12.1 } };
     for (const q of Object.values(Q)) { q.res = 1080; q.mbps = q.mb; }
     // histórico de qualidade de mentira (sempre os mesmos números)
@@ -322,6 +325,26 @@ async function page(CFG) {
       renderSources();
       $('#btn-start-share').disabled = false;
       await shot(`${t}-6b-compartilhar-janelas`);
+      // aba "Placa de captura" com uma placa de mentira (marcada como já listada: nada do PC é consultado)
+      {
+        const card = { id: 'device:teste', type: 'device', deviceId: 'teste', groupId: '', name: 'USB3.0 HD Video' };
+        sources = [...src, card]; sourcesLoaded = { screen: true, window: true, device: true };
+        document.querySelector('#share-modal .tabs [data-tab="device"]').click();
+        await sleep(200);
+        selectedSource = card;
+        renderSources();
+        updateRegionUi();
+        $('#btn-start-share').disabled = false;
+        $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option><option value="all-except">Todo o som do PC, exceto Discord</option>' +
+          '<option value="in:a1" selected>Entrada: Digital Audio Interface (USB3.0 HD Audio)</option>';
+        state.audioInputs = [{ deviceId: 'a1', groupId: '', name: 'Digital Audio Interface (USB3.0 HD Audio)' }];
+        updateAudioNote();
+        T.syncSelects();
+        paintShareSum(); // o resumo "vai ao ar" (só alguns temas mostram) com o som da placa
+        await shot(`${t}-6c-compartilhar-placa`);
+        sources = src;
+        $('#opt-audio').innerHTML = '<option value="none">Sem áudio</option><option value="all-except" selected>Todo o som do PC, exceto Discord</option>';
+      }
       document.querySelector('#share-modal .tabs [data-tab="screen"]').click();
       $('#share-modal').classList.add('hidden');
       openAdjust();

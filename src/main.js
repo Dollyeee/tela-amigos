@@ -50,6 +50,13 @@ app.commandLine.appendSwitch('enable-features', ['WebRtcAllowWgcUsingTexture', p
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// Testes da placa de captura: câmera e entrada de som de mentira do Chromium (não abre nenhum aparelho de verdade)
+// (TELA_TEST_FAKECAM=1, ou as opções do Chromium para ela, ex.: "fps=60")
+if (process.env.TELA_TEST_FAKECAM) {
+  const v = process.env.TELA_TEST_FAKECAM;
+  if (v === '1') app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  else app.commandLine.appendSwitch('use-fake-device-for-media-stream', v);
+}
 
 // Perfil separado (permite abrir 2 instâncias no mesmo PC para testar)
 if (process.env.TELA_PROFILE) app.setPath('userData', path.join(app.getPath('userData'), process.env.TELA_PROFILE));

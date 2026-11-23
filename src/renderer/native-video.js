@@ -378,8 +378,18 @@ window.NativeVideo = (() => {
       track: inject ? lanes[0].generator : previewGen,
       preview: new MediaStream([previewGen]),
       width: res.width, height: res.height, encoder: res.encoder, codec: res.codec || 'h264', minQp: res.minQp || 0,
+      adapter: res.adapter || '', capture: res.capture || '', // placa de vídeo e método da captura (diagnóstico)
       lightWidth: res.lightWidth || 0, lightHeight: res.lightHeight || 0, ...light(),
     };
+  }
+
+  // Refaz só a captura no helper, com o encoder ligado (jogo em tela cheia que parou a captura do Windows): a
+  // transmissão e as trilhas continuam as mesmas. mode 'other' troca o método. Devolve o método que ficou.
+  async function recapture(mode) {
+    if (!running) throw new Error('a captura nativa não está ligada');
+    const res = await window.Helper.videoRecapture(mode === 'other' ? 'other' : 'same');
+    if (res.type !== 'video-recaptured') throw new Error(res.message || 'sem resposta do AudioHelper');
+    return res.method;
   }
 
   async function stop() {
@@ -428,5 +438,5 @@ window.NativeVideo = (() => {
   // diagnóstico (testes): liga o registro quadro a quadro do transform e devolve o que foi registrado
   function trace(on) { ensureWorker().postMessage({ type: 'trace', on }); }
   function traceDump() { return new Promise((r) => { traceCb = r; ensureWorker().postMessage({ type: 'trace', dump: true }); }); }
-  return { start, stop, attach, setMode, remove, setLayer, hasLight, setPreview, key, isRunning: () => running, dbg, trace, traceDump };
+  return { start, stop, recapture, attach, setMode, remove, setLayer, hasLight, setPreview, key, isRunning: () => running, dbg, trace, traceDump };
 })();

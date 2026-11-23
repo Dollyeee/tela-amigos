@@ -85,6 +85,8 @@ window.Helper = (() => {
       }, 'video-started', 15000);
     },
     videoStop: () => request({ cmd: 'video-stop' }, 'video-stopped'),
+    // refaz só a captura (o encoder continua): mode 'same' ou 'other' (troca o método do Windows)
+    videoRecapture: (mode) => request({ cmd: 'video-recapture', mode }, 'video-recaptured', 10000),
     // keyframe vai para todos os amigos (um encoder só) e é grande: pedidos juntos viram um só,
     // no máximo um a cada 0,7 s (vários amigos pedindo ao mesmo tempo não viram uma enxurrada)
     videoKey: (light) => {

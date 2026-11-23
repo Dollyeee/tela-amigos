@@ -43,6 +43,13 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Sala sobrevive à atualização**: o instalador fecha tudo que roda da pasta do app; se a sua sala estava aberta, ela reabre sozinha quando o app volta (os amigos reconectam sozinhos).
 - **Zoom**: Ctrl + rodinha aproxima a tela de um amigo no ponto do mouse (até 600%); arraste para mover; ✕ ou Ctrl+0 volta.
 - **Atraso por amigo**: botão de relógio na tela dele: *Automático* (mínimo, +0,15 s com jogo pesado), *Atraso mínimo* (jogar junto) ou *Imagem lisa* (+0,35 s, para rede instável). Fica salvo por amigo.
+- **Placa de captura** (v1.0.74): aba **Placa de captura** na janela de compartilhar. Para o Windows a placa (Elgato,
+  AVerMedia, as genéricas USB) é uma câmera: a lista mostra as placas e câmeras do PC, sem miniatura (abrir a placa só
+  para mostrar a imagem tiraria ela do OBS). Vai pela captura do Chromium, mesmo com "Nativa" escolhida, no melhor modo
+  da placa que cabe na resolução/FPS escolhidos. O som vem da **entrada de som** da placa ("Entrada: ..." em Áudio,
+  aberta pelo Chromium sem cancelar eco/ruído nem nivelar, e sem passar pelo mixer): escolher a placa já troca o Áudio
+  para a entrada dela (mesmo aparelho para o Chromium, ou pelo nome) e a escolha fica guardada por placa; voltar para
+  uma tela devolve o som de antes. Placa ocupada (OBS aberto com ela) ou desconectada: aviso claro e nada vai ao ar.
 - **2ª tela**: transmitindo, clique em **+ 2ª tela** e escolha outra tela ou janela (30 fps). Ela aparece no canto da sua tela principal; cada amigo arrasta, troca com a principal (⇄ ou duplo clique) ou esconde (✕), e só recebe enquanto ela está à vista.
 - **Resolução por amigo**: botão de resolução na tela dele: *Automático* (original; cai para 720p sozinho se o seu PC apertar), *Original*, 1080p, 720p ou 480p. Quem transmite reduz só para você (na *Nativa direta* o vídeo é o mesmo para todos).
 - **Som de uma saída** (Sonar/Voicemeeter): em *Áudio*, as opções *Saída: ...* mandam todo o som de uma saída do PC, ex. o canal de jogo (*SteelSeries Sonar - Gaming*, *Voicemeeter Input*). Deixe o Tela Amigos e o Discord em outro canal, senão os amigos ouvem eco (o app avisa).
@@ -125,7 +132,9 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
   a cada 4 s.
 - **Reconexão automática com o servidor de vídeo**: se a conexão com o servidor cair ou travar, quem transmite volta a mandar direto na hora (sem tela preta) e em ~1,5 s tudo é refeito numa conexão nova. Se nada chegar do servidor por 6 s, quem assiste passa a receber direto sozinho. Caiu 3 vezes em 3 minutos: fica 5 minutos só na conexão direta.
 - **Tela do amigo travada em 0 fps se arruma sozinha**: se ele está mandando imagem e nada aparece aqui, o app pede um quadro completo (3 s), refaz o caminho do vídeo (9 s) e, se ainda não voltou, refaz a conexão só com esse amigo (20 s), o mesmo que sair e entrar na sala. Tela parada de verdade (nada mudando) não conta.
-- **Captura travada com jogo aberto**: se a captura de quem transmite ficar em 0 fps com um jogo aberto (placa de vídeo reiniciou, jogo em tela cheia exclusiva), o app reinicia a captura sozinho em 6 s; se travar de novo, passa para a captura do Chromium e sugere colocar o jogo em "Tela cheia sem bordas". Se a captura começar e não mandar nenhuma imagem em 10 s (só o som), faz o mesmo.
+- **Captura travada com jogo aberto** (v1.0.74): se a captura de quem transmite ficar em 0 fps com um jogo aberto (placa de vídeo reiniciou, jogo em tela cheia exclusiva), o app refaz **só a captura** em 6 s, com o codificador da placa ligado (desligar e religar o codificador às vezes travava a placa); se travar de novo em até 3 min, refaz pelo outro método do Windows (captura do Windows <-> duplicação da área de trabalho); na 3ª, passa para a captura do Chromium e sugere colocar o jogo em "Tela cheia sem bordas". Se a captura começar e não mandar nenhuma imagem em 10 s (só o som), faz o mesmo. Steam, WhatsApp e parecidos em tela cheia não contam como jogo.
+- **Placa de vídeo certa** (v1.0.74): a captura e o codificador rodam na placa em que o monitor transmitido está ligado, quando ela é dedicada. Num PC com o vídeo do processador ligado (ex.: Ryzen 7600 + RTX), o codificador da integrada aparecia primeiro na lista do Windows e a captura ia para ela. O diagnóstico mostra a placa (`placa=`) e o método da captura (`captura=`); quando a primeira tentativa falha, o aviso traz o motivo de cada uma.
+- **Codificador parado** (v1.0.74): a captura chega e o codificador não entrega nada por 6 s (a tela fica parada para todo mundo): o app reinicia a transmissão; de novo em até 3 min, captura do Chromium. A conversão da imagem que falhava ao mudar o tamanho da tela (a causa mais provável disso) agora tenta de novo a cada meio segundo e avisa; desligar um codificador preso no driver não trava mais a captura: depois de 7 s ele fica para trás e o próximo começa normal, sem reiniciar o app. Testes do auxiliar com o padrão de teste: `TELA_TEST_VPFAIL=n`, `TELA_TEST_HANGSTOP=1` e `AudioHelper.exe --selftest-order` (a ordem das placas em casos de mentira).
 - **Revisão geral (v1.0.59)**, o que muda para quem usa:
   - *Privacidade*: "Parar" ou "Sair" enquanto a captura ainda abria não deixa mais a transmissão voltar sozinha (nem ficar ligada escondida e ir ao ar na próxima sala); escolher **só uma área** da tela nunca mais vira a tela inteira quando a captura nativa falha; uma **janela** que o Windows não deixa capturar só vira "monitor inteiro" se ela ocupa o monitor todo (e avisa na tela); no Windows 10, janela minimizada fica na última imagem em vez de mostrar o que está atrás; "Aplicar" nos Ajustes não troca mais o som de "só o jogo" para "todo o som do PC".
   - *Travamento*: trocar de codec (entrou alguém sem H.265/AV1) no meio de outro reinício da transmissão travava a interface de vez.
@@ -174,6 +183,9 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
   vez depois de atualizar (o resto dela, com a janela de verdade, está no `lifecycle-test.js`);
 - `node scripts/lifecycle-test.js` – parar/sair no meio do início, área da tela, reinícios automáticos, troca
   de codec, clipes seguindo a tela (captura falsa: não usa a placa de vídeo);
+- `node scripts/card-test.js` – a aba "Placa de captura" de ponta a ponta com a placa e a entrada de som de mentira do
+  Chromium (`TELA_TEST_FAKECAM`, nenhum aparelho de verdade é aberto, cópias mudas): lista, som da entrada, o amigo
+  recebendo imagem e som, reinício em 1080p e parar soltando a placa;
 - `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro; no fim
   confere a versão leve (o segundo encoder) e a volta para a cheia.
 - `node scripts/theme-shots.js [tema ...]` – fotografa os temas no app de verdade com a janela escondida: uma sala de
