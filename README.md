@@ -9,7 +9,7 @@ For playing together, watching together and showing what you're up to, with seve
 
 [![Download for Windows](https://img.shields.io/github/v/release/Dollyeee/tela-amigos?label=Download%20for%20Windows&style=for-the-badge&color=6c5cff)](https://github.com/Dollyeee/tela-amigos/releases/latest)
 
-English · [Português](README.pt-BR.md)
+English · [Português](README.pt-BR.md) · [Website](https://dollyeee.github.io/tela-amigos/)
 
 <img src="docs/img/sala.png" width="900" alt="A Tela Amigos room: Bia's screen in focus, Rafa's and Léo's as thumbnails, the people in the room and the chat on the side">
 

@@ -9,7 +9,7 @@ Para jogar junto, assistir junto e mostrar o que você está fazendo, com vária
 
 [![Baixar para Windows](https://img.shields.io/github/v/release/Dollyeee/tela-amigos?label=Baixar%20para%20Windows&style=for-the-badge&color=6c5cff)](https://github.com/Dollyeee/tela-amigos/releases/latest)
 
-[English](README.md) · Português
+[English](README.md) · Português · [Site](https://dollyeee.github.io/tela-amigos/)
 
 <img src="docs/img/sala.png" width="900" alt="Uma sala do Tela Amigos: a tela da Bia em destaque, as do Rafa e do Léo em miniatura, a lista de quem está na sala e o chat ao lado">
 
