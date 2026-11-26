@@ -169,6 +169,7 @@ async function buildRendererDiag() {
     const d = await window.Helper.diag();
     lines.push('', `placas/encoders: ${safeJson(d.info || d)}`);
   } catch {}
+  if (lastCapTest) lines.push('', '===== último teste de captura com jogo =====', lastCapTest.split('\ndados=')[0]);
   lines.push('', '===== registro =====', ...appLog);
   return lines.join('\n');
 }
@@ -264,6 +265,246 @@ async function onDiagPart(peer, m) {
   diagIn.delete(peer.id);
   const file = await window.native.saveDiagnostics(d.parts.join(''), { raw: true, name: peer.name });
   toast(`Diagnóstico de ${peer.name} salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}`);
+}
+
+// ------------------------------------------------------------------ teste de captura com jogo
+// O Doge (2026-11-26): a transmissão congelava no instante em que ele clicava no jogo e voltava no Alt+Tab, em tela
+// cheia e em janela. "Testar a captura com jogo" (no 🩺 de um amigo, ou para si mesmo nos links da lateral): o amigo
+// aceita, clica no jogo, e o auxiliar tenta cada jeito de capturar por alguns segundos (a tela, só a janela, a tela com
+// uma janela do app por cima do jogo, o DXGI; ver audio-helper/CaptureTest.cs). O relatório volta sozinho para quem
+// pediu (Área de Trabalho). Nenhuma imagem vai junto: só contagens e nomes de configuração.
+const CAPTEST_SECS = 5;
+const capTestIn = new Map(); // id do amigo -> { parts, timer, heard }
+let capTestRun = null;       // teste rodando neste PC: { peer (null = para mim mesmo) }
+let lastCapTest = null;      // texto do último teste feito aqui (vai no diagnóstico)
+
+function requestCapTest(peer) {
+  if (capTestIn.has(peer.id)) { toast(`Já pedi o teste de captura a ${peer.name}: esperando o resultado.`); return; }
+  try {
+    if (peer.dc && peer.dc.readyState === 'open') dcSend(peer, { t: 'captest-req' });
+    else sendRelay(peer.id, { kind: 'captest-req' });
+  } catch (e) { toast(e.message, 'error'); return; }
+  const c = { parts: [], heard: false };
+  c.timer = setTimeout(() => {
+    capTestIn.delete(peer.id);
+    toast(`O teste de captura de ${peer.name} não chegou em 10 min.`, 'error');
+  }, 10 * 60000);
+  // nenhuma resposta = versão antiga (ou app fechado)
+  setTimeout(() => {
+    if (capTestIn.get(peer.id) !== c || c.heard) return;
+    clearTimeout(c.timer);
+    capTestIn.delete(peer.id);
+    toast(`${peer.name} não respondeu ao pedido do teste de captura (ele precisa estar na versão 1.0.75 ou mais nova).`, 'error');
+  }, 45000);
+  capTestIn.set(peer.id, c);
+  toast(`Pedi o teste de captura a ${peer.name}. Ele clica em "Começar" e depois no jogo; o resultado chega aqui sozinho (uns 2 min).`);
+}
+
+function capTestReply(peer, o) {
+  try { if (peer.dc && peer.dc.readyState === 'open') { dcSend(peer, { t: 'captest-status', ...o }); return; } } catch {}
+  sendRelay(peer.id, { kind: 'captest-status', ...o });
+}
+
+// (quem pediu) o amigo respondeu: perguntando, começou, recusou ou deu erro
+function onCapTestStatus(peer, m) {
+  const c = capTestIn.get(peer.id);
+  if (!c) return;
+  c.heard = true;
+  const end = () => { clearTimeout(c.timer); capTestIn.delete(peer.id); };
+  if (m.phase === 'started') toast(`${peer.name} começou o teste de captura.`);
+  else if (m.phase === 'declined') { end(); toast(`${peer.name} preferiu não fazer o teste de captura agora.`); }
+  else if (m.phase === 'error') { end(); toast(`O teste de captura de ${peer.name} não deu: ${String(m.msg || '').slice(0, 200)}`, 'error'); }
+}
+
+async function onCapTestPart(peer, m) {
+  const c = capTestIn.get(peer.id);
+  if (!c || !Number.isInteger(m.i) || !Number.isInteger(m.n) || m.n > 40 || m.i < 0 || m.i >= m.n) return;
+  c.heard = true;
+  c.parts[m.i] = String(m.data || '');
+  if (c.parts.filter((x) => x != null).length < m.n) return;
+  clearTimeout(c.timer);
+  capTestIn.delete(peer.id);
+  const file = await (window.__testSaveDiag || window.native.saveDiagnostics)(c.parts.join(''), { raw: true, name: `teste-captura-${peer.name}` });
+  toast(`Teste de captura de ${peer.name} salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}`);
+}
+
+// (quem faz o teste) pedido de um amigo
+function onCapTestReq(peer) {
+  if (capTestRun) { capTestReply(peer, { phase: 'error', msg: 'já tem um teste de captura rodando no PC dele' }); return; }
+  capTestReply(peer, { phase: 'asked' });
+  openCapTest(peer);
+}
+
+const CAPTEST_PHASES = {
+  'wait-game': 'Esperando o jogo: abra o jogo e clique nele (o teste começa sozinho quando ele estiver na frente).',
+  'back-to-game': 'Volte para o jogo (clique nele) para o teste continuar.',
+  system: 'Quase lá: anotando as configurações do Windows...',
+};
+function capTestProgress(msg) {
+  if (!capTestRun || $('#captest-modal').classList.contains('hidden')) return;
+  const p = $('#captest-progress');
+  if (msg.phase === 'step') p.textContent = `Testando (${msg.i} de ${msg.n}): ${msg.label}. Continue no jogo.`;
+  else if (msg.phase === 'game') p.textContent = `Jogo: ${msg.exe}. Começando...`;
+  else if (CAPTEST_PHASES[msg.phase]) p.textContent = CAPTEST_PHASES[msg.phase];
+}
+
+function openCapTest(peer) {
+  const modal = $('#captest-modal'), body = $('#captest-body'), start = $('#captest-start'), close = $('#captest-close');
+  const who = peer ? peer.name : null;
+  body.textContent = '';
+  const p1 = document.createElement('p');
+  p1.textContent = who
+    ? `${who} pediu um teste para descobrir por que a sua transmissão congela quando você clica no jogo.`
+    : 'Este teste descobre por que a transmissão congela quando você clica no jogo.';
+  const ol = document.createElement('ol');
+  for (const t of ['Clique em "Começar".',
+    'Abra o jogo (ou volte para ele) e clique nele. Jogue normalmente por uns 40 segundos: o teste começa sozinho quando o jogo estiver na frente.',
+    who ? `Um som avisa quando acabar. O resultado vai sozinho para ${who}.` : 'Um som avisa quando acabar. O resultado fica na sua Área de Trabalho.']) {
+    const li = document.createElement('li');
+    li.textContent = t;
+    ol.appendChild(li);
+  }
+  const p2 = document.createElement('p');
+  p2.className = 'muted';
+  p2.textContent = 'Durante o teste, uma janela invisível do app fica por cima do jogo por alguns segundos. Nenhuma imagem da sua tela é enviada: só números (quantas imagens chegaram) e o nome de algumas configurações do Windows.';
+  const prog = document.createElement('p');
+  prog.id = 'captest-progress';
+  prog.className = 'captest-progress';
+  body.append(p1, ol, p2, prog);
+  start.classList.remove('hidden');
+  start.disabled = false;
+  close.textContent = 'Agora não';
+  let answered = false;
+  start.onclick = () => {
+    answered = true;
+    start.classList.add('hidden');
+    close.textContent = 'Fechar';
+    prog.textContent = CAPTEST_PHASES['wait-game'];
+    runCapTest(peer).catch((e) => console.warn('teste de captura', e));
+  };
+  close.onclick = () => {
+    modal.classList.add('hidden');
+    if (!answered && peer) capTestReply(peer, { phase: 'declined' });
+  };
+  modal.classList.remove('hidden');
+}
+
+async function runCapTest(peer) {
+  if (capTestRun) return;
+  capTestRun = { peer };
+  if (peer) capTestReply(peer, { phase: 'started' });
+  console.log(`teste de captura com jogo: começou${peer ? ` (pedido por ${peer.name})` : ''}`);
+  try {
+    const r = await (window.__testCapTest || window.Helper.capTest)(CAPTEST_SECS);
+    if (!r || r.type !== 'captest') throw new Error((r && r.message) || 'sem resposta do auxiliar');
+    const version = await window.native.appVersion().catch(() => '?');
+    const text = formatCapTest(r.report || {}, { version, name: state.myName });
+    lastCapTest = text;
+    console.log(`teste de captura com jogo: ${capTestVerdict(r.report || {}).short}`);
+    Sfx.play('share');
+    let where;
+    if (peer && state.peers.get(peer.id) === peer) {
+      await sendCapTestText(peer, text);
+      where = `O resultado foi para ${peer.name}.`;
+    } else {
+      const file = await (window.__testSaveDiag || window.native.saveDiagnostics)(text, { raw: true, name: 'teste-captura' });
+      where = `Resultado salvo na Área de Trabalho: ${file.split(/[\\/]/).pop()}${peer ? ` (${peer.name} saiu da sala)` : ''}.`;
+    }
+    const prog = $('#captest-progress');
+    if (prog) prog.textContent = `Pronto! ${capTestVerdict(r.report || {}).short} ${where}`;
+    toast(`Teste de captura pronto. ${where}`);
+  } catch (e) {
+    if (peer) capTestReply(peer, { phase: 'error', msg: e.message });
+    const prog = $('#captest-progress');
+    if (prog) prog.textContent = `O teste não deu: ${e.message}`;
+    toast(`O teste de captura não deu: ${e.message}`, 'error');
+  } finally {
+    capTestRun = null;
+  }
+}
+
+async function sendCapTestText(peer, text) {
+  const viaDc = peer.dc && peer.dc.readyState === 'open';
+  const CH = 15000, n = Math.max(1, Math.ceil(text.length / CH));
+  for (let i = 0; i < n; i++) {
+    const part = { i, n, data: text.slice(i * CH, (i + 1) * CH) };
+    if (viaDc) { try { dcSend(peer, { t: 'captest-part', ...part }); continue; } catch {} }
+    sendRelay(peer.id, { kind: 'captest-part', ...part });
+    await new Promise((r) => setTimeout(r, 60));
+  }
+}
+
+// Andou = imagens novas o tempo todo; congelou = no máximo a primeira imagem e mais uma.
+function capTestStepState(s, secs) {
+  if (!s || s.skipped) return 'skipped';
+  if (s.crashed || s.stuck) return 'crashed';
+  if (s.error) return 'error';
+  if ((s.changed || 0) <= 2) return 'frozen';
+  if (s.changed / (secs || CAPTEST_SECS) >= 5 && (s.maxGapMs || 0) < 2500) return 'moved';
+  return 'choppy';
+}
+function capTestVerdict(rep) {
+  const secs = rep.secsPerStep || CAPTEST_SECS;
+  const st = Object.fromEntries((rep.steps || []).map((s) => [s.method, capTestStepState(s, secs)]));
+  if (!rep.ok) return { code: 'no-game', short: `Não deu para testar: ${rep.error || 'o jogo não ficou na frente'}.` };
+  const base = st['wgc-monitor'];
+  const over = ['wgc-monitor+tiny', 'wgc-monitor+full'].filter((m) => st[m] === 'moved');
+  if (base === 'moved') return { code: 'no-repro', short: 'A captura andou com o jogo na frente: o problema não apareceu durante o teste.' };
+  if (base === 'skipped' || base === 'error' || base === undefined) return { code: 'inconclusive', short: 'Não deu para concluir (o jogo saiu da frente ou o teste deu erro).' };
+  if (over.length) {
+    return { code: 'optimization', short: 'É a otimização do Windows: com o jogo sozinho na tela, a imagem vai direto para o monitor e a captura não vê. ' +
+      `Com uma janela do app por cima do jogo, a captura andou (${over.map((m) => (m.endsWith('tiny') ? 'janelinha no canto' : 'janela cobrindo a tela')).join(' e ')}).` };
+  }
+  if (st['wgc-window'] === 'moved') return { code: 'window', short: 'A tela congelou, mas só a janela do jogo andou.' };
+  if (st.dxgi === 'moved') return { code: 'dxgi', short: 'A captura pelo Windows congelou, mas a do DXGI andou.' };
+  return { code: 'all-frozen', short: 'Nenhum jeito de capturar pelo Windows pegou a imagem com o jogo na frente.' };
+}
+
+function formatCapTest(rep, meta = {}) {
+  const secs = rep.secsPerStep || CAPTEST_SECS;
+  const v = capTestVerdict(rep);
+  const yes = (b) => (b === true ? 'sim' : b === false ? 'não' : '?');
+  const g = rep.game || {};
+  const out = [
+    `Teste de captura com jogo — Tela Amigos v${meta.version || '?'} — ${new Date().toLocaleString('pt-BR')} — ${meta.name || ''}`,
+    g.exe ? `Jogo: ${g.exe} · janela ${g.width}x${g.height} no monitor de ${g.monitorWidth}x${g.monitorHeight} · ocupa a tela inteira: ${yes(g.coversMonitor)} · sem bordas: ${yes(g.borderless)}` : 'Jogo: nenhum',
+    '', `RESULTADO: ${v.short}`, '',
+  ];
+  if ((rep.steps || []).length) {
+    out.push(`Cada jeito de capturar (${secs} s cada, com o jogo na frente):`);
+    const tag = { moved: 'ANDOU   ', frozen: 'CONGELOU', choppy: 'TRAVANDO', crashed: 'CAIU    ', error: 'ERRO    ', skipped: 'PULADO  ' };
+    for (const s of rep.steps) {
+      const k = capTestStepState(s, secs);
+      let d;
+      if (k === 'skipped') d = s.skipped;
+      else if (k === 'crashed') {
+        const c = s.crash || {};
+        d = s.stuck ? s.error : `o processo caiu (código ${s.exitCode})` +
+          (c.module ? ` · peça que falhou: ${c.module}${c.moduleVersion ? ' ' + c.moduleVersion : ''} · exceção ${c.exception} em ${c.offset}` : ' · o Windows não anotou a peça');
+      } else if (k === 'error') d = s.error;
+      else d = `${s.changed} imagens novas (${s.fps}/s) de ${s.frames} quadros · maior parada ${((s.maxGapMs || 0) / 1000).toFixed(1)} s` +
+        `${s.size ? ` · ${s.size}` : ''}${s.overlay && s.overlay !== 'ok' ? ` · janela por cima não abriu: ${s.overlay}` : ''}`;
+      if (s.frontPct != null && s.frontPct < 90 && k !== 'skipped') d += ` · jogo na frente só ${s.frontPct}% do tempo`;
+      out.push(`  ${tag[k]}  ${s.label || s.method}: ${d}`);
+      if (k === 'crashed' && s.crash && s.crash.dotnet) out.push(...s.crash.dotnet.split('\n').slice(0, 12).map((l) => `              ${l}`));
+    }
+    out.push('');
+  }
+  const sys = rep.system || {};
+  const dx = String(sys.directxUserGlobal || '');
+  const dxv = (k) => { const m = new RegExp(`${k}=(\\d)`).exec(dx); return m ? (m[1] === '1' ? 'ligado' : 'desligado') : 'padrão'; };
+  out.push(`Windows: ${sys.windows || '?'}`);
+  out.push(`MPO (planos de sobreposição): ${sys.mpoOverlayTestMode === 5 ? 'DESLIGADO (OverlayTestMode=5)' : sys.mpoOverlayTestMode != null ? `OverlayTestMode=${sys.mpoOverlayTestMode}` : 'normal (ligado)'}` +
+    ` · agendamento de GPU por hardware: ${sys.hagsHwSchMode === 2 ? 'ligado' : sys.hagsHwSchMode === 1 ? 'desligado' : '?'}`);
+  out.push(`Gráficos do Windows: otimizações para jogos em janela ${dxv('SwapEffectUpgradeEnable')} · taxa de atualização variável ${dxv('VRROptimizeEnable')} · HDR automático ${dxv('AutoHDREnable')}`);
+  if (g.exe) out.push(`Para o jogo: placa escolhida no Windows: ${sys.gameGpuPreference || 'padrão'} · compatibilidade: ${[sys.gameCompatUser, sys.gameCompatMachine].filter(Boolean).join(' ') || 'nada'}`);
+  out.push(`Barra de Jogo: gravação ${sys.GameDVR_Enabled === 0 ? 'desligada' : sys.GameDVR_Enabled === 1 ? 'ligada' : '?'} · FSEBehaviorMode=${sys.GameDVR_FSEBehaviorMode ?? '-'} · Modo de Jogo automático: ${sys.gameModeAuto === 0 ? 'desligado' : 'ligado'}`);
+  for (const m of rep.monitors || []) {
+    out.push(`Monitor ${m.name}${m.game ? ' (o do jogo)' : ''}: ${m.width}x${m.height}${m.hz ? ` ${m.hz} Hz` : ''} · ${m.adapter} · MPO ${yes(m.mpo)} · HDR ${yes(m.hdr)}${m.hwComposition ? ` · composição ${m.hwComposition}` : ''}`);
+  }
+  out.push(`Programas abertos que costumam mexer na imagem: ${(rep.programs || []).join(', ') || 'nenhum'}`);
+  out.push('', `dados=${safeJson(rep)}`);
+  return out.join('\n');
 }
 
 // ------------------------------------------------------------------ sons de aviso
@@ -918,6 +1159,9 @@ function onRelay(from, data) {
     case 'diag-part':
       onDiagPart(peer, data).catch((e) => console.warn('receber diagnóstico', e));
       break;
+    case 'captest-req': onCapTestReq(peer); break; // teste de captura com jogo (sem conexão direta)
+    case 'captest-status': onCapTestStatus(peer, data); break;
+    case 'captest-part': onCapTestPart(peer, data).catch((e) => console.warn('receber teste de captura', e)); break;
     case 'need-key': // a minha tela parou no amigo: manda um quadro completo
       sendKeyFrame(peer);
       break;
@@ -2860,6 +3104,9 @@ function onDataMessage(peer, data) {
     case 'rx': if (Number.isFinite(m.kb)) peer.rxRep = { kb: Math.max(0, m.kb), at: performance.now() }; break;
     case 'diag-req': sendMyDiag(peer).catch((e) => console.warn('enviar diagnóstico', e)); break;
     case 'diag-part': onDiagPart(peer, m).catch((e) => console.warn('receber diagnóstico', e)); break;
+    case 'captest-req': onCapTestReq(peer); break;
+    case 'captest-status': onCapTestStatus(peer, m); break;
+    case 'captest-part': onCapTestPart(peer, m).catch((e) => console.warn('receber teste de captura', e)); break;
     default: break;
   }
 }
@@ -4415,7 +4662,8 @@ function onHelperEvent(msg) {
     render();
   }
   if (msg.type === 'boost') console.log(`prioridade de GPU (pid: nível 4=alta, 3=acima do normal): ${safeJson(msg.result)}`);
-  if (msg.type === 'helper-exit') console.warn(`AudioHelper fechou (código ${msg.code})`);
+  if (msg.type === 'helper-exit') onHelperExitLog(msg);
+  if (msg.type === 'captest-progress') capTestProgress(msg);
   if (msg.type === 'warn') {
     console.warn(`AudioHelper: ${msg.message}`); // ex.: falha ao capturar o som de um jogo
     if (/saída de som escolhida/.test(msg.message) && state.share && state.share.audio && !state.share.audioIn) toast(`Som: ${msg.message}`, 'error');
@@ -4616,13 +4864,57 @@ function captureFail(reason) {
   while (capStalls.length && now - capStalls[0] > 180000) capStalls.shift();
   capStalls.push(now);
   const n = capStalls.length;
-  console.warn(`captura travada: ${reason}; ${n >= 3 ? 'trocando para a captura do Chromium' : n === 2 ? 'refazendo a captura pelo outro método' : 'refazendo a captura'}`);
+  // o outro método já derrubou o auxiliar com este jogo (o Doge e o RDR2, 2026-11-26): refaz pelo mesmo
+  const skipOther = n === 2 && otherMethodCrashed(state.gamingExe);
+  console.warn(`captura travada: ${reason}; ${n >= 3 ? 'trocando para a captura do Chromium' : n === 2 && !skipOther ? 'refazendo a captura pelo outro método'
+    : n === 2 ? `refazendo a captura (o outro método já derrubou o auxiliar com ${state.gamingExe})` : 'refazendo a captura'}`);
   if (n >= 3) {
     capStalls.length = 0;
     recoverShare(reason.replace(/ \(.*\)$/, ''), true);
     return;
   }
-  recaptureShare(reason, n === 1 ? 'same' : 'other');
+  recaptureShare(reason, n === 1 || skipOther ? 'same' : 'other');
+}
+
+// Jogos com que o "outro método" (refazer a captura pelo DXGI) derrubou o auxiliar neste PC: guardado (o Doge reabriu o
+// app depois da queda) e não usado de novo com eles.
+let lastOtherRecapture = null; // { at, exe }
+function otherMethodCrashed(exe) {
+  try { return !!exe && JSON.parse(localStorage.getItem('recapOtherCrash') || '[]').includes(String(exe).toLowerCase()); } catch { return false; }
+}
+function noteOtherMethodCrash() {
+  const r = lastOtherRecapture;
+  if (!r || Date.now() - r.at > 30000 || !r.exe) return;
+  lastOtherRecapture = null;
+  try {
+    const list = JSON.parse(localStorage.getItem('recapOtherCrash') || '[]').filter((x) => x !== r.exe);
+    list.push(r.exe);
+    localStorage.setItem('recapOtherCrash', JSON.stringify(list.slice(-20)));
+  } catch {}
+  console.warn(`o outro método de captura derrubou o auxiliar com ${r.exe}: não vou mais usar ele com esse jogo`);
+}
+
+// Auxiliar fechou: o código (em hexadecimal, que é como o Windows mostra), as últimas linhas que ele escreveu e, se
+// caiu, o que o Windows anotou (qual peça falhou). Antes vinha só "AudioHelper fechou (código 3221225477)".
+function onHelperExitLog(msg) {
+  const code = msg.code;
+  const crashed = typeof code === 'number' && code !== 0;
+  const u = crashed ? code >>> 0 : 0;
+  const hex = crashed && u > 255 ? ` = 0x${u.toString(16).toUpperCase()}${u === 0xC0000005 ? ', acesso inválido à memória' : u === 0xC0000409 ? ', falha detectada pelo próprio programa' : ''}` : '';
+  console.warn(`AudioHelper fechou (código ${code}${hex})`);
+  if (Array.isArray(msg.tail) && msg.tail.length) console.warn(`últimas linhas do auxiliar antes de fechar:\n  ${msg.tail.slice(-15).join('\n  ')}`);
+  if (!crashed) return;
+  noteOtherMethodCrash();
+  if (!msg.pid) return;
+  // (no auxiliar novo; o Windows leva um instante para escrever o registro)
+  setTimeout(async () => {
+    const r = await (window.__testCrashInfo || window.Helper.crashInfo)(msg.pid, (msg.at || Date.now()) - 5000);
+    const c = r && r.type === 'crash-info' ? r.info : null;
+    if (!c) { console.warn(`registro do Windows sobre a queda do auxiliar: ${r && r.type === 'error' ? `não deu para ler (${r.message})` : 'nada anotado'}`); return; }
+    if (c.error) { console.warn(`registro do Windows sobre a queda do auxiliar: não deu para ler (${c.error})`); return; }
+    console.warn(`registro do Windows sobre a queda do auxiliar: ${c.module ? `peça que falhou ${c.module}${c.moduleVersion ? ' ' + c.moduleVersion : ''}, exceção ${c.exception} em ${c.offset}` : 'sem a peça'}` +
+      `${c.dotnet ? `\n  ${String(c.dotnet).split('\n').slice(0, 20).join('\n  ')}` : ''}`);
+  }, 1500);
 }
 
 // Refaz só a captura (NativeVideo.recapture); se não der (janela fechou, helper sem resposta...), reinicia a
@@ -4633,6 +4925,7 @@ async function recaptureShare(reason, mode) {
   recovering = true;
   let ok = false;
   try {
+    if (mode === 'other') lastOtherRecapture = { at: Date.now(), exe: String(state.gamingExe || '').toLowerCase() };
     const method = await (window.__testRecapture || window.NativeVideo.recapture)(mode);
     ok = true;
     if (state.share === sh) sh.capture = method;
@@ -5731,8 +6024,8 @@ function renderPeople() {
     const db = document.createElement('button');
     db.className = 'tag-btn person-diag';
     db.textContent = '🩺';
-    db.title = `Pedir o diagnóstico de ${p.name} (chega na sua Área de Trabalho)`;
-    db.onclick = () => requestDiag(p);
+    db.title = `Diagnóstico de ${p.name}: pedir o diagnóstico ou testar a captura com jogo (chega na sua Área de Trabalho)`;
+    db.onclick = (e) => { e.stopPropagation(); openPersonDiagMenu(p, db); };
     extra.appendChild(db);
     const li = row(p.name, status, extra, undefined, p);
     if (p.sharing) li.dataset.live = '1';
@@ -6067,6 +6360,35 @@ function openMoreMenu(actions, btn) {
   setTimeout(() => document.addEventListener('pointerdown', closeMenus, { once: true }), 0);
 }
 function closeMenus() { document.querySelectorAll('.menu-pop').forEach((m) => m.remove()); }
+// 🩺 de um amigo: o diagnóstico de sempre ou o teste de captura com jogo
+function openPersonDiagMenu(peer, btn) {
+  const was = document.querySelector('.menu-pop');
+  closeMenus();
+  if (was && was.dataset.for === `diag:${peer.id}`) return;
+  const m = document.createElement('div');
+  m.className = 'menu-pop';
+  m.dataset.for = `diag:${peer.id}`;
+  const head = document.createElement('div');
+  head.className = 'menu-head';
+  head.textContent = `${peer.name}:`;
+  m.appendChild(head);
+  for (const [label, run] of [
+    ['Pedir o diagnóstico (chega na sua Área de Trabalho)', () => requestDiag(peer)],
+    ['Testar a captura com jogo (a tela dele congela no jogo?)', () => requestCapTest(peer)],
+  ]) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = (e) => { e.stopPropagation(); closeMenus(); run(); };
+    m.appendChild(b);
+  }
+  m.onpointerdown = (e) => e.stopPropagation();
+  m.ondblclick = (e) => e.stopPropagation();
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - m.offsetWidth - 8, r.left))}px`;
+  m.style.top = `${Math.min(window.innerHeight - m.offsetHeight - 8, r.bottom + 4)}px`;
+  setTimeout(() => document.addEventListener('pointerdown', closeMenus, { once: true }), 0);
+}
 function openResMenu(id, btn) {
   const peer = state.peers.get(id);
   if (!peer) return;
@@ -6493,6 +6815,7 @@ function initRoomUi() {
   $('#nettest-close').onclick = () => $('#nettest-modal').classList.add('hidden');
   $('#btn-diag').onclick = () => saveDiagnostics().catch((e) => toast(`Falha no diagnóstico: ${e.message}`, 'error'));
   $('#btn-diag-room').onclick = () => requestRoomDiag().catch((e) => toast(`Falha no diagnóstico da sala: ${e.message}`, 'error'));
+  $('#btn-captest').onclick = () => { if (capTestRun) toast('O teste de captura já está rodando: volte para o jogo.'); else openCapTest(null); };
   // mostra os atalhos que de fato ficaram valendo (outro programa pode ter "pegado" algum)
   window.native.getHotkeys().then((k) => {
     const names = { share: 'transmitir/parar', mute: 'mutar todos', 'overlay-lock': 'destravar sobreposição', clip: 'salvar clipe' };
@@ -6597,6 +6920,7 @@ function initRoomUi() {
       if (!$('#adjust-panel').classList.contains('hidden')) { $('#adjust-panel').classList.add('hidden'); return; }
       if ($('#room').classList.contains('opts-open')) { $('#room').classList.remove('opts-open'); return; }
       if (!$('#hist-modal').classList.contains('hidden')) { closeHistory(); return; }
+      if (!$('#captest-modal').classList.contains('hidden')) { $('#captest-close').click(); return; }
       if (document.querySelector('.menu-pop')) { closeMenus(); return; }
       // caneta ligada em alguma tela: Esc desliga
       const penTiles = [meTile, ...[...state.peers.values()].map((p) => p.tile)].filter((t) => t && t.pen);

@@ -329,7 +329,7 @@ sealed unsafe class VideoStreamer : IDisposable
     }
 
     /// LUID da placa em que o monitor está ligado (0 = não achou).
-    static long MonitorOwnerLuid(IntPtr hmon)
+    internal static long MonitorOwnerLuid(IntPtr hmon)
     {
         if (hmon == IntPtr.Zero) return 0;
         try
@@ -1723,7 +1723,7 @@ sealed unsafe class VideoStreamer : IDisposable
     static readonly Guid IID_GraphicsCaptureItem = new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
     static readonly Guid IID_IDirect3DDxgiInterfaceAccess = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
 
-    static GraphicsCaptureItem CreateItem(IntPtr window, IntPtr monitor)
+    internal static GraphicsCaptureItem CreateItem(IntPtr window, IntPtr monitor)
     {
         var factory = ActivationFactory.Get("Windows.Graphics.Capture.GraphicsCaptureItem");
         Guid iidInterop = IID_IGraphicsCaptureItemInterop;
@@ -1771,7 +1771,7 @@ sealed unsafe class VideoStreamer : IDisposable
         finally { Marshal.Release(unk); }
     }
 
-    static IntPtr GetDxgiInterface(IntPtr surface, Guid iid)
+    internal static IntPtr GetDxgiInterface(IntPtr surface, Guid iid)
     {
         Guid iidAccess = IID_IDirect3DDxgiInterfaceAccess;
         Marshal.QueryInterface(surface, ref iidAccess, out IntPtr access).CheckHr("IDirect3DDxgiInterfaceAccess");

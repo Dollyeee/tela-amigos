@@ -56,28 +56,38 @@ run('npx electron-builder --win nsis --publish never');
 // o latest.yml é o que o atualizador lê: gerado aqui a partir do instalador desta versão
 const { writeLatestYml } = require('./latest-yml');
 writeLatestYml(root, pkg.version);
-const files = ['latest.yml', `TelaAmigos-Setup-${pkg.version}.exe`, `TelaAmigos-Setup-${pkg.version}.exe.blockmap`];
+const installer = [`TelaAmigos-Setup-${pkg.version}.exe`, `TelaAmigos-Setup-${pkg.version}.exe.blockmap`];
+const files = ['latest.yml', ...installer];
 
+// A versão nova fica como RASCUNHO (invisível para o atualizador dos amigos) até todos os arquivos subirem, e o
+// latest.yml (que diz "tem versão nova") sobe por último. Antes ela já nascia publicada e o latest.yml subia primeiro:
+// na 1.0.74 o app do Doge viu a versão nova enquanto o instalador (160 MB) ainda subia e deu "404" ao baixar.
 let exists = true;
 try { out(`gh release view ${tag} --json name`); } catch { exists = false; }
 // o texto da versão no GitHub é o das Novidades (scripts/release-notes.js)
 const notes = require('./release-notes').notesFile(pkg.version);
-if (!exists) run(`gh release create ${tag} --title ${pkg.version} --notes-file "${notes}" --latest`);
+if (!exists) run(`gh release create ${tag} --title ${pkg.version} --notes-file "${notes}" --draft`);
 else run(`gh release edit ${tag} --notes-file "${notes}"`);
-for (let attempt = 1; attempt <= 3; attempt++) {
-  try {
-    run(`gh release upload ${tag} ${files.map((n) => `"dist/${n}"`).join(' ')} --clobber`);
-    break;
-  } catch (e) {
-    if (attempt === 3) throw e;
-    console.warn(`Falha no envio (tentativa ${attempt}), tentando de novo...`);
+const upload = (list) => {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      run(`gh release upload ${tag} ${list.map((n) => `"dist/${n}"`).join(' ')} --clobber`);
+      return;
+    } catch (e) {
+      if (attempt === 3) throw e;
+      console.warn(`Falha no envio (tentativa ${attempt}), tentando de novo...`);
+    }
   }
-}
+};
+upload(installer);
+upload(['latest.yml']);
 
 // confere: arquivos presentes e latest.yml apontando para esta versão
 const have = out(`gh release view ${tag} --json assets --jq "[.assets[].name] | join(\\",\\")"`).split(',');
 const missing = files.filter((n) => !have.includes(n));
 if (missing.length) throw new Error(`Release incompleta, faltando: ${missing.join(', ')}`);
+// tudo no lugar: agora sim publica (e marca como a mais recente)
+run(`gh release edit ${tag} --draft=false --latest`);
 const remoteYml = out(`gh release download ${tag} -p latest.yml -O -`);
 if (!remoteYml.startsWith(`version: ${pkg.version}`)) throw new Error(`latest.yml no GitHub não é da ${pkg.version}`);
 console.log(`\nPronto! v${pkg.version} publicada. Os amigos recebem a atualização ao abrir o app.\n`);

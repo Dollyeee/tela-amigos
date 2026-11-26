@@ -177,6 +177,16 @@ static class Program
         catch { try { SetProcessDPIAware(); } catch { } }
         // teste da ordem das placas (sem placa nenhuma, casos de mentira): imprime e sai
         if (Environment.GetCommandLineArgs().Contains("--selftest-order")) { Console.Out.WriteLine(VideoStreamer.SelfTestOrder()); return; }
+        // teste de captura com jogo: cada passo roda num processo separado (ver CaptureTest.cs)
+        var cl = Environment.GetCommandLineArgs();
+        if (cl.Length > 1 && cl[1] == "--captest-step") { CaptureTest.RunStepMain(cl[1..]); return; }
+        if (cl.Length > 1 && cl[1] == "--captest-fakegame") { CaptureTest.RunFakeGame(cl[1..]); return; }
+        // registro de falhas do Windows (teste): --crash-info-parse <pid> lê o XML do wevtutil pela entrada
+        if (cl.Length > 2 && cl[1] == "--crash-info-parse")
+        {
+            Console.Out.WriteLine(CrashInfo.Parse(Console.In.ReadToEnd(), int.TryParse(cl[2], out var cpid) ? cpid : 0)?.ToJsonString() ?? "null");
+            return;
+        }
         StartWriter();
         StartVideoWorker();
         SendJson(new { type = "ready" });
@@ -321,6 +331,35 @@ static class Program
                         gameWatcher = root.TryGetProperty("on", out var on) && on.GetBoolean() ? new GameWatcher(selfPid) : null;
                         SendJson(new { id, type = "game-watch", on = gameWatcher != null });
                         break;
+                    case "captest":
+                    {
+                        // teste de captura com jogo (demora até alguns minutos: roda numa thread própria e manda o
+                        // andamento como "captest-progress")
+                        int csecs = root.TryGetProperty("secs", out var cs) && cs.ValueKind == JsonValueKind.Number ? cs.GetInt32() : 5;
+                        if (CaptureTest.Running) { SendJson(new { id, type = "error", message = "o teste de captura já está rodando" }); break; }
+                        var cid = id;
+                        new Thread(() =>
+                        {
+                            try { SendJson(new { id = cid, type = "captest", report = CaptureTest.Run(selfPid, csecs, m => SendJson(m)) }); }
+                            catch (Exception cex) { SendJson(new { id = cid, type = "error", message = cex.Message }); }
+                        }) { IsBackground = true, Name = "captest" }.Start();
+                        break;
+                    }
+                    case "crash-info":
+                    {
+                        // o que o Windows anotou sobre a queda de um auxiliar anterior (pid) desde "since" (ms)
+                        int cpid = root.TryGetProperty("pid", out var cp) && cp.ValueKind == JsonValueKind.Number ? cp.GetInt32() : 0;
+                        long csince = root.TryGetProperty("since", out var cse) && cse.ValueKind == JsonValueKind.Number ? cse.GetInt64() : 0;
+                        var cid = id;
+                        Task.Run(() =>
+                        {
+                            object? info = null;
+                            try { info = CrashInfo.FindWithRetry(cpid, csince > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(csince).UtcDateTime : DateTime.UtcNow.AddMinutes(-2), 6000); }
+                            catch (Exception cex) { info = new { error = cex.Message }; }
+                            SendJson(new { id = cid, type = "crash-info", info });
+                        });
+                        break;
+                    }
                     case "video-diag":
                     {
                         var vid = id;

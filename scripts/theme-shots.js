@@ -432,6 +432,19 @@ async function page(CFG) {
       await shot(`${t}-14-teste-de-conexao`);
       $('#nettest-modal').classList.add('hidden');
       $('#nettest-apply').classList.add('hidden');
+
+      // teste de captura com jogo: o menu do 🩺 e o pedido que o amigo vê (fecha sem "responder": é tudo de mentira)
+      const ctPeer = state.peers.get('901');
+      const ctBtn = ctPeer && ctPeer.personEl && ctPeer.personEl.querySelector('.person-diag');
+      if (ctBtn) { openPersonDiagMenu(ctPeer, ctBtn); await shot(`${t}-15a-menu-diagnostico`); closeMenus(); }
+      if (ctPeer) {
+        openCapTest(ctPeer);
+        $('#captest-start').classList.add('hidden');
+        $('#captest-close').textContent = 'Fechar';
+        $('#captest-progress').textContent = 'Testando (3 de 5): tela, com uma janelinha do app num canto por cima do jogo. Continue no jogo.';
+        await shot(`${t}-15b-teste-de-captura`);
+        $('#captest-modal').classList.add('hidden');
+      }
     }
     log('FIM');
   } catch (e) {

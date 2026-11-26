@@ -205,6 +205,7 @@
           <button id="btn-nettest" class="link-btn" title="Mede ping e velocidade com cada amigo pelo Radmin e sugere a qualidade">Testar conexão</button>
           <button id="btn-diag-room" class="link-btn" title="Junta o diagnóstico de todo mundo da sala num arquivo só (na Área de Trabalho), com um resumo dos erros de cada um">Diagnóstico da sala</button>
           <button id="btn-diag" class="link-btn">Enviar diagnóstico</button>
+          <button id="btn-captest" class="link-btn" title="A transmissão congela quando você clica no jogo? Este teste tenta cada jeito de capturar com o jogo na frente e salva o resultado na Área de Trabalho (para um amigo: 🩺 no nome dele)">Testar captura com jogo</button>
           <span class="muted" title="Ctrl+Shift+S: transmitir/parar · Ctrl+Shift+M: mutar todos · Ctrl+Shift+O: destravar sobreposição · Ctrl+Shift+C: salvar clipe">Atalhos: Ctrl+Shift+S / M / O / C</span>
         </div>
         <p class="hint muted">Duplo clique numa tela foca nela; de novo volta para a grade. Esc sai da tela cheia e do foco. Rodinha do mouse sobre uma tela muda o volume. Arraste pela alça ⋮⋮ para reorganizar.</p>
@@ -242,6 +243,18 @@
         <button id="nettest-apply" class="primary hidden">Usar sugestão</button>
         <button id="nettest-again">Testar de novo</button>
         <button id="nettest-close">Fechar</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============ TESTE DE CAPTURA COM JOGO ============ -->
+  <div id="captest-modal" class="modal hidden">
+    <div class="modal-card nettest-card captest-card">
+      <header class="modal-head"><h2>Teste de captura com jogo</h2></header>
+      <div id="captest-body" class="nettest-body captest-body"></div>
+      <footer class="modal-foot">
+        <button id="captest-start" class="primary">Começar</button>
+        <button id="captest-close">Agora não</button>
       </footer>
     </div>
   </div>

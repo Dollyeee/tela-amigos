@@ -43,6 +43,17 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Sala sobrevive à atualização**: o instalador fecha tudo que roda da pasta do app; se a sua sala estava aberta, ela reabre sozinha quando o app volta (os amigos reconectam sozinhos).
 - **Zoom**: Ctrl + rodinha aproxima a tela de um amigo no ponto do mouse (até 600%); arraste para mover; ✕ ou Ctrl+0 volta.
 - **Atraso por amigo**: botão de relógio na tela dele: *Automático* (mínimo, +0,15 s com jogo pesado), *Atraso mínimo* (jogar junto) ou *Imagem lisa* (+0,35 s, para rede instável). Fica salvo por amigo.
+- **Teste de captura com jogo** (v1.0.75): no 🩺 de um amigo, **Testar a captura com jogo** (ou, para o próprio PC,
+  **Testar captura com jogo** na lateral). Para quando a transmissão congela assim que a pessoa clica no jogo e volta no
+  Alt+Tab. Ela aceita, clica no jogo, e o auxiliar tenta 5 s cada: a tela pelo Windows (WGC), só a janela do jogo, a
+  tela com uma janelinha quase invisível do app num canto por cima do jogo, a tela com uma janela transparente
+  cobrindo o jogo, e o DXGI. Se com a janela por cima anda e sem ela congela, é a otimização do Windows que manda a
+  imagem do jogo direto ao monitor. Cada passo roda num processo à parte (`AudioHelper.exe --captest-step`): se um cair,
+  o teste segue e anota o registro de falha do Windows. Junta também MPO, agendamento de GPU, otimizações de jogos em
+  janela, monitores (Hz, HDR) e programas conhecidos que mexem na imagem. O relatório volta pela sala e é salvo na Área
+  de Trabalho de quem pediu (`TelaAmigos-diagnostico-teste-captura-<nome>-...txt`); nenhuma imagem sai do PC. Quando o
+  auxiliar cai, o diagnóstico mostra o código em hexadecimal, as últimas linhas dele e a peça que falhou (eventos
+  1000/1026 do Windows, lidos com o wevtutil).
 - **Placa de captura** (v1.0.74): aba **Placa de captura** na janela de compartilhar. Para o Windows a placa (Elgato,
   AVerMedia, as genéricas USB) é uma câmera: a lista mostra as placas e câmeras do PC, sem miniatura (abrir a placa só
   para mostrar a imagem tiraria ela do OBS). Vai pela captura do Chromium, mesmo com "Nativa" escolhida, no melhor modo
@@ -186,6 +197,10 @@ Testes (todos sem som; duas cópias escondidas do app na porta 47911, um de cada
 - `node scripts/card-test.js` – a aba "Placa de captura" de ponta a ponta com a placa e a entrada de som de mentira do
   Chromium (`TELA_TEST_FAKECAM`, nenhum aparelho de verdade é aberto, cópias mudas): lista, som da entrada, o amigo
   recebendo imagem e som, reinício em 1080p e parar soltando a placa;
+- `node scripts/captest-test.js` – o teste de captura com jogo no auxiliar, sem jogo e sem capturar a tela: uma
+  janelinha de teste no canto faz o papel do jogo (`--captest-fakegame`), os passos "da tela" capturam só ela
+  (`TELA_CAPTEST_NOMONITOR=1`), o DXGI "cai" de mentira (`TELA_CAPTEST_CRASH=dxgi`); confere também a leitura do
+  registro de falhas do Windows com um XML de exemplo;
 - `node scripts/direct-test.js [H264|HEVC|AV1]` – "Nativa direta" com o helper de verdade, quadro a quadro; no fim
   confere a versão leve (o segundo encoder) e a volta para a cheia.
 - `node scripts/theme-shots.js [tema ...]` – fotografa os temas no app de verdade com a janela escondida: uma sala de

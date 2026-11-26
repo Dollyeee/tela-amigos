@@ -19,10 +19,22 @@ function ensure() {
   if (proc) return true;
   if (!exe) return false;
   let p;
-  try { p = spawn(exe, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); }
+  // stderr: as últimas linhas vão junto do aviso quando ele cai (antes eram descartadas e a queda chegava ao
+  // diagnóstico só como "fechou (código 3221225477)", sem pista nenhuma)
+  try { p = spawn(exe, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
   catch (e) { post({ t: 'event', msg: { type: 'helper-error', message: e.message } }); return false; }
   proc = p;
   buf = Buffer.alloc(0);
+  const errTail = [];
+  let errPart = '';
+  p.stderr.on('data', (d) => {
+    const lines = (errPart + d.toString('utf8')).split(/\r?\n/);
+    errPart = lines.pop().slice(-500);
+    for (const l of lines) { if (l.trim()) errTail.push(l.slice(0, 300)); }
+    if (errTail.length > 30) errTail.splice(0, errTail.length - 30);
+  });
+  p.stderr.on('error', () => {});
+  const pid = p.pid || 0;
   p.on('error', (e) => {
     // nem chegou a abrir (bloqueado por antivírus, arquivo sumiu): o Node não avisa "exit" nesse
     // caso, e sem isto "proc" ficava apontando para um processo que não existe (todo pedido
@@ -38,7 +50,9 @@ function ensure() {
   p.on('exit', (code) => {
     if (proc === p) proc = null;
     process.parentPort.postMessage({ type: 'helper-pid', pid: 0 });
-    post({ t: 'event', msg: { type: 'helper-exit', code } });
+    // (saída normal: sem as linhas)
+    const tail = code ? errTail.concat(errPart ? [errPart] : []).slice(-30) : undefined;
+    post({ t: 'event', msg: { type: 'helper-exit', code, pid, at: Date.now(), tail } });
   });
   return true;
 }

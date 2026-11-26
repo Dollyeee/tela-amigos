@@ -638,6 +638,136 @@ async function pageA() {
       }
     }
 
+    // ---------------------------------------------------------------- 4g) teste de captura com jogo (o Doge, 2026-11-26)
+    // Um amigo de mentira pede o teste pela sala (os dois lados nesta cópia: quem pede e quem faz). O auxiliar não roda
+    // nada de verdade: o resultado é o do PC do Doge (a tela congela, com uma janela por cima anda, o DXGI cai).
+    {
+      const sent = [];
+      const realSend = sendRelay, realSfx = Sfx.play;
+      const saved = [];
+      sendRelay = (to, msg) => { sent.push({ to, ...msg }); };
+      // (window.native vem do preload e não aceita troca: o app usa este gancho)
+      window.__testSaveDiag = async (text, opts) => { saved.push({ text, opts }); return `C:\\teste\\TelaAmigos-diagnostico-${opts && opts.name}.txt`; };
+      Sfx.play = () => {};
+      const dogeRep = {
+        ok: true, secsPerStep: 5, game: { exe: 'rdr2.exe', width: 3840, height: 2160, monitorWidth: 3840, monitorHeight: 2160, coversMonitor: true, borderless: true },
+        steps: [
+          { method: 'wgc-monitor', label: 'tela pelo Windows (o que o app usa)', frames: 1, changed: 1, fps: 0.2, maxGapMs: 5000, frontPct: 100, size: '3840x2160' },
+          { method: 'wgc-window', label: 'só a janela do jogo pelo Windows', frames: 0, changed: 0, fps: 0, maxGapMs: 5000, frontPct: 100 },
+          { method: 'wgc-monitor+tiny', label: 'tela, com uma janelinha do app num canto por cima do jogo', frames: 300, changed: 290, fps: 58, maxGapMs: 40, overlay: 'ok', frontPct: 100 },
+          { method: 'wgc-monitor+full', label: 'tela, com uma janela transparente do app cobrindo o jogo', frames: 300, changed: 288, fps: 57.6, maxGapMs: 45, overlay: 'ok', frontPct: 100 },
+          { method: 'dxgi', label: 'tela pela duplicação da área de trabalho (DXGI, o outro método)', crashed: true, exitCode: '0xC0000005',
+            crash: { module: 'nvwgf2umx.dll', moduleVersion: '32.0.16.2124', exception: '0xc0000005', offset: '0x00000000001a2b3c', dotnet: 'Exception Info: System.AccessViolationException\n   at AcquireNextFrame' } },
+        ],
+        system: { windows: '25H2 build 26300.1', mpoOverlayTestMode: null, hagsHwSchMode: 2, directxUserGlobal: 'SwapEffectUpgradeEnable=1;VRROptimizeEnable=0;' },
+        monitors: [{ name: '\\\\.\\DISPLAY1', width: 3840, height: 2160, hz: 120, adapter: 'NVIDIA GeForce RTX 4070 SUPER', mpo: true, hdr: false, game: true }],
+        programs: ['steam', 'discord'],
+      };
+      let capCalls = 0;
+      window.__testCapTest = async () => { capCalls++; await sleep(50); return { type: 'captest', report: dogeRep }; };
+      try {
+        onSignal({ type: 'peer-joined', id: '7790', name: 'Doge Teste' });
+        const fp = state.peers.get('7790');
+        render();
+        // quem pede: o 🩺 do amigo abre o menu com as duas opções
+        const db = fp.personEl && fp.personEl.querySelector('.person-diag');
+        db.click();
+        const menu = document.querySelector('.menu-pop');
+        const items = menu ? [...menu.querySelectorAll('button')].map((b) => b.textContent) : [];
+        check('teste de captura: o 🩺 do amigo oferece o diagnóstico e o teste com jogo', items.length === 2 && /diagnóstico/.test(items[0]) && /captura com jogo/.test(items[1]), items.join(' | '));
+        menu.querySelectorAll('button')[1].click();
+        check('teste de captura: o pedido vai pela sala (sem conexão direta com ele)', sent.some((m) => m.to === '7790' && m.kind === 'captest-req') && capTestIn.has('7790'), JSON.stringify(sent));
+        // quem faz: o pedido chega, pergunta antes (nada roda sem o "Começar")
+        sent.length = 0;
+        onRelay('7790', { kind: 'captest-req' });
+        const modal = $('#captest-modal');
+        check('teste de captura: o amigo vê o pedido e o que vai acontecer, e nada roda antes do "Começar"',
+          !modal.classList.contains('hidden') && /Doge Teste pediu/.test($('#captest-body').textContent) && /Nenhuma imagem/.test($('#captest-body').textContent)
+          && capCalls === 0 && sent.some((m) => m.kind === 'captest-status' && m.phase === 'asked'), sent.map((m) => m.kind + ':' + m.phase).join(' '));
+        onRelay('7790', { kind: 'captest-status', phase: 'asked' }); // (de volta para quem pediu)
+        $('#captest-start').click();
+        await until(() => sent.some((m) => m.kind === 'captest-part'), 5000, 'resultado do teste').catch(() => {});
+        const parts = sent.filter((m) => m.kind === 'captest-part');
+        const text = parts.sort((a, b) => a.i - b.i).map((p) => p.data).join('');
+        check('teste de captura: "Começar" roda o teste uma vez e avisa quem pediu', capCalls === 1 && sent.some((m) => m.kind === 'captest-status' && m.phase === 'started'));
+        check('teste de captura: o resultado diz que é a otimização do Windows (com janela por cima anda)', /RESULTADO: É a otimização do Windows/.test(text) && /janelinha no canto e janela cobrindo a tela/.test(text), text.split('\n')[3]);
+        check('teste de captura: cada jeito com o resultado dele (congelou, andou, caiu com a peça que falhou)',
+          /CONGELOU\s+tela pelo Windows/.test(text) && /ANDOU\s+tela, com uma janelinha/.test(text) && /CAIU\s+tela pela duplica/.test(text) && /nvwgf2umx\.dll 32\.0\.16\.2124/.test(text) && /AccessViolation/.test(text));
+        check('teste de captura: configurações e monitores no relatório', /agendamento de GPU por hardware: ligado/.test(text) && /otimizações para jogos em janela ligado/.test(text) && /3840x2160 120 Hz/.test(text) && /MPO sim/.test(text) && /dados=\{/.test(text));
+        await until(() => /Pronto!/.test($('#captest-progress').textContent), 3000, 'fim do teste').catch(() => {});
+        check('teste de captura: a pessoa vê que acabou e para onde foi', /Pronto!/.test($('#captest-progress').textContent) && /foi para Doge Teste/.test($('#captest-progress').textContent), $('#captest-progress').textContent);
+        check('teste de captura: o resultado também entra no diagnóstico de quem fez', /último teste de captura com jogo/.test(await buildRendererDiag()));
+        // quem pediu: as partes chegam e viram um arquivo
+        for (const p of parts) onRelay('7790', { kind: 'captest-part', i: p.i, n: p.n, data: p.data });
+        await until(() => saved.length > 0, 3000, 'salvar o teste').catch(() => {});
+        check('teste de captura: chega para quem pediu e é salvo com o nome do amigo', saved.length === 1 && saved[0].opts.name === 'teste-captura-Doge Teste' && saved[0].text === text && !capTestIn.has('7790'),
+          saved.map((s) => s.opts.name).join());
+        $('#captest-close').click();
+        // recusou
+        sent.length = 0; clearToasts();
+        requestCapTest(fp);
+        onRelay('7790', { kind: 'captest-status', phase: 'declined' });
+        check('teste de captura: o amigo recusou: avisa e para de esperar', !capTestIn.has('7790') && toasts().some((t) => /preferiu não/.test(t)), toasts().join(' | '));
+        // quem faz fecha sem começar: quem pediu fica sabendo
+        sent.length = 0;
+        onRelay('7790', { kind: 'captest-req' });
+        $('#captest-close').click();
+        check('teste de captura: fechar sem começar avisa quem pediu', modal.classList.contains('hidden') && sent.some((m) => m.kind === 'captest-status' && m.phase === 'declined') && capCalls === 1);
+        // as outras conclusões
+        const mk = (o) => capTestVerdict({ ...dogeRep, steps: dogeRep.steps.map((s) => ({ ...s, ...(o[s.method] || {}) })) }).code;
+        const moving = { frames: 300, changed: 290, maxGapMs: 40 }, frozen = { frames: 0, changed: 0, maxGapMs: 5000 };
+        check('teste de captura: conclusões (não aconteceu, só a janela, todos congelados, jogo saiu da frente, sem jogo)',
+          mk({ 'wgc-monitor': moving }) === 'no-repro' && mk({ 'wgc-window': moving, 'wgc-monitor+tiny': frozen, 'wgc-monitor+full': frozen }) === 'window'
+          && mk({ 'wgc-monitor+tiny': frozen, 'wgc-monitor+full': frozen }) === 'all-frozen' && mk({ 'wgc-monitor': { skipped: 'o jogo não estava na frente' } }) === 'inconclusive'
+          && capTestVerdict({ ok: false, error: 'nenhum jogo' }).code === 'no-game');
+      } finally {
+        sendRelay = realSend; Sfx.play = realSfx;
+        delete window.__testCapTest; delete window.__testSaveDiag;
+        $('#captest-modal').classList.add('hidden');
+        capTestIn.clear(); lastCapTest = null;
+        onSignal({ type: 'peer-left', id: '7790' });
+      }
+    }
+
+    // ---------------------------------------------------------------- 4h) o auxiliar caiu: código, últimas linhas e o registro do Windows
+    {
+      const keepGame = [state.gaming, state.gamingExe];
+      const realRecover = recoverShare;
+      const recaps = [];
+      window.__testCrashInfo = async (pid, since) => ({ type: 'crash-info', info: { module: 'nvwgf2umx.dll', moduleVersion: '32.0.16.2124', exception: '0xc0000005', offset: '0x1a2b', dotnet: 'Exception Info: System.AccessViolationException\n   at AcquireNextFrame', pid, since } });
+      window.__testRecapture = async (mode) => { recaps.push(mode); return mode === 'other' ? 'dxgi' : 'wgc'; };
+      recoverShare = async () => {};
+      try {
+        localStorage.removeItem('recapOtherCrash');
+        state.gaming = true; state.gamingExe = 'rdr2.exe';
+        capStalls.length = 0;
+        await recaptureShare('teste', 'other'); // o outro método... e o auxiliar cai logo depois
+        const n0 = appLog.length;
+        onHelperExitLog({ type: 'helper-exit', code: 3221225477, pid: 4321, at: Date.now(), tail: ['[video] captura refeita (other): dxgi', '[video] quadro DXGI'] });
+        await sleep(1900);
+        const logged = appLog.slice(n0).join('\n');
+        check('auxiliar caiu: o código em hexadecimal e o que ele quer dizer', /código 3221225477 = 0xC0000005, acesso inválido/.test(logged), logged.slice(0, 200));
+        check('auxiliar caiu: as últimas linhas dele vão para o registro', /últimas linhas do auxiliar[\s\S]*captura refeita \(other\)/.test(logged));
+        check('auxiliar caiu: o registro do Windows diz qual peça falhou', /peça que falhou nvwgf2umx\.dll 32\.0\.16\.2124, exceção 0xc0000005 em 0x1a2b/.test(logged) && /AccessViolation/.test(logged));
+        check('auxiliar caiu logo depois do outro método com o jogo: fica guardado', otherMethodCrashed('rdr2.exe') && !otherMethodCrashed('outro.exe'));
+        recaps.length = 0;
+        const z = { fps: 30, captureFps: 0 };
+        // (o vigia de jogo de verdade pode ter mudado o "jogando" nesse meio tempo: quem usa o PC trocou de janela)
+        for (let i = 0; i < 2; i++) { state.gaming = true; state.gamingExe = 'rdr2.exe'; captureStallWatch(z); capZero.since -= 7000; captureStallWatch(z); await sleep(30); }
+        check('com esse jogo a 2ª travada refaz pelo mesmo método (não derruba o auxiliar de novo)', recaps.join() === 'same,same', recaps.join());
+        const n1 = appLog.length;
+        onHelperExitLog({ type: 'helper-exit', code: 0, pid: 4321, at: Date.now() });
+        await sleep(50);
+        check('auxiliar fechou normal: sem registro de queda', appLog.slice(n1).length === 1 && /código 0\)/.test(appLog[n1]));
+      } finally {
+        recoverShare = realRecover;
+        delete window.__testCrashInfo; delete window.__testRecapture;
+        localStorage.removeItem('recapOtherCrash');
+        [state.gaming, state.gamingExe] = keepGame;
+        capStalls.length = 0; capZero = null; lastOtherRecapture = null;
+      }
+    }
+
     // ---------------------------------------------------------------- 5) caneta depois de a tela sair da página
     if (meTile && meTile.el.isConnected) {
       // a janela escondida do teste não desenha quadros: o desenho do app passa a andar por temporizador

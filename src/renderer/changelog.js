@@ -13,6 +13,18 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.75',
+    title: 'Teste de captura com jogo',
+    items: [
+      '**A sua transmissão congela quando você clica no jogo?** Agora dá para testar: no 🩺 ao lado do nome de um amigo, escolha **Testar a captura com jogo**. Ele clica em **Começar**, depois no jogo, e joga uns 40 segundos. O app tenta cada jeito de capturar e o resultado chega sozinho na sua Área de Trabalho. Para testar o seu PC, use **Testar captura com jogo** na lateral da sala.',
+      'O teste não manda nenhuma imagem da tela: só quantas imagens chegaram e o nome de algumas configurações do Windows.',
+      '**Quando o app para de capturar sem motivo,** o diagnóstico agora mostra o que o Windows anotou sobre a queda (antes vinha só um número).',
+      'Se o "outro jeito de capturar" derrubar o app com um jogo, ele não é mais usado com aquele jogo.',
+      'Publicar uma versão nova não dá mais erro de download para quem abre o app bem na hora.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.74',
     title: 'Placa de captura sem OBS e tela preta no jogo resolvida',
     items: [

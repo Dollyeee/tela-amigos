@@ -97,6 +97,11 @@ window.Helper = (() => {
       if (!keyTimer) keyTimer = setTimeout(() => { keyTimer = null; lastKey = performance.now(); send({ cmd: 'video-key' }); }, wait);
     },
     diag: () => request({ cmd: 'video-diag' }, 'video-diag', 8000),
+    // teste de captura com jogo: espera o jogo ficar na frente (até 3 min) e tenta cada jeito de capturar
+    // (o andamento chega como eventos "captest-progress")
+    capTest: (secs = 5) => request({ cmd: 'captest', secs }, 'captest', 8 * 60000),
+    // o que o Windows anotou sobre a queda de um auxiliar anterior
+    crashInfo: (pid, since) => request({ cmd: 'crash-info', pid, since }, 'crash-info', 20000),
     gameWatch: (on) => request({ cmd: 'game-watch', on }, 'game-watch'),
     videoBitrate: (kbps, light) => send({ cmd: 'video-bitrate', kbps, light: light ? true : undefined }),
     sysStart: () => request({ cmd: 'sysaudio-start' }, 'sysaudio-started'),
