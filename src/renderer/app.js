@@ -169,6 +169,8 @@ async function buildRendererDiag() {
     const d = await window.Helper.diag();
     lines.push('', `placas/encoders: ${safeJson(d.info || d)}`);
   } catch {}
+  const nvf = nvFixed();
+  if (Object.keys(nvf).length) lines.push(`ajuste da NVIDIA feito pelo app (Vulkan/OpenGL em camadas no DXGI): ${Object.entries(nvf).map(([exe, x]) => `${exe} em ${new Date(x.at).toLocaleString('pt-BR')} (perfil "${x.profile}"${x.created ? ', criado' : ''}; antes ${x.before == null ? 'automático' : x.before})`).join(' · ')}`);
   if (lastCapTest) lines.push('', '===== último teste de captura com jogo =====', lastCapTest.split('\ndados=')[0]);
   lines.push('', '===== registro =====', ...appLog);
   return lines.join('\n');
@@ -498,6 +500,12 @@ function formatCapTest(rep, meta = {}) {
     ` · agendamento de GPU por hardware: ${sys.hagsHwSchMode === 2 ? 'ligado' : sys.hagsHwSchMode === 1 ? 'desligado' : '?'}`);
   out.push(`Gráficos do Windows: otimizações para jogos em janela ${dxv('SwapEffectUpgradeEnable')} · taxa de atualização variável ${dxv('VRROptimizeEnable')} · HDR automático ${dxv('AutoHDREnable')}`);
   if (g.exe) out.push(`Para o jogo: placa escolhida no Windows: ${sys.gameGpuPreference || 'padrão'} · compatibilidade: ${[sys.gameCompatUser, sys.gameCompatMachine].filter(Boolean).join(' ') || 'nada'}`);
+  const nv = rep.nvPresent;
+  if (nv && nv.nvidia) {
+    const val = { 0: 'preferir nativo', 1: 'preferir em camadas no DXGI', 2: 'automático' }[nv.value] || 'automático (padrão)';
+    out.push(`NVIDIA, "Método de apresentação Vulkan/OpenGL" para o jogo: ${val}${nv.profile ? ` (perfil "${nv.profile}")` : ''}` +
+      `${!nv.layered && v.code === 'all-frozen' ? ' · se o jogo for Vulkan ou OpenGL, é isto: o app muda para "em camadas no DXGI" quando a tela travar' : ''}`);
+  }
   out.push(`Barra de Jogo: gravação ${sys.GameDVR_Enabled === 0 ? 'desligada' : sys.GameDVR_Enabled === 1 ? 'ligada' : '?'} · FSEBehaviorMode=${sys.GameDVR_FSEBehaviorMode ?? '-'} · Modo de Jogo automático: ${sys.gameModeAuto === 0 ? 'desligado' : 'ligado'}`);
   for (const m of rep.monitors || []) {
     out.push(`Monitor ${m.name}${m.game ? ' (o do jogo)' : ''}: ${m.width}x${m.height}${m.hz ? ` ${m.hz} Hz` : ''} · ${m.adapter} · MPO ${yes(m.mpo)} · HDR ${yes(m.hdr)}${m.hwComposition ? ` · composição ${m.hwComposition}` : ''}`);
@@ -4868,6 +4876,8 @@ function captureFail(reason) {
   const skipOther = n === 2 && otherMethodCrashed(state.gamingExe);
   console.warn(`captura travada: ${reason}; ${n >= 3 ? 'trocando para a captura do Chromium' : n === 2 && !skipOther ? 'refazendo a captura pelo outro método'
     : n === 2 ? `refazendo a captura (o outro método já derrubou o auxiliar com ${state.gamingExe})` : 'refazendo a captura'}`);
+  // travou de novo com o jogo na frente: pode ser o Vulkan da NVIDIA (ver nvVulkanFix)
+  if (n >= 2 && gameDrawing()) nvVulkanFix(state.gamingExe).catch((e) => console.warn('ajuste da NVIDIA', e));
   if (n >= 3) {
     capStalls.length = 0;
     recoverShare(reason.replace(/ \(.*\)$/, ''), true);
@@ -4875,6 +4885,60 @@ function captureFail(reason) {
   }
   recaptureShare(reason, n === 1 || skipOther ? 'same' : 'other');
 }
+
+// Jogo em Vulkan numa placa NVIDIA (o Doge e o RDR2, 2026-11-26): com o jogo na frente cobrindo a tela, o driver manda a
+// imagem direto ao monitor ("apresentação nativa") e nenhum jeito de capturar do Windows vê nada (o teste de captura
+// mostrou: a tela, a janela, com janela por cima, tudo congelado; no Alt+Tab volta). O app liga sozinho, SÓ para esse
+// .exe, o "Método de apresentação Vulkan/OpenGL" = "Preferir em camadas no DXGI" (a opção do Painel de Controle da
+// NVIDIA para isso; jogo DirectX não usa). Vale a partir do próximo início do jogo. Se o driver pedir administrador,
+// espera a pessoa sair do jogo para o Windows perguntar (não aparece a pergunta no meio da partida).
+const nvFixTried = new Set();
+let nvFixPending = null; // { exe, timer }: esperando sair do jogo para pedir a permissão do Windows
+function nvPresent(exe, action, elevate) { return (window.__testNvPresent || window.Helper.nvPresent)(exe, action, elevate); }
+async function nvVulkanFix(exe) {
+  exe = String(exe || '').toLowerCase();
+  const sh = state.share;
+  if (!exe || nvFixTried.has(exe) || NOT_A_GAME.test(exe) || !sh || !sh.native || !/nvidia/i.test(sh.adapter || '')) return;
+  nvFixTried.add(exe);
+  const g = ((await nvPresent(exe, 'get')) || {}).result || {};
+  if (g.nvidia === false || g.error) { console.warn(`ajuste da NVIDIA para ${exe}: não deu para ler (${g.error || 'sem NVIDIA'})`); return; }
+  if (g.layered) {
+    console.warn(`ajuste da NVIDIA para ${exe}: já está "em camadas no DXGI"${nvFixed()[exe] ? ' (fui eu: o jogo precisa ser fechado e aberto de novo)' : ''}`);
+    if (nvFixed()[exe]) toast(`A transmissão continua congelando no ${exe}. Feche o jogo e abra de novo: o ajuste da placa que eu fiz só vale quando ele abre.`, 'error');
+    return;
+  }
+  await nvApply(exe, false);
+}
+async function nvApply(exe, elevate) {
+  const r = ((await nvPresent(exe, 'on', elevate)) || {}).result || {};
+  if (r.ok) {
+    const all = nvFixed();
+    all[exe] = { at: Date.now(), before: r.before ?? null, profile: r.profile || '', created: !!r.created };
+    try { localStorage.setItem('nvFixed', JSON.stringify(all)); } catch {}
+    console.warn(`ajuste da NVIDIA para ${exe}: "Método de apresentação Vulkan/OpenGL" agora "Preferir em camadas no DXGI" (perfil "${r.profile}"` +
+      `${r.created ? ', criado agora' : ''}; antes: ${r.before == null ? 'automático' : r.before}${r.elevated ? '; com permissão de administrador' : ''})`);
+    toast(`A transmissão congelava no ${exe} por causa de um ajuste da placa NVIDIA para jogos Vulkan. Já mudei esse ajuste só para esse jogo: feche o jogo e abra de novo.`, 'error');
+    return;
+  }
+  if (r.needAdmin && !elevate) {
+    // pede a permissão quando a pessoa sair do jogo (a pergunta do Windows tira a pessoa da partida)
+    console.warn(`ajuste da NVIDIA para ${exe}: o driver pediu permissão de administrador; peço quando o jogo sair da frente`);
+    clearInterval(nvFixPending && nvFixPending.timer);
+    const p = nvFixPending = { exe, since: Date.now() };
+    p.timer = setInterval(() => {
+      if (nvFixPending !== p) { clearInterval(p.timer); return; }
+      if (Date.now() - p.since > 30 * 60000) { clearInterval(p.timer); nvFixPending = null; return; }
+      if (state.gaming) return;
+      clearInterval(p.timer); nvFixPending = null;
+      toast(`O Windows vai pedir permissão para o Tela Amigos ajustar a placa de vídeo para o ${exe} (para a transmissão não congelar nele).`);
+      nvApply(exe, true).catch((e) => console.warn('ajuste da NVIDIA', e));
+    }, 2000);
+    return;
+  }
+  console.warn(`ajuste da NVIDIA para ${exe}: não deu (${r.error || 'sem resposta'})`);
+  if (r.declined) toast(`Sem a permissão do Windows não deu para ajustar a placa para o ${exe}: a transmissão vai continuar congelando nele.`, 'error');
+}
+function nvFixed() { try { return JSON.parse(localStorage.getItem('nvFixed') || '{}') || {}; } catch { return {}; } }
 
 // Jogos com que o "outro método" (refazer a captura pelo DXGI) derrubou o auxiliar neste PC: guardado (o Doge reabriu o
 // app depois da queda) e não usado de novo com eles.

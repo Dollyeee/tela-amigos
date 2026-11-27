@@ -80,6 +80,8 @@ static unsafe class CaptureTest
         else
         {
             report["game"] = game.ToJson();
+            // (só lê) o ajuste da NVIDIA para Vulkan/OpenGL deste jogo: "nativo" deixa o Windows sem ver o jogo
+            try { if (fake == 0) report["nvPresent"] = NvDrs.Get(game.Exe); } catch { }
             progress(new { type = "captest-progress", phase = "game", exe = game.Exe });
             var steps = new JsonArray();
             for (int i = 0; i < Steps.Length; i++)
@@ -433,9 +435,9 @@ static unsafe class CaptureTest
                     {
                         if (output!.Description.Monitor != hmon) continue;
                         desk = output.Description.DesktopCoordinates;
-                        using var o5 = output.QueryInterfaceOrNull<IDXGIOutput5>();
-                        if (o5 != null) { try { dup = o5.DuplicateOutput1(device, 0, new[] { Format.B8G8R8A8_UNorm }); } catch { dup = null; } }
-                        if (dup == null) { using var o1 = output.QueryInterface<IDXGIOutput1>(); dup = o1.DuplicateOutput(device); }
+                        // (a antiga: a DuplicateOutput1 derrubou o teste no PC do Doge, igual ao auxiliar; ver VideoStreamer)
+                        using var o1 = output.QueryInterface<IDXGIOutput1>();
+                        dup = o1.DuplicateOutput(device);
                         return;
                     }
                 }

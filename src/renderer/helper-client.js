@@ -102,6 +102,9 @@ window.Helper = (() => {
     capTest: (secs = 5) => request({ cmd: 'captest', secs }, 'captest', 8 * 60000),
     // o que o Windows anotou sobre a queda de um auxiliar anterior
     crashInfo: (pid, since) => request({ cmd: 'crash-info', pid, since }, 'crash-info', 20000),
+    // "Método de apresentação Vulkan/OpenGL" da NVIDIA para um jogo: action get | on | auto (elevate: pode pedir a
+    // permissão de administrador do Windows, se o driver exigir)
+    nvPresent: (exe, action = 'get', elevate = false) => request({ cmd: 'nv-present', exe, action, elevate }, 'nv-present', elevate ? 90000 : 15000),
     gameWatch: (on) => request({ cmd: 'game-watch', on }, 'game-watch'),
     videoBitrate: (kbps, light) => send({ cmd: 'video-bitrate', kbps, light: light ? true : undefined }),
     sysStart: () => request({ cmd: 'sysaudio-start' }, 'sysaudio-started'),

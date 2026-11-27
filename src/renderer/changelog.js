@@ -13,6 +13,16 @@
 //   items  (opcional) lista de frases; **assim** fica em negrito
 const CHANGELOG = [
   {
+    v: '1.0.76',
+    title: 'Jogo Vulkan na placa NVIDIA sem tela congelada',
+    items: [
+      '**A transmissão congelava ao clicar no jogo e voltava no Alt+Tab?** Em jogo Vulkan (como o Red Dead Redemption 2) com placa NVIDIA, o driver manda a imagem do jogo direto para o monitor, e o Windows não consegue capturar. Agora o app percebe e muda sozinho esse ajuste da placa (o "Método de apresentação Vulkan/OpenGL"), só para aquele jogo. **Feche o jogo e abra de novo** depois do aviso, e pronto.',
+      'Se o Windows pedir permissão para o Tela Amigos ajustar a placa, ela aparece só quando você sair do jogo, nunca no meio da partida.',
+      'O "outro jeito de capturar" (usado quando a imagem trava) usa agora outra função do Windows: a de antes fechava o app no PC de um amigo.',
+      'toddy bucha',
+    ],
+  },
+  {
     v: '1.0.75',
     title: 'Teste de captura com jogo',
     items: [

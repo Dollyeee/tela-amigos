@@ -43,6 +43,16 @@ direto entre os PCs pela internet; só as mensagens de conexão passam pelo serv
 - **Sala sobrevive à atualização**: o instalador fecha tudo que roda da pasta do app; se a sua sala estava aberta, ela reabre sozinha quando o app volta (os amigos reconectam sozinhos).
 - **Zoom**: Ctrl + rodinha aproxima a tela de um amigo no ponto do mouse (até 600%); arraste para mover; ✕ ou Ctrl+0 volta.
 - **Atraso por amigo**: botão de relógio na tela dele: *Automático* (mínimo, +0,15 s com jogo pesado), *Atraso mínimo* (jogar junto) ou *Imagem lisa* (+0,35 s, para rede instável). Fica salvo por amigo.
+- **Vulkan + NVIDIA** (v1.0.76): com o jogo Vulkan na frente cobrindo a tela, o driver da NVIDIA ("apresentação
+  nativa") manda a imagem direto ao monitor e nenhuma captura do Windows vê nada (o teste de captura do Doge, RDR2:
+  tela, janela e com janela por cima, tudo congelado). Na 2ª travada com o jogo na frente e a captura numa NVIDIA, o
+  app liga, só para o `.exe` do jogo, "Método de apresentação Vulkan/OpenGL" = "Preferir em camadas no DXGI"
+  (NVAPI DRS, setting 0x20D690F8 = 1; no perfil do jogo, ou num perfil "Tela Amigos - <exe>"; `audio-helper/NvDrs.cs`)
+  e avisa para reabrir o jogo. Se o driver pedir administrador, a pergunta do Windows só aparece quando o jogo sai da
+  frente. Fica guardado (`nvFixed`) e aparece no diagnóstico. Para desfazer: Painel de Controle da NVIDIA > Gerenciar
+  configurações 3D > o jogo > "Método de apresentação Vulkan/OpenGL" > Automático, ou
+  `AudioHelper.exe --nv-present <exe> auto`. Ler sem mudar: `AudioHelper.exe --nv-present <exe> get`. O DXGI usa a
+  `DuplicateOutput` antiga quando não é HDR (a `DuplicateOutput1` derrubava o auxiliar no PC do Doge).
 - **Teste de captura com jogo** (v1.0.75): no 🩺 de um amigo, **Testar a captura com jogo** (ou, para o próprio PC,
   **Testar captura com jogo** na lateral). Para quando a transmissão congela assim que a pessoa clica no jogo e volta no
   Alt+Tab. Ela aceita, clica no jogo, e o auxiliar tenta 5 s cada: a tela pelo Windows (WGC), só a janela do jogo, a

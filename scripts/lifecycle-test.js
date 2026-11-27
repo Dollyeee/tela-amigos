@@ -768,6 +768,69 @@ async function pageA() {
       }
     }
 
+    // ---------------------------------------------------------------- 4i) Vulkan + NVIDIA: o app muda o ajuste do driver só para o jogo
+    // (o Doge, 2026-11-26: RDR2 em Vulkan, tudo congelado com o jogo na frente). O driver não é tocado aqui: o auxiliar
+    // responde de mentira.
+    {
+      const sh = state.share;
+      const keep = [state.gaming, state.gamingExe, sh && sh.adapter];
+      const realRecover = recoverShare;
+      const calls = [];
+      let mode = 'normal';
+      window.__testRecapture = async (m) => (m === 'other' ? 'dxgi' : 'wgc');
+      recoverShare = async () => {};
+      window.__testNvPresent = async (exe, action, elevate) => {
+        calls.push(`${exe}:${action}${elevate ? ':admin' : ''}`);
+        if (action === 'get') return { result: { exe, nvidia: true, profile: 'Red Dead Redemption 2', value: mode === 'layered' ? 1 : null, layered: mode === 'layered' } };
+        if (mode === 'admin' && !elevate) return { result: { exe, ok: false, needAdmin: true, status: -137, error: 'não deu para salvar (código -137)' } };
+        return { result: { exe, ok: true, profile: 'Red Dead Redemption 2', before: null, after: 1, elevated: !!elevate } };
+      };
+      const stall = async () => {
+        state.gaming = true; state.gamingExe = 'RDR2.exe';
+        const z = { fps: 30, captureFps: 0 };
+        captureStallWatch(z); capZero.since -= 7000; captureStallWatch(z); await sleep(60);
+      };
+      try {
+        localStorage.removeItem('nvFixed'); localStorage.removeItem('recapOtherCrash');
+        nvFixTried.clear(); capStalls.length = 0; clearToasts();
+        sh.adapter = 'NVIDIA GeForce RTX 4070 SUPER';
+        await stall();
+        check('Vulkan/NVIDIA: na 1ª travada só refaz a captura (não mexe no driver)', calls.length === 0, calls.join());
+        await stall(); await sleep(100);
+        check('Vulkan/NVIDIA: travou de novo com o jogo na frente: lê e liga "em camadas no DXGI" só para o jogo',
+          calls.join() === 'rdr2.exe:get,rdr2.exe:on' && !!nvFixed()['rdr2.exe'] && toasts().some((t) => /feche o jogo e abra de novo/.test(t)), `${calls} | ${toasts().join(' | ')}`);
+        check('Vulkan/NVIDIA: fica no diagnóstico', /ajuste da NVIDIA feito pelo app[^\n]*rdr2\.exe/.test(await buildRendererDiag()));
+        await stall(); await sleep(100);
+        check('Vulkan/NVIDIA: uma vez só por jogo', calls.length === 2, calls.join());
+        // ainda congela depois do ajuste (o jogo não foi reaberto): avisa para reabrir
+        nvFixTried.clear(); calls.length = 0; mode = 'layered'; clearToasts(); capStalls.length = 0;
+        await stall(); await stall(); await sleep(100);
+        check('Vulkan/NVIDIA: já ajustado e ainda congela: pede para reabrir o jogo, sem mexer de novo', calls.join() === 'rdr2.exe:get' && toasts().some((t) => /Feche o jogo e abra de novo/.test(t)), `${calls} | ${toasts().join(' | ')}`);
+        // placa que não é NVIDIA: nada
+        nvFixTried.clear(); calls.length = 0; mode = 'normal'; capStalls.length = 0; localStorage.removeItem('nvFixed');
+        sh.adapter = 'AMD Radeon(TM) Graphics';
+        await stall(); await stall(); await sleep(100);
+        check('Vulkan/NVIDIA: placa AMD/Intel: não mexe em nada', calls.length === 0, calls.join());
+        // o driver pede administrador: espera sair do jogo para o Windows perguntar
+        sh.adapter = 'NVIDIA GeForce RTX 4070 SUPER';
+        nvFixTried.clear(); calls.length = 0; mode = 'admin'; capStalls.length = 0; clearToasts();
+        await stall(); await stall(); await sleep(2300);
+        check('Vulkan/NVIDIA: pede administrador com o jogo na frente: ainda não pergunta', calls.join() === 'rdr2.exe:get,rdr2.exe:on' && !!nvFixPending, calls.join());
+        state.gaming = false;
+        await until(() => calls.length === 3, 5000, 'pedir a permissão').catch(() => {});
+        await sleep(100);
+        check('Vulkan/NVIDIA: saiu do jogo: aí sim pede a permissão do Windows e liga', calls[2] === 'rdr2.exe:on:admin' && !!nvFixed()['rdr2.exe'] && !nvFixPending, `${calls} | ${toasts().join(' | ')}`);
+      } finally {
+        recoverShare = realRecover;
+        delete window.__testRecapture; delete window.__testNvPresent;
+        if (nvFixPending) { clearInterval(nvFixPending.timer); nvFixPending = null; }
+        nvFixTried.clear(); localStorage.removeItem('nvFixed');
+        [state.gaming, state.gamingExe] = keep;
+        if (sh) sh.adapter = keep[2];
+        capStalls.length = 0; capZero = null;
+      }
+    }
+
     // ---------------------------------------------------------------- 5) caneta depois de a tela sair da página
     if (meTile && meTile.el.isConnected) {
       // a janela escondida do teste não desenha quadros: o desenho do app passa a andar por temporizador

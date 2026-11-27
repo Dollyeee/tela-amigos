@@ -181,6 +181,18 @@ static class Program
         var cl = Environment.GetCommandLineArgs();
         if (cl.Length > 1 && cl[1] == "--captest-step") { CaptureTest.RunStepMain(cl[1..]); return; }
         if (cl.Length > 1 && cl[1] == "--captest-fakegame") { CaptureTest.RunFakeGame(cl[1..]); return; }
+        // ajuste da NVIDIA por jogo (ver NvDrs.cs): --nv-present <exe> <get|on|auto> [--out <arquivo>]
+        // (--out: a versão com permissão de administrador escreve o resultado num arquivo, porque não tem como devolver
+        // pela saída) e, só para os testes, --nv-delete-profile <nome>
+        if (cl.Length > 3 && cl[1] == "--nv-present")
+        {
+            var res = cl[3] == "get" ? NvDrs.Get(cl[2]) : NvDrs.Set(cl[2], cl[3] == "on" ? NvDrs.PreferLayered : NvDrs.Auto);
+            int oi = Array.IndexOf(cl, "--out");
+            if (oi > 0 && oi + 1 < cl.Length) File.WriteAllText(cl[oi + 1], res.ToJsonString());
+            else Console.Out.WriteLine(res.ToJsonString());
+            return;
+        }
+        if (cl.Length > 2 && cl[1] == "--nv-delete-profile") { Console.Out.WriteLine(NvDrs.DeleteProfile(cl[2]).ToJsonString()); return; }
         // registro de falhas do Windows (teste): --crash-info-parse <pid> lê o XML do wevtutil pela entrada
         if (cl.Length > 2 && cl[1] == "--crash-info-parse")
         {
@@ -343,6 +355,46 @@ static class Program
                             try { SendJson(new { id = cid, type = "captest", report = CaptureTest.Run(selfPid, csecs, m => SendJson(m)) }); }
                             catch (Exception cex) { SendJson(new { id = cid, type = "error", message = cex.Message }); }
                         }) { IsBackground = true, Name = "captest" }.Start();
+                        break;
+                    }
+                    case "nv-present":
+                    {
+                        // "Método de apresentação Vulkan/OpenGL" da NVIDIA para um jogo: get | on | auto. Se o driver pedir
+                        // administrador, roda uma cópia com permissão (o Windows pergunta) e lê o resultado dela.
+                        string nexe = root.TryGetProperty("exe", out var ne) ? ne.GetString() ?? "" : "";
+                        string nact = root.TryGetProperty("action", out var na) ? na.GetString() ?? "get" : "get";
+                        bool nelev = root.TryGetProperty("elevate", out var nel) && nel.ValueKind == JsonValueKind.True;
+                        var nid = id;
+                        Task.Run(() =>
+                        {
+                            System.Text.Json.Nodes.JsonObject res;
+                            if (nexe.Length == 0 || nexe.Length > 260 || nexe.IndexOfAny(new[] { '"', '\\', '/' }) >= 0) res = new() { ["error"] = "nome de jogo inválido" };
+                            else if (nact == "get") res = NvDrs.Get(nexe);
+                            else
+                            {
+                                uint val = nact == "on" ? NvDrs.PreferLayered : NvDrs.Auto;
+                                res = NvDrs.Set(nexe, val);
+                                if (nelev && res["needAdmin"]?.GetValue<bool>() == true)
+                                {
+                                    string tmp = Path.Combine(Path.GetTempPath(), $"tela-nv-{Environment.ProcessId}-{Environment.TickCount64}.json");
+                                    try
+                                    {
+                                        var psi = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };
+                                        foreach (var a in new[] { "--nv-present", nexe, nact == "on" ? "on" : "auto", "--out", tmp }) psi.ArgumentList.Add(a);
+                                        using var ep = Process.Start(psi);
+                                        if (ep != null && ep.WaitForExit(60000) && File.Exists(tmp))
+                                        {
+                                            if (System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(tmp)) is System.Text.Json.Nodes.JsonObject eo) { res = eo; res["elevated"] = true; }
+                                        }
+                                        else res["error"] = "a cópia com permissão de administrador não respondeu";
+                                    }
+                                    catch (System.ComponentModel.Win32Exception wex) when (wex.NativeErrorCode == 1223) { res["error"] = "a pessoa não deu a permissão do Windows"; res["declined"] = true; }
+                                    catch (Exception eex) { res["error"] = "permissão de administrador: " + eex.Message; }
+                                    finally { try { File.Delete(tmp); } catch { } }
+                                }
+                            }
+                            SendJson(new { id = nid, type = "nv-present", result = res });
+                        });
                         break;
                     }
                     case "crash-info":

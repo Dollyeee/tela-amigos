@@ -771,13 +771,13 @@ sealed unsafe class VideoStreamer : IDisposable
                 var d = output!.Description;
                 if (d.Monitor != ddMonitor) continue;
                 ddDesktop = d.DesktopCoordinates;
-                // DuplicateOutput1 (Windows 10 1703+) deixa pedir ponto flutuante quando o monitor está em HDR
-                using var o5 = output.QueryInterfaceOrNull<IDXGIOutput5>();
+                // DuplicateOutput1 (Windows 10 1703+) deixa pedir ponto flutuante quando o monitor está em HDR. Só no HDR:
+                // no PC do Doge (2026-11-26, RDR2 na frente) ela derrubou o auxiliar com acesso inválido dentro do
+                // Windows (e o try/catch não segura isso); sem HDR a antiga entrega o mesmo BGRA de 8 bits.
+                using var o5 = hdr ? output.QueryInterfaceOrNull<IDXGIOutput5>() : null;
                 if (o5 != null)
                 {
-                    var formats = hdr
-                        ? new[] { Format.R16G16B16A16_Float, Format.B8G8R8A8_UNorm }
-                        : new[] { Format.B8G8R8A8_UNorm };
+                    var formats = new[] { Format.R16G16B16A16_Float, Format.B8G8R8A8_UNorm };
                     try { dup = o5.DuplicateOutput1(device, 0, formats); } catch { dup = null; }
                 }
                 if (dup == null)
